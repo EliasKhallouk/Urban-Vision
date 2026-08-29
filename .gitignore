@@ -6,3 +6,4 @@ reports/output/
 reports/recipients.json
 data/*.log
 data/collect.log
+.env
