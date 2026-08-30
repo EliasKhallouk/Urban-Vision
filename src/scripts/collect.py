@@ -8,11 +8,13 @@ Conçu pour tourner en continu, en tâche de fond, sur plusieurs semaines.
 import sqlite3
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 from google.transit import gtfs_realtime_pb2
+
+import db as dbio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 URL_TRIPUPDATES = (
@@ -154,6 +156,16 @@ def main():
             last_success_ts = now
 
             n_rows = process_feed(conn, feed)
+
+            # Agrégats du dashboard : on ne (re)calcule que les jours d'hier et
+            # d'aujourd'hui (chaque jour est figé ~20 min après minuit suivant).
+            try:
+                today = datetime.now().strftime("%Y-%m-%d")
+                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                dbio.refresh_aggregates(conn, days=[yesterday, today])
+            except Exception as e:
+                logger.warning("Refresh des agrégats échoué : %s", e)
+
             logger.info(
                 "OK - %d entités, %d observations mises à jour (feed ts=%s)",
                 len(feed.entity), n_rows, feed.header.timestamp,
