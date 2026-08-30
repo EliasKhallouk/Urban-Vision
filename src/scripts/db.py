@@ -45,7 +45,16 @@ CREATE TABLE IF NOT EXISTS trip_status (
     schedule_relationship TEXT NOT NULL,
     last_seen_at INTEGER NOT NULL,
     PRIMARY KEY (trip_id, start_date)
-)
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_last_seen_at
+    ON observations(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_observations_route
+    ON observations(route_id);
+CREATE INDEX IF NOT EXISTS idx_observations_sched_delay
+    ON observations(schedule_relationship, departure_delay, last_seen_at, route_id);
+CREATE INDEX IF NOT EXISTS idx_service_alerts_period
+    ON service_alerts(active_period_start, active_period_end);
 """)
 conn.commit()
 
