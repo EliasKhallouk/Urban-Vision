@@ -12,7 +12,7 @@ graphiques) et les loaders sont mis en cache 60 secondes.
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +64,22 @@ DIST_LABELS = [
     "0 à +1", "+1 à +2", "+2 à +5", "+5 à +10", "+10 à +20", "> +20 min",
 ]
 
+# Présélections du time picker, dans l'esprit de Grafana. None = tout l'historique.
+PRESET_RANGES = [
+    ("5 minutes", 5 * 60),
+    ("15 minutes", 15 * 60),
+    ("30 minutes", 30 * 60),
+    ("1 heure", 3600),
+    ("6 heures", 6 * 3600),
+    ("12 heures", 12 * 3600),
+    ("24 heures", 24 * 3600),
+    ("7 jours", 7 * 24 * 3600),
+    ("30 jours", 30 * 24 * 3600),
+    ("90 jours", 90 * 24 * 3600),
+    ("Tout l'historique", None),
+]
+DEFAULT_PRESET = "7 jours"
+
 # Index opportunistes : sans eux, chaque requête du dashboard scanne toute la
 # table observations (1,4 M de lignes). CREATE INDEX IF NOT EXISTS est idempotent,
 # donc l'ajout se fait automatiquement au premier démarrage d'une base existante.
@@ -72,9 +88,47 @@ INDEX_DDL = [
     "CREATE INDEX IF NOT EXISTS idx_observations_route ON observations(route_id)",
     "CREATE INDEX IF NOT EXISTS idx_observations_sched_delay"
     " ON observations(schedule_relationship, departure_delay, last_seen_at, route_id)",
+    # Couvre les vues bornées par `departure_time >= ?` (période Grafana) : le
+    # scan ne lit que la tranche d'index sans accéder aux lignes de la table.
+    "CREATE INDEX IF NOT EXISTS idx_observations_departure_time"
+    " ON observations(departure_time, schedule_relationship, departure_delay, route_id)",
     "CREATE INDEX IF NOT EXISTS idx_service_alerts_period"
     " ON service_alerts(active_period_start, active_period_end)",
 ]
+
+
+def _dep_clauses(since_ts: int | None, end_ts: int | None, alias: str = "") -> tuple[list[str], list]:
+    """Filtres de période sur `departure_time` (retards, tendances).
+
+    Les requêtes de retard portent sur `departure_time` (cohérent avec l'axe
+    « date de service » des graphiques). `since_ts`/`end_ts` None = pas de borne.
+    """
+    prefix = f"{alias}." if alias else ""
+    clauses, params = [], []
+    if since_ts is not None:
+        clauses.append(f"{prefix}departure_time >= ?")
+        params.append(since_ts)
+    if end_ts is not None:
+        clauses.append(f"{prefix}departure_time < ?")
+        params.append(end_ts)
+    return clauses, params
+
+
+def _date_clauses(since_ts: int | None, end_ts: int | None, alias: str = "") -> tuple[list[str], list]:
+    """Filtres de période sur le `start_date` GTFS (AAAA/MM/JJ) du trajet.
+
+    Les arrêts SKIPPED n'ont jamais de `departure_time` : leur décompte est borné
+    par le `start_date` du trajet, seule date fiable.
+    """
+    prefix = f"{alias}." if alias else ""
+    clauses, params = [], []
+    if since_ts is not None:
+        clauses.append(f"{prefix}start_date >= ?")
+        params.append(datetime.fromtimestamp(since_ts).strftime("%Y%m%d"))
+    if end_ts is not None:
+        clauses.append(f"{prefix}start_date <= ?")
+        params.append(datetime.fromtimestamp(end_ts).strftime("%Y%m%d"))
+    return clauses, params
 
 
 class _MedianAgg:
@@ -106,6 +160,15 @@ def get_connection() -> sqlite3.Connection:
         except sqlite3.Error:
             pass
     conn.commit()
+    for pragma in (
+        "PRAGMA cache_size = -65536",        # page cache mémoire de 64 Mo (lectures)
+        "PRAGMA mmap_size = 268435456",      # 256 Mo de mapping mémoire si dispo
+        "PRAGMA temp_store = MEMORY",        # tris/group-by en mémoire
+    ):
+        try:
+            conn.execute(pragma)
+        except sqlite3.Error:
+            pass
     try:
         conn.create_aggregate("median_s", 1, _MedianAgg)
     except sqlite3.Error:
@@ -132,6 +195,43 @@ def format_date(ts: int | None) -> str:
     if not ts:
         return "inconnue"
     return datetime.fromtimestamp(ts).strftime("%d/%m/%Y à %H:%M")
+
+
+def time_range_picker(cutoff_ts: int) -> tuple[int | None, int | None, str]:
+    """Sélecteur de période dans l'esprit du time picker Grafana.
+
+    Deux modes : « Plage rapide » (5 min → 90 jours, boutons) ou « Calendrier »
+    (plage absolue début/fin à la minute près, bornée aux données présentes).
+    Retourne (since_ts, end_ts, label) ; None = borne ouverte.
+    """
+    mode = st.sidebar.pills(
+        "Période analysée", ("Plage rapide", "Calendrier"), default="Plage rapide",
+    )
+    now_dt = datetime.fromtimestamp(cutoff_ts)
+    if mode == "Plage rapide":
+        labels = [label for label, _ in PRESET_RANGES]
+        label = st.sidebar.pills("Durée", labels, default=DEFAULT_PRESET)
+        seconds = dict(PRESET_RANGES)[label]
+        since_ts = None if seconds is None else int(cutoff_ts - seconds)
+        return since_ts, None, label
+
+    default_start = (now_dt - timedelta(days=7)).date()
+    default_end = now_dt.date()
+    c1, c2 = st.sidebar.columns(2)
+    with c1:
+        start_date = st.date_input("Début", value=default_start, max_value=default_end, key="range_start_date")
+        start_time = st.time_input("Heure de début", value=dtime(0, 0), key="range_start_time")
+    with c2:
+        end_date = st.date_input("Fin", value=default_end, max_value=default_end, key="range_end_date")
+        end_time = st.time_input("Heure de fin", value=dtime(23, 59), key="range_end_time")
+    since_ts = int(datetime.combine(start_date, start_time).timestamp())
+    end_ts = min(int(datetime.combine(end_date, end_time).timestamp()), cutoff_ts)
+    if since_ts >= end_ts:
+        st.sidebar.error("La période choisie doit précéder sa fin.")
+        since_ts = end_ts - 24 * 3600
+        end_ts = cutoff_ts
+    label = f"{start_date:%d/%m} {start_time:%H:%M} → {end_date:%d/%m} {end_time:%H:%M}"
+    return since_ts, end_ts, label
 
 
 def inject_style() -> None:
@@ -163,15 +263,24 @@ def inject_style() -> None:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_network_data(_conn, cutoff_ts: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_network_data(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Agrégats réseau par ligne, calculés en SQL.
 
     Seuls ~80 lignes transitent en pandas au lieu des 1,37 M de passages bruts :
     le classement, les statistiques par mode et les KPI réseau se déduisent tous
-    de ces deux petites tables.
+    de ces deux petites tables. `since_ts`/`end_ts` bornent la période (None = tout).
     """
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts, alias="o")
+    date_clauses, date_params = _date_clauses(since_ts, end_ts, alias="o")
+    sched_where = " AND ".join(c for c in (
+        "o.last_seen_at < ?", "o.schedule_relationship = 'SCHEDULED'",
+        "o.departure_delay IS NOT NULL", *dep_clauses,
+    ))
+    skip_where = " AND ".join(c for c in (
+        "o.last_seen_at < ?", "o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')", *date_clauses,
+    ))
     scheduled = pd.read_sql_query(
-        """
+        f"""
         SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne,
                r.route_type,
                COUNT(*) AS observations,
@@ -181,24 +290,23 @@ def load_network_data(_conn, cutoff_ts: int) -> tuple[pd.DataFrame, pd.DataFrame
                AVG(CASE WHEN o.departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min,
                AVG(CASE WHEN o.departure_delay < -60 THEN 1.0 ELSE 0.0 END) * 100 AS pct_avance_1min
         FROM observations o LEFT JOIN routes r ON r.route_id = o.route_id
-        WHERE o.last_seen_at < ? AND o.schedule_relationship = 'SCHEDULED'
-              AND o.departure_delay IS NOT NULL
+        WHERE {sched_where}
         GROUP BY o.route_id, ligne, r.route_type
         """,
-        _conn, params=(cutoff_ts,),
+        _conn, params=(cutoff_ts, *dep_params),
     )
     scheduled["retard_median_s"] = pd.to_numeric(scheduled["retard_median_s"], errors="coerce")
     skipped = pd.read_sql_query(
-        """
+        f"""
         SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne,
                r.route_type,
                SUM(CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END) AS skipped,
                COUNT(*) AS eligible
         FROM observations o LEFT JOIN routes r ON r.route_id = o.route_id
-        WHERE o.last_seen_at < ? AND o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')
+        WHERE {skip_where}
         GROUP BY o.route_id, ligne, r.route_type
         """,
-        _conn, params=(cutoff_ts,),
+        _conn, params=(cutoff_ts, *date_params),
     )
     return scheduled, skipped
 
@@ -213,24 +321,45 @@ def make_ranking(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_mode_stats(_conn, cutoff_ts: int) -> pd.DataFrame:
-    """Statistiques par mode, agrégées en SQL (médiane exacte via median_s)."""
+def load_mode_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
+    """Statistiques par mode, agrégées en SQL (médiane exacte via median_s).
+
+    La population de référence du retard est « SCHEDULED avec départ programmé »
+    (comme le classement réseau). Le retard porte sur `departure_time` ; les
+    arrêts sautés, qui n'ont jamais de departure_time, sont bornés sur le
+    `start_date` GTFS du trajet. Un seul scan de la période.
+    """
+    date_clauses, date_params = _date_clauses(since_ts, end_ts, alias="o")
+    # `ref` est répété dans les CASE du SELECT : un littéral évite de dupliquer
+    # les bindings « ? ». since/end_ts sont des entiers maîtrisés (aucune injection).
+    # Le bornage du retard vit dans `ref` (pas dans le WHERE) pour ne pas
+    # exclure les SKIPPED, qui n'ont jamais de departure_time.
+    ref = "o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL"
+    if since_ts is not None:
+        ref += f" AND o.departure_time >= {int(since_ts)}"
+    if end_ts is not None:
+        ref += f" AND o.departure_time < {int(end_ts)}"
+    where = " AND ".join(("o.last_seen_at < ?", *date_clauses))
+    params = [cutoff_ts, *date_params]
     g = pd.read_sql_query(
-        """
+        f"""
         SELECT r.route_type,
-               COUNT(*) AS observations,
-               AVG(o.departure_delay) AS retard_moyen_s,
-               median_s(o.departure_delay) AS retard_median_s,
-               AVG(CASE WHEN o.departure_delay <= 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_a_l_heure,
-               AVG(CASE WHEN o.departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min,
-               AVG(CASE WHEN o.departure_delay < -60 THEN 1.0 ELSE 0.0 END) * 100 AS pct_avance_1min,
+               SUM(CASE WHEN {ref} THEN 1 ELSE 0 END) AS observations,
+               AVG(CASE WHEN {ref} THEN o.departure_delay END) AS retard_moyen_s,
+               median_s(CASE WHEN {ref} THEN o.departure_delay END) AS retard_median_s,
+               100.0 * SUM(CASE WHEN {ref} AND o.departure_delay <= 300 THEN 1 ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN {ref} THEN 1 ELSE 0 END), 0) AS pct_a_l_heure,
+               100.0 * SUM(CASE WHEN {ref} AND o.departure_delay > 300 THEN 1 ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN {ref} THEN 1 ELSE 0 END), 0) AS pct_retard_5min,
+               100.0 * SUM(CASE WHEN {ref} AND o.departure_delay < -60 THEN 1 ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN {ref} THEN 1 ELSE 0 END), 0) AS pct_avance_1min,
                SUM(CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END) AS skipped,
-               COUNT(*) AS eligible
+               SUM(CASE WHEN o.schedule_relationship IN ('SCHEDULED', 'SKIPPED') THEN 1 ELSE 0 END) AS eligible
         FROM observations o LEFT JOIN routes r ON r.route_id = o.route_id
-        WHERE o.last_seen_at < ? AND o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')
+        WHERE {where}
         GROUP BY r.route_type
         """,
-        _conn, params=(cutoff_ts,),
+        _conn, params=tuple(params),
     )
     if g.empty:
         return g
@@ -242,18 +371,22 @@ def load_mode_stats(_conn, cutoff_ts: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_network_daily(_conn, cutoff_ts: int) -> pd.DataFrame:
+def load_network_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts)
+    where = " AND ".join(c for c in (
+        "last_seen_at < ?", "schedule_relationship = 'SCHEDULED'",
+        "departure_delay IS NOT NULL", "departure_time IS NOT NULL", *dep_clauses,
+    ))
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT date(datetime(departure_time, 'unixepoch', 'localtime')) AS date_service,
                COUNT(*) AS observations,
                AVG(departure_delay) AS retard_moyen_s,
                AVG(CASE WHEN departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min
         FROM observations
-        WHERE last_seen_at < ? AND schedule_relationship = 'SCHEDULED'
-              AND departure_delay IS NOT NULL AND departure_time IS NOT NULL
+        WHERE {where}
         GROUP BY date_service ORDER BY date_service
-        """, _conn, params=(cutoff_ts,),
+        """, _conn, params=(cutoff_ts, *dep_params),
     )
     if not df.empty:
         df["date_service"] = pd.to_datetime(df["date_service"])
@@ -261,17 +394,21 @@ def load_network_daily(_conn, cutoff_ts: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_line_timeline(_conn, cutoff_ts: int, route_id: str) -> pd.DataFrame:
+def load_line_timeline(_conn, cutoff_ts: int, since_ts: int | None, route_id: str, end_ts: int | None = None) -> pd.DataFrame:
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts)
+    where = " AND ".join(c for c in (
+        "last_seen_at < ?", "route_id = ?", "schedule_relationship = 'SCHEDULED'",
+        "departure_delay IS NOT NULL", "departure_time IS NOT NULL", *dep_clauses,
+    ))
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT date(datetime(departure_time, 'unixepoch', 'localtime')) AS date_service,
                COUNT(*) AS observations, AVG(departure_delay) AS retard_moyen_s,
                AVG(CASE WHEN departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min
         FROM observations
-        WHERE last_seen_at < ? AND route_id = ? AND schedule_relationship = 'SCHEDULED'
-              AND departure_delay IS NOT NULL AND departure_time IS NOT NULL
+        WHERE {where}
         GROUP BY date_service ORDER BY date_service
-        """, _conn, params=(cutoff_ts, route_id),
+        """, _conn, params=(cutoff_ts, route_id, *dep_params),
     )
     if not df.empty:
         df["date_service"] = pd.to_datetime(df["date_service"])
@@ -279,9 +416,14 @@ def load_line_timeline(_conn, cutoff_ts: int, route_id: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_hourly(_conn, cutoff_ts: int, route_id: str | None = None) -> pd.DataFrame:
-    where = "last_seen_at < ? AND schedule_relationship = 'SCHEDULED' AND departure_delay IS NOT NULL AND departure_time IS NOT NULL"
+def load_hourly(_conn, cutoff_ts: int, since_ts: int | None, route_id: str | None = None, end_ts: int | None = None) -> pd.DataFrame:
     params: list = [cutoff_ts]
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts)
+    params.extend(dep_params)
+    where = " AND ".join(c for c in (
+        "last_seen_at < ?", "schedule_relationship = 'SCHEDULED'",
+        "departure_delay IS NOT NULL", "departure_time IS NOT NULL", *dep_clauses,
+    ))
     if route_id:
         where += " AND route_id = ?"
         params.append(route_id)
@@ -297,9 +439,14 @@ def load_hourly(_conn, cutoff_ts: int, route_id: str | None = None) -> pd.DataFr
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_distribution(_conn, cutoff_ts: int, route_id: str | None = None) -> pd.DataFrame:
-    where = "last_seen_at < ? AND schedule_relationship = 'SCHEDULED' AND departure_delay IS NOT NULL"
+def load_distribution(_conn, cutoff_ts: int, since_ts: int | None, route_id: str | None = None, end_ts: int | None = None) -> pd.DataFrame:
     params: list = [cutoff_ts]
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts)
+    params.extend(dep_params)
+    where = " AND ".join(c for c in (
+        "last_seen_at < ?", "schedule_relationship = 'SCHEDULED'",
+        "departure_delay IS NOT NULL", *dep_clauses,
+    ))
     if route_id:
         where += " AND route_id = ?"
         params.append(route_id)
@@ -330,17 +477,21 @@ def load_distribution(_conn, cutoff_ts: int, route_id: str | None = None) -> pd.
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_mode_daily(_conn, cutoff_ts: int) -> pd.DataFrame:
+def load_mode_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts, alias="o")
+    where = " AND ".join(c for c in (
+        "o.last_seen_at < ?", "o.schedule_relationship = 'SCHEDULED'",
+        "o.departure_delay IS NOT NULL", "o.departure_time IS NOT NULL", *dep_clauses,
+    ))
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT date(datetime(o.departure_time, 'unixepoch', 'localtime')) AS date_service,
                r.route_type,
                AVG(CASE WHEN o.departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min
         FROM observations o LEFT JOIN routes r ON o.route_id = r.route_id
-        WHERE o.last_seen_at < ? AND o.schedule_relationship = 'SCHEDULED'
-              AND o.departure_delay IS NOT NULL AND o.departure_time IS NOT NULL
+        WHERE {where}
         GROUP BY date_service, r.route_type ORDER BY date_service
-        """, _conn, params=(cutoff_ts,),
+        """, _conn, params=(cutoff_ts, *dep_params),
     )
     if not df.empty:
         df["date_service"] = pd.to_datetime(df["date_service"])
@@ -350,17 +501,21 @@ def load_mode_daily(_conn, cutoff_ts: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_mode_hourly(_conn, cutoff_ts: int) -> pd.DataFrame:
+def load_mode_hourly(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
+    dep_clauses, dep_params = _dep_clauses(since_ts, end_ts, alias="o")
+    where = " AND ".join(c for c in (
+        "o.last_seen_at < ?", "o.schedule_relationship = 'SCHEDULED'",
+        "o.departure_delay IS NOT NULL", "o.departure_time IS NOT NULL", *dep_clauses,
+    ))
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT CAST(strftime('%H', datetime(o.departure_time, 'unixepoch', 'localtime')) AS INTEGER) AS heure,
                r.route_type,
                AVG(CASE WHEN o.departure_delay > 300 THEN 1.0 ELSE 0.0 END) * 100 AS pct_retard_5min
         FROM observations o LEFT JOIN routes r ON o.route_id = r.route_id
-        WHERE o.last_seen_at < ? AND o.schedule_relationship = 'SCHEDULED'
-              AND o.departure_delay IS NOT NULL AND o.departure_time IS NOT NULL
+        WHERE {where}
         GROUP BY heure, r.route_type ORDER BY heure
-        """, _conn, params=(cutoff_ts,),
+        """, _conn, params=(cutoff_ts, *dep_params),
     )
     if not df.empty:
         df["mode"] = df["route_type"].map(MODE_LABELS).fillna("Autre")
@@ -450,14 +605,15 @@ def main() -> None:
         if cutoff is None:
             st.warning("Aucune observation disponible pour le moment.")
             return
-        scheduled, skipped = load_network_data(conn, cutoff)
+        st.sidebar.markdown("## Vigie TBM")
+        st.sidebar.caption("Pilotage de la ponctualité")
+        since_ts, end_ts, range_label = time_range_picker(cutoff)
+        scheduled, skipped = load_network_data(conn, cutoff, since_ts, end_ts)
         if scheduled.empty:
             st.warning("Aucun passage exploitable après stabilisation des données.")
             return
         ranking = make_ranking(scheduled, skipped)
 
-        st.sidebar.markdown("## Vigie TBM")
-        st.sidebar.caption("Pilotage de la ponctualité")
         min_observations = st.sidebar.slider("Seuil d'échantillon", 20, 1000, MIN_OBSERVATIONS_DEFAULT, 20)
         visible_ranking = ranking[ranking["observations"] >= min_observations].copy()
         options = visible_ranking if not visible_ranking.empty else ranking
@@ -465,7 +621,7 @@ def main() -> None:
         selected_label = st.sidebar.selectbox("Ligne analysée", list(route_labels), index=0)
         selected_route_id = route_labels[selected_label]
         st.sidebar.markdown("---")
-        st.sidebar.caption(f"Données arrêtées au {format_date(cutoff)}\n\nLes 20 dernières minutes sont exclues pour éviter les retards encore mouvants.")
+        st.sidebar.caption(f"Période : {range_label.lower()} · données arrêtées au {format_date(cutoff)}\n\nLes 20 dernières minutes sont exclues pour éviter les retards encore mouvants.")
 
         total = int(ranking["observations"].sum())
         on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))
@@ -504,7 +660,7 @@ def main() -> None:
                 st.markdown(f'<div class="insight">À surveiller en premier : <b>ligne {worst.ligne}</b> — score de fiabilité {worst.score_fiabilite:.1f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de 5 minutes.</div>', unsafe_allow_html=True)
 
                 st.markdown("### Évolution du réseau")
-                daily = load_network_daily(conn, cutoff)
+                daily = load_network_daily(conn, cutoff, since_ts, end_ts)
                 left, right = st.columns(2, gap="large")
                 with left:
                     st.markdown("#### Retards > 5 min par jour")
@@ -514,14 +670,14 @@ def main() -> None:
                         hc_render(network_daily_chart(daily), height=300)
                 with right:
                     st.markdown("#### Risque selon l'heure")
-                    net_hourly = load_hourly(conn, cutoff)
+                    net_hourly = load_hourly(conn, cutoff, since_ts, end_ts=end_ts)
                     if net_hourly.empty:
                         st.info("Cette vue nécessite les heures de départ des observations.")
                     else:
                         hc_render(network_hourly_chart(net_hourly), height=300)
 
                 st.markdown("#### Profil des retards du réseau")
-                distribution = load_distribution(conn, cutoff)
+                distribution = load_distribution(conn, cutoff, since_ts, end_ts=end_ts)
                 if not distribution.empty:
                     hc_render(delay_distribution_chart(distribution), height=280)
 
@@ -535,7 +691,7 @@ def main() -> None:
 
         if tab_modes.open:
             with tab_modes:
-                mode_stats = load_mode_stats(conn, cutoff)
+                mode_stats = load_mode_stats(conn, cutoff, since_ts, end_ts)
                 if mode_stats.empty:
                     st.warning("Aucune donnée exploitable par mode.")
                     return
@@ -559,13 +715,13 @@ def main() -> None:
                     hc_render(mode_comparison_chart(mode_stats), height=330)
                 with right:
                     st.markdown("#### Profil horaire par mode")
-                    mh = load_mode_hourly(conn, cutoff)
+                    mh = load_mode_hourly(conn, cutoff, since_ts, end_ts)
                     if mh.empty:
                         st.info("Aucune donnée horaire par mode.")
                     else:
                         hc_render(mode_hourly_chart(mh), height=330)
                 st.markdown("#### Évolution quotidienne par mode")
-                md = load_mode_daily(conn, cutoff)
+                md = load_mode_daily(conn, cutoff, since_ts, end_ts)
                 if md.empty or md["date_service"].nunique() < 2:
                     st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
                 else:
@@ -587,8 +743,8 @@ def main() -> None:
                 line_metrics[1].metric("Retard médian", format_seconds(line.retard_median_s, signed=True))
                 line_metrics[2].metric("Passages > 5 min", f"{line.pct_retard_5min:.1f} %")
                 line_metrics[3].metric("En avance > 1 min", f"{line.pct_avance_1min:.1f} %")
-                timeline = load_line_timeline(conn, cutoff, selected_route_id)
-                hourly = load_hourly(conn, cutoff, selected_route_id)
+                timeline = load_line_timeline(conn, cutoff, since_ts, selected_route_id, end_ts)
+                hourly = load_hourly(conn, cutoff, since_ts, selected_route_id, end_ts)
                 left, right = st.columns(2, gap="large")
                 with left:
                     st.markdown("#### Évolution quotidienne")
@@ -603,7 +759,7 @@ def main() -> None:
                     else:
                         hc_render(hourly_risk_chart(hourly, delayed), height=285)
                 st.markdown("#### Profil des retards")
-                distribution = load_distribution(conn, cutoff, selected_route_id)
+                distribution = load_distribution(conn, cutoff, since_ts, selected_route_id, end_ts)
                 if not distribution.empty:
                     hc_render(delay_distribution_chart(distribution), height=280)
 
@@ -648,9 +804,9 @@ def main() -> None:
                         st.info("Aucune donnée disponible.")
                     else:
                         ref_ts = int(last_ts)
-                        end_ts = (ref_ts // 60) * 60
-                        start_ts = end_ts - 7 * 24 * 3600
-                        minutely = load_collection_minutely(conn, start_ts, end_ts)
+                        c_end_ts = (ref_ts // 60) * 60
+                        c_start_ts = c_end_ts - 7 * 24 * 3600
+                        minutely = load_collection_minutely(conn, c_start_ts, c_end_ts)
                         if minutely.empty:
                             st.info("Aucune donnée pour cette période.")
                         else:
