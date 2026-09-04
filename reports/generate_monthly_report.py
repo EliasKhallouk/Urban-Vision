@@ -32,14 +32,16 @@ matplotlib.rcParams.update({
     "font.size": 9,
     "axes.unicode_minus": False,
 })
-plt.rcParams["axes.prop_cycle"] = plt.cycler(color=["#009EE3", "#94C21E", "#E7007C", "#4A4A4A", "#E8E9EB"])
+plt.rcParams["axes.prop_cycle"] = plt.cycler(color=["#283618", "#2a6f6f", "#bc6c25", "#606c38", "#DDA15E"])
 
-TBM_BLEU = "#009EE3"
-TBM_VERT = "#94C21E"
-TBM_MAGENTA = "#E7007C"
-TBM_ORANGE = "#F5A623"
-TBM_GRIS = "#E8E9EB"
-TBM_GRIS_TEXTE = "#4A4A4A"
+BLACK_FOREST = "#283618"
+COPPERWOOD = "#bc6c25"
+TEAL = "#2a6f6f"
+CORNSILK = "#FEFAE0"
+WHITE = "#FFFFFF"
+SUNLIT_CLAY = "#DDA15E"
+OLIVE_LEAF = "#606c38"
+SUNLIT_CLAY_TINT = "#F6E7D7"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "vigie_tbm.db"
@@ -112,7 +114,7 @@ def net_val(network_metrics: dict | None, key: str, formatter) -> str:
     """Return a LaTeX snippet showing the network-wide comparison value, or empty."""
     if network_metrics is None:
         return ""
-    return f" {{\\tiny\\color{{gray}}Réseau: {formatter(network_metrics[key])}}}"
+    return f" {{\\tiny\\color{{olive}}Réseau: {formatter(network_metrics[key])}}}"
 
 
 def safe_slug(value: str) -> str:
@@ -482,10 +484,10 @@ def line_table(lines: pd.DataFrame, network_lines: pd.DataFrame | None = None,
         arrets_cell = pct(row.arrets_sautes, 2)
         passages_cell = number(int(row.passages))
         if net_row is not None:
-            ponctualite_cell += f" {{\\tiny\\color{{gray}}({pct(net_row.ponctualite)})}}"
-            retard_5_cell += f" {{\\tiny\\color{{gray}}({pct(net_row.retard_5)})}}"
-            arrets_cell += f" {{\\tiny\\color{{gray}}({pct(net_row.arrets_sautes, 2)})}}"
-            passages_cell += f" {{\\tiny\\color{{gray}}({number(int(net_row.passages))})}}"
+            ponctualite_cell += f" {{\\tiny\\color{{olive}}({pct(net_row.ponctualite)})}}"
+            retard_5_cell += f" {{\\tiny\\color{{olive}}({pct(net_row.retard_5)})}}"
+            arrets_cell += f" {{\\tiny\\color{{olive}}({pct(net_row.arrets_sautes, 2)})}}"
+            passages_cell += f" {{\\tiny\\color{{olive}}({number(int(net_row.passages))})}}"
         table_rows.append(
             f"{prefix}{latex(row.ligne)} & {passages_cell} & {ponctualite_cell} & "
             f"{duration(row.retard_moyen)} / {duration(row.retard_median)} & {retard_5_cell} & {arrets_cell} \\\\"
@@ -522,25 +524,25 @@ def _score_color(value: float, thresholds: list[tuple[float, float, str]]) -> st
     for lo, hi, color in thresholds:
         if lo <= value < hi:
             return color
-    return TBM_ORANGE
+    return SUNLIT_CLAY
 
 
-SCORE_SEUILS = [(80, 101, TBM_VERT), (50, 80, TBM_ORANGE), (0, 50, TBM_MAGENTA)]
-RETARD_SEUILS = [(0, 60, TBM_VERT), (60, 180, TBM_ORANGE), (180, float("inf"), TBM_MAGENTA)]
-PCT5_SEUILS = [(0, 5, TBM_VERT), (5, 15, TBM_ORANGE), (15, 101, TBM_MAGENTA)]
+SCORE_SEUILS = [(80, 101, TEAL), (50, 80, SUNLIT_CLAY), (0, 50, COPPERWOOD)]
+RETARD_SEUILS = [(0, 60, TEAL), (60, 180, SUNLIT_CLAY), (180, float("inf"), COPPERWOOD)]
+PCT5_SEUILS = [(0, 5, TEAL), (5, 15, SUNLIT_CLAY), (15, 101, COPPERWOOD)]
 
 
 def _setup_ax(ax: plt.Axes) -> None:
-    ax.set_facecolor(TBM_GRIS)
-    ax.tick_params(color=TBM_GRIS_TEXTE, labelcolor=TBM_GRIS_TEXTE)
+    ax.set_facecolor(SUNLIT_CLAY_TINT)
+    ax.tick_params(color=BLACK_FOREST, labelcolor=BLACK_FOREST)
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.spines["bottom"].set_visible(True)
-    ax.spines["bottom"].set_color(TBM_GRIS_TEXTE + "30")
+    ax.spines["bottom"].set_color(BLACK_FOREST + "30")
     ax.spines["left"].set_visible(True)
-    ax.spines["left"].set_color(TBM_GRIS_TEXTE + "30")
-    ax.grid(axis="y", color=TBM_GRIS_TEXTE, alpha=0.15, linewidth=0.5)
-    ax.grid(axis="x", color=TBM_GRIS_TEXTE, alpha=0.15, linewidth=0.5)
+    ax.spines["left"].set_color(BLACK_FOREST + "30")
+    ax.grid(axis="y", color=BLACK_FOREST, alpha=0.15, linewidth=0.5)
+    ax.grid(axis="x", color=BLACK_FOREST, alpha=0.15, linewidth=0.5)
 
 
 def _save_chart(fig: plt.Figure, output_dir: Path, name: str) -> Path:
@@ -566,17 +568,17 @@ def reliability_chart(lines: pd.DataFrame, output_dir: Path, name: str,
         for i, row in selected.iterrows():
             nr = network_lines[network_lines["route_id"] == row.route_id]
             net_scores.append(float(nr.iloc[0]["score"]) if not nr.empty else 0)
-        ax.barh(y, net_scores, color=TBM_GRIS_TEXTE, height=0.18, alpha=0.35, zorder=4, label="Réseau")
+        ax.barh(y, net_scores, color=BLACK_FOREST, height=0.18, alpha=0.35, zorder=4, label="Réseau")
         ax.legend(fontsize=7, loc="lower right")
     for i, row in selected.iterrows():
-        ax.text(float(row.score) + 0.8, i, f"{row.score:.0f}", va="center", fontsize=7, color=TBM_GRIS_TEXTE)
+        ax.text(float(row.score) + 0.8, i, f"{row.score:.0f}", va="center", fontsize=7, color=BLACK_FOREST)
     ax.set_yticks(list(y))
     ax.set_yticklabels(selected["ligne"].tolist(), fontsize=7)
     ax.set_xlim(0, 105)
-    ax.set_xlabel("Score de fiabilité / 100", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_ylabel("Ligne", color=TBM_GRIS_TEXTE, fontsize=8)
+    ax.set_xlabel("Score de fiabilité / 100", color=BLACK_FOREST, fontsize=8)
+    ax.set_ylabel("Ligne", color=BLACK_FOREST, fontsize=8)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(20))
-    ax.set_title("Priorités de fiabilité par ligne", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
+    ax.set_title("Priorités de fiabilité par ligne", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -591,18 +593,18 @@ def risk_scatter_chart(lines: pd.DataFrame, output_dir: Path, name: str) -> Path
         ax.scatter(float(row.retard_median), float(row.retard_5), c=c, s=30, zorder=3, edgecolors="white", linewidth=0.3)
     for _, row in lines.iterrows():
         ax.text(float(row.retard_median) + max(float(lines.retard_median.max()) * 0.025, 3),
-                float(row.retard_5), row.ligne, fontsize=6, color=TBM_GRIS_TEXTE, va="center")
+                float(row.retard_5), row.ligne, fontsize=6, color=BLACK_FOREST, va="center")
     xmax = float(lines.retard_median.max()) * 1.3 or 120
     ymax = float(lines.retard_5.max()) * 1.3 or 30
     ax.set_xlim(0, xmax)
     ax.set_ylim(0, ymax)
-    ax.set_xlabel("Retard médian (secondes)", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_ylabel("Passages > 5 min (%)", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_title("Carte de risque des lignes", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
-    ax.text(0.05, 0.92, "Retards rares mais longs", transform=ax.transAxes, fontsize=7, color=TBM_GRIS_TEXTE + "80", va="top")
-    ax.text(0.70, 0.92, "Zone critique", transform=ax.transAxes, fontsize=7, color=TBM_GRIS_TEXTE + "80", va="top")
-    ax.text(0.05, 0.05, "Risque faible", transform=ax.transAxes, fontsize=7, color=TBM_GRIS_TEXTE + "80", va="bottom")
-    ax.text(0.70, 0.05, "Retards fréquents mais courts", transform=ax.transAxes, fontsize=7, color=TBM_GRIS_TEXTE + "80", va="bottom")
+    ax.set_xlabel("Retard médian (secondes)", color=BLACK_FOREST, fontsize=8)
+    ax.set_ylabel("Passages > 5 min (%)", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Carte de risque des lignes", color=BLACK_FOREST, fontsize=10, fontweight="bold")
+    ax.text(0.05, 0.92, "Retards rares mais longs", transform=ax.transAxes, fontsize=7, color=BLACK_FOREST + "80", va="top")
+    ax.text(0.70, 0.92, "Zone critique", transform=ax.transAxes, fontsize=7, color=BLACK_FOREST + "80", va="top")
+    ax.text(0.05, 0.05, "Risque faible", transform=ax.transAxes, fontsize=7, color=BLACK_FOREST + "80", va="bottom")
+    ax.text(0.70, 0.05, "Retards fréquents mais courts", transform=ax.transAxes, fontsize=7, color=BLACK_FOREST + "80", va="bottom")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -618,16 +620,16 @@ def stop_chart(stop_stats: pd.DataFrame, output_dir: Path, name: str) -> Path | 
     ax.barh([i - 0.15 for i in y], selected["retard_moyen"], height=0.25, color=colors, zorder=3, label="Moyen", edgecolor="white", linewidth=0.3, alpha=0.5)
     ax.barh([i + 0.15 for i in y], selected["retard_median"], height=0.25, color=colors, zorder=3, label="Médian", edgecolor="white", linewidth=0.3)
     for i, row in selected.iterrows():
-        ax.text(float(row.retard_moyen) + 1.5, i - 0.15, duration(float(row.retard_moyen)), va="center", fontsize=6, color=TBM_GRIS_TEXTE)
-        ax.text(float(row.retard_median) + 1.5, i + 0.15, duration(float(row.retard_median)), va="center", fontsize=6, color=TBM_GRIS_TEXTE)
+        ax.text(float(row.retard_moyen) + 1.5, i - 0.15, duration(float(row.retard_moyen)), va="center", fontsize=6, color=BLACK_FOREST)
+        ax.text(float(row.retard_median) + 1.5, i + 0.15, duration(float(row.retard_median)), va="center", fontsize=6, color=BLACK_FOREST)
     labels = []
     for _, row in selected.iterrows():
         ligne = row.get("route_short_name") or row.get("main_route", "")
         labels.append(f"{row.stop_name} ({ligne})" if ligne else row.stop_name)
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=7)
-    ax.set_xlabel("Retard", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_title("Arrêts les plus problématiques du périmètre", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
+    ax.set_xlabel("Retard", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Arrêts les plus problématiques du périmètre", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -640,14 +642,14 @@ def evolution_chart(monthly: pd.DataFrame, output_dir: Path, name: str) -> Path 
     colors = [_score_color(float(r.ponctualite), SCORE_SEUILS) for _, r in monthly.iterrows()]
     for i in range(len(monthly) - 1):
         ax.plot([i, i + 1], [monthly.iloc[i]["ponctualite"], monthly.iloc[i + 1]["ponctualite"]],
-                color=TBM_GRIS_TEXTE, linewidth=1.5, zorder=2)
+                color=BLACK_FOREST, linewidth=1.5, zorder=2)
     ax.scatter(range(len(monthly)), monthly["ponctualite"], c=colors, s=40, zorder=3, edgecolors="white", linewidth=0.5)
     ax.set_ylim(50, 100)
     ax.set_xticks(range(len(monthly)))
     ax.set_xticklabels(monthly["mois"].tolist(), fontsize=7, rotation=30, ha="right")
-    ax.set_xlabel("Mois", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_ylabel("Ponctualité (%)", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_title("Évolution mensuelle de la ponctualité", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
+    ax.set_xlabel("Mois", color=BLACK_FOREST, fontsize=8)
+    ax.set_ylabel("Ponctualité (%)", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Évolution mensuelle de la ponctualité", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     ax.yaxis.set_major_locator(mticker.MultipleLocator(10))
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
@@ -662,17 +664,17 @@ def hourly_chart(hourly: pd.DataFrame, output_dir: Path, name: str) -> Path | No
     ax.bar(hourly["heure"], hourly["retard_5"], color=colors, width=0.7, zorder=3, edgecolor="white", linewidth=0.3)
     for _, row in hourly.iterrows():
         ax.text(int(row.heure), float(row.retard_5) + 0.5, f"{row.retard_5:.1f}",
-                ha="center", fontsize=6, color=TBM_GRIS_TEXTE)
-    ax.axvspan(7.5, 9.5, color=TBM_GRIS, alpha=0.4, zorder=1)
-    ax.axvspan(17.5, 19.5, color=TBM_GRIS, alpha=0.4, zorder=1)
+                ha="center", fontsize=6, color=BLACK_FOREST)
+    ax.axvspan(7.5, 9.5, color=SUNLIT_CLAY_TINT, alpha=0.4, zorder=1)
+    ax.axvspan(17.5, 19.5, color=SUNLIT_CLAY_TINT, alpha=0.4, zorder=1)
     net_avg = float(hourly["retard_5"].mean())
-    ax.axhline(net_avg, color=TBM_BLEU, linewidth=0.8, linestyle="--", zorder=2)
-    ax.text(23, net_avg, f"Moyenne réseau : {net_avg:.1f}%", fontsize=6, color=TBM_BLEU, va="bottom", ha="right")
+    ax.axhline(net_avg, color=BLACK_FOREST, linewidth=0.8, linestyle="--", zorder=2)
+    ax.text(23, net_avg, f"Moyenne réseau : {net_avg:.1f}%", fontsize=6, color=BLACK_FOREST, va="bottom", ha="right")
     ax.set_xlim(-0.5, 23.5)
     ax.set_xticks(range(0, 24, 2))
-    ax.set_xlabel("Heure", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_ylabel("Retards > 5 min (%)", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_title("Risque selon l'heure de départ", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
+    ax.set_xlabel("Heure", color=BLACK_FOREST, fontsize=8)
+    ax.set_ylabel("Retards > 5 min (%)", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Risque selon l'heure de départ", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -684,23 +686,23 @@ def distribution_chart(distribution: pd.DataFrame, output_dir: Path, name: str) 
     _setup_ax(ax)
     plages = distribution["plage"].tolist()
     dist_color_map = {
-        "< -10": TBM_MAGENTA, "-10 a -5": TBM_MAGENTA, "-5 a -2": TBM_MAGENTA,
-        "-2 a -1": TBM_ORANGE,
-        "-1 a 0": TBM_VERT, "0 a +1": TBM_VERT, "+1 a +2": TBM_VERT,
-        "+2 a +5": TBM_ORANGE,
-        "+5 a +10": TBM_MAGENTA, "+10 a +20": TBM_MAGENTA, "> +20": TBM_MAGENTA,
+        "< -10": COPPERWOOD, "-10 a -5": COPPERWOOD, "-5 a -2": COPPERWOOD,
+        "-2 a -1": SUNLIT_CLAY,
+        "-1 a 0": TEAL, "0 a +1": TEAL, "+1 a +2": TEAL,
+        "+2 a +5": SUNLIT_CLAY,
+        "+5 a +10": COPPERWOOD, "+10 a +20": COPPERWOOD, "> +20": COPPERWOOD,
     }
-    colors = [dist_color_map.get(p, TBM_MAGENTA) for p in plages]
+    colors = [dist_color_map.get(p, COPPERWOOD) for p in plages]
     n = len(distribution)
     ax.bar(range(n), distribution["passages"], color=colors, width=0.7, zorder=3, edgecolor="white", linewidth=0.3)
     for i, (_, row) in enumerate(distribution.iterrows()):
         ax.text(i, int(row.passages) + max(1, int(distribution.passages.max()) * 0.02),
-                str(int(row.passages)), ha="center", fontsize=7, color=TBM_GRIS_TEXTE)
+                str(int(row.passages)), ha="center", fontsize=7, color=BLACK_FOREST)
     ax.set_xticks(range(n))
     ax.set_xticklabels(plages, fontsize=7, rotation=45, ha="right")
-    ax.set_xlabel("Tranche de retard (minutes)", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_ylabel("Nombre de passages", color=TBM_GRIS_TEXTE, fontsize=8)
-    ax.set_title("Distribution des retards", color=TBM_GRIS_TEXTE, fontsize=10, fontweight="bold")
+    ax.set_xlabel("Tranche de retard (minutes)", color=BLACK_FOREST, fontsize=8)
+    ax.set_ylabel("Nombre de passages", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Distribution des retards", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -748,20 +750,28 @@ def build_no_data_latex(month: str, scope: Scope, collected_at: str) -> str:
     """Produce a transparent report even when a small municipality has no passage."""
     report_date = datetime.strptime(month, "%Y-%m")
     report_month = f"{FRENCH_MONTHS[report_date.month - 1]} {report_date.year}"
+    cover_logo = str(Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-white.png")
     return rf"""\documentclass[10pt,a4paper]{{article}}
 \usepackage[utf8]{{inputenc}}
 \usepackage[T1]{{fontenc}}
 \usepackage[french]{{babel}}
 \usepackage[margin=2cm]{{geometry}}
-\usepackage{{xcolor,fancyhdr}}
-\definecolor{{vigieblue}}{{HTML}}{{009EE3}}
-\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{vigieblue}}{{VIGIE TBM}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
+\usepackage{{xcolor,fancyhdr,graphicx,tcolorbox}}
+\definecolor{{vigieblue}}{{HTML}}{{2A6F6F}}
+\definecolor{{olive}}{{HTML}}{{606C38}}
+\definecolor{{blackforest}}{{HTML}}{{283618}}
+\definecolor{{cornsilk}}{{HTML}}{{FEFAE0}}
+\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{vigiebleu}}{{VIGIE TBM}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
 \begin{{document}}
 \begin{{center}}
-{{\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[5pt]
-{{\large {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[3pt]
-\small Périmètre : {latex(scope.description)}\\[2pt]
-\small Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com
+\begin{{tcolorbox}}[width=\textwidth,colback=blackforest,colframe=blackforest,arc=4pt,boxrule=0pt,left=14pt,right=14pt,top=12pt,bottom=12pt,halign=center]
+\includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
+{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[4pt]
+{{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
+{{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
+{{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
+{{\color{{white!70}}\scriptsize Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com}}
+\end{{tcolorbox}}
 \end{{center}}
 \vspace{{1cm}}\hrule\vspace{{1cm}}
 \section*{{Absence de données exploitables}}
@@ -771,7 +781,7 @@ Aucun passage programmé avec une heure de départ et un retard stabilisé n'a �
 Cette absence ne signifie pas nécessairement l'absence de desserte : elle peut résulter d'une couverture de collecte insuffisante, d'une période sans circulation, ou d'arrêts présents dans le GTFS mais non observés dans le flux temps réel.
 
 \vfill
-\small\color{{gray}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Le périmètre repose sur les arrêts géolocalisés dans la commune.
+\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Le périmètre repose sur les arrêts géolocalisés dans la commune.
 \end{{document}}
 """
 
@@ -862,6 +872,8 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         alerts_section = ""
         footer_note = ""
 
+    cover_logo = str(Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-white.png")
+
     return rf"""\documentclass[10pt,a4paper]{{article}}
 \usepackage[french]{{babel}}
 \usepackage{{fontspec}}
@@ -869,9 +881,12 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \usepackage[margin=1.7cm]{{geometry}}
 \usepackage{{amsmath,booktabs,longtable,array,xcolor,tabularx,enumitem,graphicx,tcolorbox}}
 \usepackage{{fancyhdr}}
-\definecolor{{vigiebleu}}{{HTML}}{{009EE3}}
+\definecolor{{vigiebleu}}{{HTML}}{{2A6F6F}}
 \definecolor{{vigielight}}{{HTML}}{{FFFFFF}}
-\definecolor{{alert}}{{HTML}}{{E7007C}}
+\definecolor{{alert}}{{HTML}}{{BC6C25}}
+\definecolor{{olive}}{{HTML}}{{606C38}}
+\definecolor{{blackforest}}{{HTML}}{{283618}}
+\definecolor{{cornsilk}}{{HTML}}{{FEFAE0}}
 \pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{vigiebleu}}{{VIGIE TBM}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
 {footer_note}
 \setlength{{\parindent}}{{0pt}}
@@ -881,10 +896,14 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
 \begin{{document}}
 \begin{{center}}
-{{\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[5pt]
-{{\large {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[3pt]
-\small Périmètre : {latex(scope.description)}\\[2pt]
-\small Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com
+\begin{{tcolorbox}}[width=\textwidth,colback=blackforest,colframe=blackforest,arc=4pt,boxrule=0pt,left=14pt,right=14pt,top=12pt,bottom=12pt,halign=center]
+\includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
+{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[4pt]
+{{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
+{{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
+{{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
+{{\color{{white!70}}\scriptsize Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com}}
+\end{{tcolorbox}}
 \end{{center}}
 \vspace{{.45cm}}
 \hrule\vspace{{.45cm}}
@@ -921,7 +940,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \end{{itemize}}
 
 \vfill
-\small\color{{gray}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Les vingt dernières minutes du flux sont exclues afin de ne considérer que des observations stabilisées.
+\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Les vingt dernières minutes du flux sont exclues afin de ne considérer que des observations stabilisées.
 \newpage
 
 \section*{{Annexe — Résultats détaillés}}

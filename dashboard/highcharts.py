@@ -1,53 +1,68 @@
 """Configurations Highcharts pour le dashboard Vigie TBM.
 
-Charte graphique alignée sur les rapports mensuels (couleurs TBM) :
-bleu #009EE3, vert #94C21E, magenta #E7007C, orange #F5A623, gris #4A4A4A / #E8E9EB.
+Charte graphique alignée sur les rapports mensuels. Palettes :
+- Black Forest (#283618) : marque, titres, éléments neutres (axes, séries sans polarité).
+- Copperwood (#bc6c25) : borne « mauvais » du dégradé de score.
+- Teal (#2a6f6f) : borne « bon » du dégradé de score.
+- Cornsilk (#FEFAE0) : fond de page.
+- Sunlit Clay (#DDA15E) : bordures/séparateurs (opacité réduite).
+- Olive Leaf (#606c38) : texte secondaire (opacité 70 %).
 """
 
 import json
 import streamlit as st
 import pandas as pd
 
-TBM_BLEU = "#009EE3"
-TBM_VERT = "#94C21E"
-TBM_MAGENTA = "#E7007C"
-TBM_ORANGE = "#F5A623"
-TBM_GRIS = "#E8E9EB"
-TBM_GRIS_TEXTE = "#4A4A4A"
-TBM_SOMBRE = "#17181A"
+BLACK_FOREST = "#283618"
+COPPERWOOD = "#bc6c25"
+TEAL = "#2a6f6f"
+CORNSILK = "#FEFAE0"
+WHITE = "#FFFFFF"
+SUNLIT_CLAY = "#DDA15E"
+OLIVE_LEAF = "#606c38"
 
-MODE_COLORS = {0: TBM_BLEU, 3: TBM_VERT, 4: TBM_MAGENTA}
+# Variantes dérivées (opacités de la charte) pour les bordures et textes secondaires.
+SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
+SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
+OLIVE_LEAF_70 = "rgba(96, 108, 56, 0.70)"
+
+# Chaque mode a une couleur propre et distincte des couleurs Urban Vision
+# (jamais vert/magenta qui véhiculent une polarité bien/mal). Le ferry est
+# pointillé (MODE_DASH) pour se distinguer même en cas de couleurs proches.
+# Teal tramway · Copperwood bus · Olive Leaf ferry.
+MODE_COLORS = {0: "#2a6f6f", 3: "#bc6c25", 4: "#606c38"}
+MODE_DASH = {0: "Solid", 3: "Solid", 4: "Dot"}
 
 LIGHT_THEME = {
     "chart": {
         "backgroundColor": "#FFFFFF",
-        "style": {"color": TBM_GRIS_TEXTE, "fontFamily": "Inter, 'Segoe UI', sans-serif"},
+        "style": {"color": OLIVE_LEAF_70, "fontFamily": "Inter, 'Segoe UI', sans-serif"},
         "borderRadius": 8,
         "spacing": [12, 12, 12, 12],
     },
-    "title": {"style": {"color": TBM_SOMBRE, "fontSize": "14px", "fontWeight": "700"}},
+    "title": {"style": {"color": BLACK_FOREST, "fontSize": "14px", "fontWeight": "700"}},
     "xAxis": {
-        "labels": {"style": {"color": TBM_GRIS_TEXTE, "fontSize": "11px"}},
-        "lineColor": "#d5dae2",
-        "tickColor": "#d5dae2",
-        "gridLineColor": "#eef1f5",
-        "title": {"style": {"color": TBM_GRIS_TEXTE, "fontSize": "12px"}},
+        "labels": {"style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
+        "lineColor": SUNLIT_CLAY_40,
+        "tickColor": SUNLIT_CLAY_40,
+        "gridLineColor": SUNLIT_CLAY_30,
+        "title": {"style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
     },
     "yAxis": {
-        "labels": {"style": {"color": TBM_GRIS_TEXTE, "fontSize": "11px"}},
-        "lineColor": "#d5dae2",
-        "tickColor": "#d5dae2",
-        "gridLineColor": "#eef1f5",
-        "title": {"style": {"color": TBM_GRIS_TEXTE, "fontSize": "12px"}},
+        "labels": {"style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
+        "lineColor": SUNLIT_CLAY_40,
+        "tickColor": SUNLIT_CLAY_40,
+        "gridLineColor": SUNLIT_CLAY_30,
+        "title": {"style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
     },
     "legend": {
-        "itemStyle": {"color": TBM_GRIS_TEXTE, "fontSize": "11px"},
-        "itemHoverStyle": {"color": TBM_SOMBRE},
+        "itemStyle": {"color": OLIVE_LEAF_70, "fontSize": "11px"},
+        "itemHoverStyle": {"color": BLACK_FOREST},
     },
     "tooltip": {
         "backgroundColor": "#FFFFFF",
-        "borderColor": "#d5dae2",
-        "style": {"color": TBM_SOMBRE, "fontSize": "12px"},
+        "borderColor": SUNLIT_CLAY_40,
+        "style": {"color": BLACK_FOREST, "fontSize": "12px"},
         "shadow": True,
     },
     "credits": {"enabled": False},
@@ -75,21 +90,38 @@ def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
     st.components.v1.html(_html(config, height, use_stock), height=height + 60)
 
 
-def _score_color(value: float) -> str:
-    if value >= 80:
-        return TBM_VERT
-    if value >= 50:
-        return TBM_ORANGE
-    return TBM_MAGENTA
+def _lerp(a: float, b: float, t: float) -> int:
+    return int(round(a + (b - a) * t))
+
+
+def score_gradient_rgb(value: float, higher_is_better: bool = True) -> tuple[int, int, int]:
+    """Dégradé continu Copperwood (#bc6c25) → Teal (#2a6f6f) interpolé en RGB.
+
+    `value` est attendu sur 0-100. `higher_is_better=False` inverse le sens
+    (mauvais = Copperwood) pour les métriques où « plus = pire » (retards, arrêts
+    sautés) : un vrai dégradé linéaire, sans seuil catégoriel.
+    """
+    t = max(0.0, min(1.0, value / 100.0))
+    if not higher_is_better:
+        t = 1.0 - t
+    # 0 (mauvais) = Copperwood (188,108,37) ; 100 (bon) = Teal (42,111,111)
+    return (_lerp(188, 42, t), _lerp(108, 111, t), _lerp(37, 111, t))
+
+
+def score_gradient_hex(value: float, higher_is_better: bool = True) -> str:
+    r, g, b = score_gradient_rgb(value, higher_is_better)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def ranking_chart(df: pd.DataFrame) -> dict:
     df = df.sort_values("score_fiabilite")
-    data = [{"y": round(r["score_fiabilite"], 1), "color": _score_color(r["score_fiabilite"])} for _, r in df.iterrows()]
+    data = [{"y": round(r["score_fiabilite"], 1), "color": score_gradient_hex(r["score_fiabilite"])}
+            for _, r in df.iterrows()]
+    labels = df["ligne_plot"].tolist() if "ligne_plot" in df.columns else df["ligne"].tolist()
     return {
         "chart": {"type": "bar", "height": 390},
         "title": {"text": None},
-        "xAxis": {"categories": df["ligne"].tolist(), "title": {"text": None}},
+        "xAxis": {"categories": labels, "title": {"text": None}},
         "yAxis": {"title": {"text": "Score de fiabilité / 100"}, "max": 100, "min": 0},
         "series": [{"name": "Score", "data": data}],
         "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
@@ -103,7 +135,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
     for _, r in df.iterrows():
         mode = r.get("mode", "Autre")
         if mode not in series_data:
-            series_data[mode] = {"color": r.get("mode_color", TBM_BLEU), "data": []}
+            series_data[mode] = {"color": r.get("mode_color", BLACK_FOREST), "data": []}
         series_data[mode]["data"].append({
             "x": round(r["retard_median_s"], 1),
             "y": round(r["pct_retard_5min"], 1),
@@ -127,14 +159,14 @@ def scatter_chart(df: pd.DataFrame) -> dict:
 
 def network_daily_chart(df: pd.DataFrame) -> dict:
     data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(r, 1),
-             "passages": int(obs), "color": _score_color(100 - r)}
+             "passages": int(obs), "color": score_gradient_hex(r, higher_is_better=False)}
             for ts, r, obs in zip(df["date_service"], df["pct_retard_5min"], df["observations"])]
     return {
         "chart": {"type": "line", "height": 300},
         "title": {"text": None},
         "xAxis": {"type": "datetime", "title": {"text": None}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"name": "Retards > 5 min", "data": data, "color": TBM_BLEU, "lineWidth": 2,
+        "series": [{"name": "Retards > 5 min", "data": data, "color": BLACK_FOREST, "lineWidth": 2,
                     "marker": {"enabled": True, "radius": 5},
                     "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,}"}}],
         "plotOptions": {"series": {"dataLabels": {"enabled": False}}},
@@ -147,9 +179,9 @@ def network_hourly_chart(df: pd.DataFrame) -> dict:
     for h in range(24):
         if h in hm:
             v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": TBM_VERT if v <= 5 else (TBM_ORANGE if v <= 15 else TBM_MAGENTA)})
+            data.append({"y": v, "color": score_gradient_hex(v, higher_is_better=False)})
         else:
-            data.append({"y": 0, "color": TBM_GRIS})
+            data.append({"y": 0, "color": SUNLIT_CLAY})
     return {
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
@@ -161,17 +193,19 @@ def network_hourly_chart(df: pd.DataFrame) -> dict:
 
 
 def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
-    metrics = [("pct_a_l_heure", "Ponctualité ≤ 5 min"),
-               ("pct_retard_5min", "Retards > 5 min"),
-               ("pct_avance_1min", "En avance > 1 min"),
-               ("pct_arrets_sautes", "Arrêts sautés")]
+    metrics = [("pct_a_l_heure", "Ponctualité ≤ 5 min", True),
+               ("pct_retard_5min", "Retards > 5 min", False),
+               ("pct_avance_1min", "En avance > 1 min", False),
+               ("pct_arrets_sautes", "Arrêts sautés", False)]
     series = []
     for _, r in mode_stats.iterrows():
-        series.append({"name": r["mode"], "color": r["mode_color"], "data": [round(r[m], 1) for m, _ in metrics]})
+        color = r.get("mode_color", MODE_COLORS.get(int(r["route_type"]), BLACK_FOREST))
+        data = [round(r[m], 1) for m, _, _ in metrics]
+        series.append({"name": r["mode"], "color": color, "data": data})
     return {
         "chart": {"type": "column", "height": 330},
         "title": {"text": None},
-        "xAxis": {"categories": [label for _, label in metrics], "title": {"text": None}},
+        "xAxis": {"categories": [label for _, label, _ in metrics], "title": {"text": None}},
         "yAxis": {"title": {"text": "%"}, "min": 0, "max": 100},
         "series": series,
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.1, "pointPadding": 0.05}},
@@ -183,7 +217,8 @@ def mode_daily_chart(df: pd.DataFrame) -> dict:
     for mode, sub in df.groupby("mode"):
         sub = sub.sort_values("date_service")
         data = [[int(pd.Timestamp(ts).timestamp() * 1000), round(v, 1)] for ts, v in zip(sub["date_service"], sub["pct_retard_5min"])]
-        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0], "lineWidth": 2,
+        dash = MODE_DASH.get(sub["route_type"].iloc[0], "Solid")
+        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0], "dashStyle": dash, "lineWidth": 2,
                        "marker": {"enabled": False, "states": {"hover": {"enabled": True}}}})
     return {
         "chart": {"type": "line", "height": 300},
@@ -198,8 +233,9 @@ def mode_hourly_chart(df: pd.DataFrame) -> dict:
     series = []
     for mode, sub in df.groupby("mode"):
         hm = {int(r["heure"]): round(r["pct_retard_5min"], 1) for _, r in sub.iterrows()}
-        data = [{"y": hm.get(h, 0), "color": sub["mode_color"].iloc[0] if h in hm else TBM_GRIS} for h in range(24)]
-        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0]})
+        data = [{"y": hm.get(h, 0), "color": sub["mode_color"].iloc[0] if h in hm else SUNLIT_CLAY} for h in range(24)]
+        dash = MODE_DASH.get(sub["route_type"].iloc[0], "Solid")
+        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0], "dashStyle": dash})
     return {
         "chart": {"type": "column", "height": 330},
         "title": {"text": None},
@@ -217,20 +253,20 @@ def timeline_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"type": "datetime", "title": {"text": None}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"data": data, "fillOpacity": 0.12, "lineWidth": 2, "color": TBM_BLEU, "marker": {"enabled": False, "states": {"hover": {"enabled": True}}}}],
+        "series": [{"data": data, "fillOpacity": 0.12, "lineWidth": 2, "color": BLACK_FOREST, "marker": {"enabled": False, "states": {"hover": {"enabled": True}}}}],
     }
 
 
-def hourly_risk_chart(df: pd.DataFrame, threshold: float) -> dict:
+def hourly_risk_chart(df: pd.DataFrame, threshold: float | None = None) -> dict:
     cat = [str(h) for h in range(24)]
     hm = {int(r["heure"]): r for _, r in df.iterrows()}
     data = []
     for h in range(24):
         if h in hm:
             v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": TBM_MAGENTA if v > threshold else TBM_VERT})
+            data.append({"y": v, "color": score_gradient_hex(v, higher_is_better=False)})
         else:
-            data.append({"y": 0, "color": TBM_GRIS})
+            data.append({"y": 0, "color": SUNLIT_CLAY})
     return {
         "chart": {"type": "column", "height": 285},
         "title": {"text": None},
@@ -242,13 +278,17 @@ def hourly_risk_chart(df: pd.DataFrame, threshold: float) -> dict:
 
 
 def delay_distribution_chart(df: pd.DataFrame) -> dict:
-    dist_color_map = {
-        "< −10 min": TBM_MAGENTA, "−10 à −5": TBM_MAGENTA, "−5 à −2": TBM_MAGENTA,
-        "−2 à −1": TBM_ORANGE, "−1 à 0": TBM_VERT, "0 à +1": TBM_VERT,
-        "+1 à +2": TBM_VERT, "+2 à +5": TBM_ORANGE,
-        "+5 à +10": TBM_MAGENTA, "+10 à +20": TBM_MAGENTA, "> +20 min": TBM_MAGENTA,
+    # Gradient continu le long de l'écart à l'horaire : proche du nominal = vert,
+    # écart extrême (en retard OU en avance) = magenta. Chaque plage reçoit un
+    # niveau de « dérive » 0-100 interpolé sur le barycentre de la classe.
+    drift_map = {
+        "< −10 min": 100, "−10 à −5": 85, "−5 à −2": 62, "−2 à −1": 35, "−1 à 0": 18,
+        "0 à +1": 18, "+1 à +2": 35, "+2 à +5": 62,
+        "+5 à +10": 85, "+10 à +20": 95, "> +20 min": 100,
     }
-    data = [{"y": int(r["observations"]), "color": dist_color_map.get(r["plage"], TBM_MAGENTA)} for _, r in df.iterrows()]
+    data = [{"y": int(r["observations"]),
+             "color": score_gradient_hex(drift_map.get(r["plage"], 100), higher_is_better=False)}
+            for _, r in df.iterrows()]
     return {
         "chart": {"type": "column", "height": 280},
         "title": {"text": None},
@@ -273,24 +313,24 @@ def collection_minutely_chart(df: pd.DataFrame) -> dict:
             ],
             "selected": 2,
             "inputEnabled": False,
-            "buttonTheme": {"fill": "#FFFFFF", "stroke": "#d5dae2", "style": {"color": TBM_GRIS_TEXTE, "fontSize": "11px"}},
+            "buttonTheme": {"fill": "#FFFFFF", "stroke": SUNLIT_CLAY_40, "style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
         },
         "navigator": {
             "enabled": True,
-            "series": {"color": TBM_BLEU, "lineWidth": 1},
-            "xAxis": {"labels": {"style": {"color": TBM_GRIS_TEXTE}}},
+            "series": {"color": BLACK_FOREST, "lineWidth": 1},
+            "xAxis": {"labels": {"style": {"color": OLIVE_LEAF_70}}},
         },
         "scrollbar": {
             "enabled": True,
             "barBackgroundColor": "#FFFFFF",
-            "barBorderColor": "#d5dae2",
-            "buttonBackgroundColor": "#eef1f5",
-            "buttonBorderColor": "#d5dae2",
-            "trackBackgroundColor": "#f6f8fb",
-            "trackBorderColor": "#d5dae2",
+            "barBorderColor": SUNLIT_CLAY_40,
+            "buttonBackgroundColor": SUNLIT_CLAY_30,
+            "buttonBorderColor": SUNLIT_CLAY_40,
+            "trackBackgroundColor": SUNLIT_CLAY_30,
+            "trackBorderColor": SUNLIT_CLAY_40,
         },
         "title": {"text": None},
-        "series": [{"type": "line", "name": "Observations", "data": data, "color": TBM_BLEU, "marker": {"enabled": False}}],
+        "series": [{"type": "line", "name": "Observations", "data": data, "color": BLACK_FOREST, "marker": {"enabled": False}}],
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
     }
 
@@ -302,6 +342,6 @@ def hourly_distribution_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"categories": [str(int(r["heure"])) for _, r in df.iterrows()], "title": {"text": "Heure locale"}},
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
-        "series": [{"name": "Passages", "data": data, "color": TBM_BLEU}],
+        "series": [{"name": "Passages", "data": data, "color": BLACK_FOREST}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.05, "pointPadding": 0.05}},
     }

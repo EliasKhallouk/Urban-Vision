@@ -84,6 +84,37 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     PRIMARY KEY (date_service, route_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
+
+CREATE TABLE IF NOT EXISTS agg_daily_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    eligible INTEGER NOT NULL,
+    histogram TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_stop ON agg_daily_stop(stop_id);
+
+CREATE TABLE IF NOT EXISTS agg_hourly_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
 """)
 conn.commit()
 
@@ -124,6 +155,35 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     PRIMARY KEY (date_service, route_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
+CREATE TABLE IF NOT EXISTS agg_daily_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    eligible INTEGER NOT NULL,
+    histogram TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_stop ON agg_daily_stop(stop_id);
+CREATE TABLE IF NOT EXISTS agg_hourly_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
 """
 
 # ::SCHED_BOUNDS:: borne le scan aux jours traités (incrémental) ; chaîne vide = tout
@@ -212,8 +272,94 @@ GROUP BY route_id, ds, heure
 """
 
 
+_DAILY_STOP_SQL = """
+INSERT OR REPLACE INTO agg_daily_stop
+    (date_service, route_id, stop_id, obs, sum_delay, cnt_le300, cnt_gt300,
+     cnt_lt60, skipped, eligible, histogram)
+WITH sched AS (
+    SELECT o.route_id, o.stop_id,
+           date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
+           o.departure_delay
+    FROM observations o
+    WHERE o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+          AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
+),
+metrics AS (
+    SELECT route_id, stop_id, ds, COUNT(*) obs, COALESCE(SUM(departure_delay), 0) sum_delay,
+           COALESCE(SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END), 0) cnt_le300,
+           COALESCE(SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END), 0) cnt_gt300,
+           COALESCE(SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END), 0) cnt_lt60
+    FROM sched GROUP BY route_id, stop_id, ds
+),
+hist AS (
+    SELECT route_id, stop_id, ds, json_group_object(departure_delay, cnt) h
+    FROM (
+        SELECT route_id, stop_id, ds, departure_delay, COUNT(*) cnt
+        FROM sched GROUP BY route_id, stop_id, ds, departure_delay
+    ) GROUP BY route_id, stop_id, ds
+),
+skp AS (
+    SELECT o.route_id, o.stop_id,
+           substr(o.start_date, 1, 4) || '-' || substr(o.start_date, 5, 2)
+               || '-' || substr(o.start_date, 7, 2) ds,
+           CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END skipped
+    FROM observations o
+    WHERE o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')
+          AND o.start_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+          ::SKP_BOUNDS::
+),
+skpagg AS (
+    SELECT route_id, stop_id, ds, SUM(skipped) skipped, COUNT(*) eligible
+    FROM skp GROUP BY route_id, stop_id, ds
+),
+base AS (
+    SELECT ds, route_id, stop_id FROM metrics
+    UNION
+    SELECT ds, route_id, stop_id FROM skpagg
+)
+SELECT b.ds,
+       b.route_id,
+       b.stop_id,
+       COALESCE(m.obs, 0) obs,
+       COALESCE(m.sum_delay, 0) sum_delay,
+       COALESCE(m.cnt_le300, 0) cnt_le300,
+       COALESCE(m.cnt_gt300, 0) cnt_gt300,
+       COALESCE(m.cnt_lt60, 0) cnt_lt60,
+       COALESCE(k.skipped, 0) skipped,
+       COALESCE(k.eligible, 0) eligible,
+       COALESCE(h.h, '{}') histogram
+FROM base b
+LEFT JOIN metrics m ON m.route_id = b.route_id AND m.stop_id = b.stop_id AND m.ds = b.ds
+LEFT JOIN skpagg k ON k.route_id = b.route_id AND k.stop_id = b.stop_id AND k.ds = b.ds
+LEFT JOIN hist h ON h.route_id = b.route_id AND h.stop_id = b.stop_id AND h.ds = b.ds
+"""
+
+_HOURLY_STOP_SQL = """
+INSERT OR REPLACE INTO agg_hourly_stop
+    (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, cnt_gt300)
+SELECT ds,
+       route_id,
+       stop_id,
+       heure,
+       COUNT(*) obs,
+       COALESCE(SUM(departure_delay), 0) sum_delay,
+       SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END) cnt_le300,
+       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300
+FROM (
+    SELECT o.route_id, o.stop_id,
+           date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
+           CAST(strftime('%H', datetime(o.departure_time, 'unixepoch', 'localtime')) AS INTEGER) heure,
+           o.departure_delay
+    FROM observations o
+    WHERE o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+          AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
+)
+GROUP BY route_id, stop_id, ds, heure
+"""
+
+
 def refresh_aggregates(c, days: list[str] | None = None) -> None:
-    """Met à jour agg_daily / agg_hourly depuis les observations.
+    """Met à jour les tables d'agrégation depuis les observations.
 
     days=None  -> (re)calcul complet (coûteux, à faire une fois).
     days=[...] -> ne recalcule que les dates-service listées (cheap, pour le
@@ -223,6 +369,8 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
     if days is None:
         c.execute(_DAILY_SQL.replace("::SCHED_BOUNDS::", "").replace("::SKP_BOUNDS::", ""))
         c.execute(_HOURLY_SQL.replace("::SCHED_BOUNDS::", ""))
+        c.execute(_DAILY_STOP_SQL.replace("::SCHED_BOUNDS::", "").replace("::SKP_BOUNDS::", ""))
+        c.execute(_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", ""))
     else:
         start = min(days)
         end_dt = datetime.strptime(max(days), "%Y-%m-%d") + timedelta(days=1)
@@ -232,10 +380,18 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
         day_strs = "', '".join(days)
         c.execute(f"DELETE FROM agg_daily WHERE date_service IN ('{day_strs}')")
         c.execute(f"DELETE FROM agg_hourly WHERE date_service IN ('{day_strs}')")
+        c.execute(f"DELETE FROM agg_daily_stop WHERE date_service IN ('{day_strs}')")
+        c.execute(f"DELETE FROM agg_hourly_stop WHERE date_service IN ('{day_strs}')")
         c.execute(
             _DAILY_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?")
                         .replace("::SKP_BOUNDS::", f"AND o.start_date IN ('{day_ints}')"),
             (d0_ts, d1_ts),
         )
         c.execute(_HOURLY_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?"), (d0_ts, d1_ts))
+        c.execute(
+            _DAILY_STOP_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?")
+                            .replace("::SKP_BOUNDS::", f"AND o.start_date IN ('{day_ints}')"),
+            (d0_ts, d1_ts),
+        )
+        c.execute(_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?"), (d0_ts, d1_ts))
     c.commit()

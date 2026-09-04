@@ -1,8 +1,10 @@
 # Dashboard Vigie TBM
 
 Visualisation des données collectées dans [data/vigie_tbm.db](/home/elias/PROJECT/Vigie-TBM/data/vigie_tbm.db).
-Charte graphique alignée sur les rapports mensuels (couleurs TBM : bleu `#009EE3`, vert `#94C21E`,
-magenta `#E7007C`, orange `#F5A623`).
+Charte graphique « Urban Vision » alignée sur les rapports mensuels :
+Black Forest `#283618` (marque, titres), Olive Leaf `#606c38` (texte secondaire),
+Sunlit Clay `#DDA15E` (bordures), Cornsilk `#FEFAE0` (fond de page),
+Copperwood `#bc6c25` → Teal `#2a6f6f` (dégradé de score mauvais → bon).
 
 ## 1) Installer la dépendance
 
