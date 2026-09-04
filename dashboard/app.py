@@ -219,10 +219,12 @@ def _median_from_hists(hists) -> float | None:
 
 
 def _ensure_aggregates(conn: sqlite3.Connection) -> None:
-    """Crée agg_daily/agg_hourly et les reconstruit si elles sont vides.
+    """Crée les tables d'agrégation et les reconstruit si une est vide.
 
     En production, c'est le collecteur (toutes les ~60 s) qui tient ces tables
-    à jour ; ce garde-fou couvre le (re)démarrage d'une base qui ne les a jamais.
+    à jour ; ce garde-fou couvre le (re)démarrage d'une base qui ne les a jamais
+    ou d'une migration qui ajoute une table (ex. agg_daily_stop) : la table est
+    créée puis remplie entièrement si elle est vide.
     """
     src_dir = Path(__file__).resolve().parents[1] / "src" / "scripts"
     if str(src_dir) not in sys.path:
@@ -230,7 +232,9 @@ def _ensure_aggregates(conn: sqlite3.Connection) -> None:
     import db as _db
 
     conn.executescript(_db.AGG_DDL)
-    if conn.execute("SELECT COUNT(*) FROM agg_daily").fetchone()[0] == 0:
+    n_daily = conn.execute("SELECT COUNT(*) FROM agg_daily").fetchone()[0]
+    n_daily_stop = conn.execute("SELECT COUNT(*) FROM agg_daily_stop").fetchone()[0]
+    if n_daily == 0 or n_daily_stop == 0:
         _db.refresh_aggregates(conn, days=None)
 
 
