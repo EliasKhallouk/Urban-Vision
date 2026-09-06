@@ -219,12 +219,13 @@ def _median_from_hists(hists) -> float | None:
 
 
 def _ensure_aggregates(conn: sqlite3.Connection) -> None:
-    """Crée les tables d'agrégation et les reconstruit si une est vide.
+    """Crée les tables d'agrégation et les reconstruit si besoin.
 
     En production, c'est le collecteur (toutes les ~60 s) qui tient ces tables
-    à jour ; ce garde-fou couvre le (re)démarrage d'une base qui ne les a jamais
-    ou d'une migration qui ajoute une table (ex. agg_daily_stop) : la table est
-    créée puis remplie entièrement si elle est vide.
+    à jour ; ce garde-fou couvre le (re)démarrage d'une base qui ne les a jamais,
+    une migration qui ajoute une table (ex. agg_daily_stop) ou un backfill
+    partiel : dès que agg_daily_stop couvre moins de jours de service que
+    agg_daily, un recalcul complet est déclenché pour aligner l'historique.
     """
     src_dir = Path(__file__).resolve().parents[1] / "src" / "scripts"
     if str(src_dir) not in sys.path:
@@ -233,8 +234,9 @@ def _ensure_aggregates(conn: sqlite3.Connection) -> None:
 
     conn.executescript(_db.AGG_DDL)
     n_daily = conn.execute("SELECT COUNT(*) FROM agg_daily").fetchone()[0]
-    n_daily_stop = conn.execute("SELECT COUNT(*) FROM agg_daily_stop").fetchone()[0]
-    if n_daily == 0 or n_daily_stop == 0:
+    n_days_daily = conn.execute("SELECT COUNT(DISTINCT date_service) FROM agg_daily").fetchone()[0]
+    n_days_stop = conn.execute("SELECT COUNT(DISTINCT date_service) FROM agg_daily_stop").fetchone()[0]
+    if n_daily == 0 or n_days_stop < n_days_daily:
         _db.refresh_aggregates(conn, days=None)
 
 
@@ -325,9 +327,16 @@ def time_range_picker(cutoff_ts: int) -> tuple[int | None, int | None, str]:
     today = datetime.fromtimestamp(cutoff_ts).date()
 
     # Bouton d'ouverture : affiche la plage active courante.
+    # Première visite : applique réellement la présélection par défaut ("7 jours"),
+    # sinon range_since/range_end resteraient None et la période serait illimitée.
     if "range_key" not in st.session_state:
         st.session_state["range_key"] = DEFAULT_PRESET
         st.session_state["range_label"] = DEFAULT_PRESET
+        default_days = dict(PRESET_RANGES)[DEFAULT_PRESET]
+        st.session_state["range_since"] = int(
+            (_day_midnight(today) - timedelta(days=default_days - 1)).timestamp())
+        st.session_state["range_end"] = int(
+            (_day_midnight(today) + timedelta(days=1)).timestamp())
     with st.popover(
         f"🗓 Période : {st.session_state['range_label']}",
         use_container_width=False,
@@ -1522,6 +1531,18 @@ def main() -> None:
             c1.markdown("**Ponctualité**  \n+Un passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
             c2.markdown("**Arrêts sautés**  \n+Les événements `SKIPPED` sont suivis à part : ils ne gonflent pas artificiellement le retard moyen, mais pénalisent le score de fiabilité.")
             c3.markdown(f"**Seuil d'échantillon**  \n+Une ligne n'apparaît dans les classements et graphiques que si elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
+            st.markdown(
+                f"<div class='section-note'><b>Pourquoi un tram peut-il avoir des arrêts sautés ?</b> "
+                f"Un événement <code>SKIPPED</code> signifie que le véhicule ne dessert pas un arrêt alors "
+                f"que le trajet continue. Deux situations courantes l'expliquent :<br/>"
+                f"• <b>Prise / rendu de service en cours de ligne</b> : le tram ne dessert pas le terminus ou "
+                f"les premiers arrêts (départ ou fin de service plus loin sur la ligne, retour dépôt, rotation). "
+                f"Seuls quelques arrêts sont sautés, le reste du trajet circule normalement.<br/>"
+                f"• <b>Trajet entièrement annulé</b> : tous les arrêts de la course sont marqués "
+                f"<code>SKIPPED</code>. Il s'agit d'une annulation de course, pas d'un saut d'arrêt au sens "
+                f"strict : le véhicule ne circule pas du tout.</div>",
+                unsafe_allow_html=True,
+            )
             st.caption(f"Fenêtre analysée : {total:,} passages programmés stabilisés ; dernier point retenu le {format_date(cutoff)}.")
     finally:
         conn.close()
