@@ -278,6 +278,16 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
     ).sort_values("retard_median", ascending=False)
     route_names = pd.read_sql_query("SELECT route_id, route_short_name FROM routes", conn)
     stats = stats.merge(route_names, left_on="main_route", right_on="route_id", how="left")
+    try:
+        rows = conn.execute(
+            "SELECT route_id, stop_id, terminus FROM stop_direction WHERE terminus IS NOT NULL"
+        ).fetchall()
+        dir_map = {(r, s): f"vers {t}" for r, s, t in rows}
+        stats["direction"] = stats.apply(
+            lambda row: dir_map.get((row["main_route"], row["stop_id"]), ""), axis=1
+        )
+    except sqlite3.OperationalError:
+        stats["direction"] = ""
     return stats
 
 
@@ -625,7 +635,12 @@ def stop_chart(stop_stats: pd.DataFrame, output_dir: Path, name: str) -> Path | 
     labels = []
     for _, row in selected.iterrows():
         ligne = row.get("route_short_name") or row.get("main_route", "")
-        labels.append(f"{row.stop_name} ({ligne})" if ligne else row.stop_name)
+        suffix = f" ({ligne})" if ligne else ""
+        direction = row.get("direction")
+        if isinstance(direction, str) and direction:
+            labels.append(f"{row.stop_name} — {direction}{suffix}")
+        else:
+            labels.append(f"{row.stop_name}{suffix}")
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=7)
     ax.set_xlabel("Retard", color=BLACK_FOREST, fontsize=8)

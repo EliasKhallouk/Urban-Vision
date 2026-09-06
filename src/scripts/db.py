@@ -395,3 +395,67 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
         )
         c.execute(_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?"), (d0_ts, d1_ts))
     c.commit()
+
+
+# Direction dominante par (ligne, arrêt), étiquetée par le terminus de la ligne
+# dans cette direction. Beaucoup de noms d'arrêts existent en double (deux
+# sens, plusieurs quais) : cette table permet au dashboard de les distinguer.
+STOP_DIRECTION_DDL = """
+CREATE TABLE IF NOT EXISTS stop_direction (
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    direction_id INTEGER,
+    terminus TEXT,
+    PRIMARY KEY (route_id, stop_id)
+)
+"""
+
+
+def refresh_stop_directions(c) -> None:
+    """Calcule la direction dominante de chaque arrêt par ligne (backfill one-shot).
+
+    Pour chaque (ligne, arrêt), on retient la direction_id la plus fréquente dans
+    observations, puis on l'étiquette par le terminus de la ligne dans cette
+    direction (arrêt au stop_sequence maximal). Les directions reflètent la
+    géométrie statique de la ligne : le calcul ne change quasiment jamais, il
+    n'est donc lancé que lorsque la table est vide.
+
+    Le terminus est matérialisé dans une table temporaire : la jointure directe
+    de deux sous-requêtes fenêtrées fait exploser le plan SQLite (réévaluation
+    corrélée), alors que chaque morceau pris seul est rapide.
+    """
+    c.executescript(STOP_DIRECTION_DDL)
+    c.execute("DROP TABLE IF EXISTS _termini")
+    c.execute("""
+        CREATE TEMP TABLE _termini AS
+        SELECT route_id, direction_id, stop_name
+        FROM (
+            SELECT o.route_id, o.direction_id, o.stop_id, s.stop_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY o.route_id, o.direction_id
+                       ORDER BY o.stop_sequence DESC
+                   ) AS rn
+            FROM observations o LEFT JOIN stops s ON s.stop_id = o.stop_id
+            WHERE o.direction_id IS NOT NULL
+        ) WHERE rn = 1
+    """)
+    c.execute("DELETE FROM stop_direction")
+    c.execute("""
+        INSERT INTO stop_direction (route_id, stop_id, direction_id, terminus)
+        SELECT d.route_id, d.stop_id, d.direction_id, t.stop_name AS terminus
+        FROM (
+            SELECT * FROM (
+                SELECT o.route_id, o.stop_id, o.direction_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY o.route_id, o.stop_id
+                           ORDER BY COUNT(*) DESC
+                       ) AS rn
+                FROM observations o
+                WHERE o.direction_id IS NOT NULL
+                GROUP BY o.route_id, o.stop_id, o.direction_id
+            ) WHERE rn = 1
+        ) d
+        LEFT JOIN _termini t ON t.route_id = d.route_id AND t.direction_id = d.direction_id
+    """)
+    c.execute("DROP TABLE IF EXISTS _termini")
+    c.commit()

@@ -2,6 +2,43 @@
 
 Le rapport place une **synthèse exécutive d'une page** en tête : indicateurs clés, évolution par rapport au mois précédent et trois alertes prioritaires. Le détail par ligne, les graphiques de fiabilité, la carte de risque, le profil horaire, la distribution des retards et le détail par arrêt sont placés en annexe.
 
+## Deux entrées, un moteur
+
+Trois scripts se partagent le travail :
+
+| Script | Rôle |
+|---|---|
+| **`generate_single_report.py`** | Un rapport à la fois : réseau entier (`--network`) ou une commune (`--commune "Mérignac"`). |
+| **`generate_all_reports.py`** | Tous les rapports en une commande (réseau + chaque commune), un dossier par rapport. |
+| `generate_monthly_report.py` | **Moteur interne** (toute la logique). Ne pas l'appeler directement. |
+
+### Rapport unique — réseau ou commune
+
+```bash
+.venv/bin/python reports/generate_single_report.py --month 2026-07 --network --compile
+.venv/bin/python reports/generate_single_report.py --month 2026-07 --commune "Mérignac" --compile
+```
+
+### Tous les rapports (réseau + communes)
+
+```bash
+.venv/bin/python reports/generate_all_reports.py --month 2026-07 --compile
+```
+
+`--compile` génère puis lance automatiquement `compile_all.sh` (xelatex), en
+fournissant les PDF. Le script reste conservé pour un re-lancement manuel :
+`bash reports/output/2026-07/compile_all.sh`.
+
+Structure de sortie (chaque rapport dans son dossier, pas de collision des PNG) :
+
+```
+reports/output/<mois>/
+├── reseau/bordeaux-metropole/…
+├── communes/merignac/…
+├── communes/bordeaux/…
+└── compile_all.sh   (si --compile)
+```
+
 ## Seuils et catégories utilisés
 
 ### Message exécutif (première phrase de la synthèse)
@@ -48,11 +85,13 @@ Chaque valeur affichée est accompagnée de la valeur **Réseau TBM global** pou
 
 ## Rapport réseau
 
+Utilisez l'entrée unique :
+
 ```bash
-.venv/bin/python reports/generate_monthly_report.py --month 2026-07 --recipient "Bordeaux Métropole et TBM" --compile
+.venv/bin/python reports/generate_single_report.py --month 2026-07 --network --compile
 ```
 
-Sans `--month`, le dernier mois présent dans la base est choisi. Le script produit toujours un fichier `.tex`; l'option `--compile` produit aussi un PDF si `pdflatex` est installé.
+Sans `--month`, le dernier mois présent dans la base est choisi. Le script produit toujours un fichier `.tex`; l'option `--compile` produit aussi un PDF si `xelatex`/`lualatex` est installé.
 
 ## Version destinée à une commune
 
@@ -62,7 +101,7 @@ Les rapports territoriaux sont filtrés sur les **arrêts réellement situés da
 .venv/bin/python src/scripts/assign_stop_municipalities.py
 ```
 
-Copiez ensuite le modèle de profils et indiquez la commune concernée :
+Si vous travaillez avec des profils nommés, éditez le modèle puis utilisez le **moteur** directement (cas avancé) :
 
 ```bash
 cp reports/recipients.example.json reports/recipients.json
@@ -70,21 +109,10 @@ cp reports/recipients.example.json reports/recipients.json
 .venv/bin/python reports/generate_monthly_report.py --month 2026-07 --profile mairie_exemple --compile
 ```
 
-On peut aussi faire une version ponctuelle sans profil :
+Pour la version ponctuelle, préférez l'entrée unique :
 
 ```bash
-.venv/bin/python reports/generate_monthly_report.py --month 2026-07 \
-  --recipient "Mairie de Mérignac" --communes "Mérignac" --compile
+.venv/bin/python reports/generate_single_report.py --month 2026-07 --commune "Mérignac" --compile
 ```
 
 Les rapports générés sont placés dans `reports/output/`, qui est volontairement ignoré par Git. L'envoi doit rester une étape séparée et validée manuellement avant diffusion.
-
-## Générer tous les rapports communaux
-
-Après le rattachement des arrêts aux communes, une seule commande génère les rapports de toutes les communes détectées :
-
-```bash
-.venv/bin/python reports/generate_all_municipal_reports.py --month 2026-07 --compile
-```
-
-Les documents sont rangés dans `reports/output/2026-07/communes/`, un dossier par commune. Avec `--compile`, seuls les fichiers PDF sont conservés (les fichiers `.tex`, `.aux`, `.log` sont automatiquement supprimés). Sans `--compile`, seuls les fichiers LaTeX sont produits, ce qui est pratique pour vérifier ou adapter la mise en page avant la compilation PDF.

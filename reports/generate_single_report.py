@@ -20,6 +20,8 @@ def main() -> int:
     parser.add_argument("--commune", help="Nom de la commune (ex: Bordeaux, Mérignac).")
     parser.add_argument("--network", action="store_true",
                         help="Génère le rapport réseau Bordeaux Métropole.")
+    parser.add_argument("--db-path", help="Base SQLite à analyser (défaut : data/vigie_tbm.db).")
+    parser.add_argument("--output-dir", help="Dossier de sortie (défaut : reports/output).")
     parser.add_argument("--compile", action="store_true",
                         help="Compile aussi en PDF.")
     args = parser.parse_args()
@@ -37,6 +39,10 @@ def main() -> int:
         cmd += ["--recipient", "Bordeaux Métropole et TBM"]
     else:
         cmd += ["--recipient", f"Mairie de {args.commune}", "--communes", args.commune]
+    if args.db_path:
+        cmd += ["--db-path", args.db_path]
+    if args.output_dir:
+        cmd += ["--output-dir", args.output_dir]
     if args.compile:
         cmd.append("--compile")
 

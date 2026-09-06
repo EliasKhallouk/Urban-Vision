@@ -49,14 +49,17 @@ ubuntu@ek-hub-vnic:~/Vigie-TBM$ tail -f data/collect.log
 
 
 #### GÉNERER LES RAPPORTS
-##### Rapport réseau
-.venv/bin/python ./reports/generate_single_report.py --month 2026-07 --network --compile
+Trois scripts dans `reports/` :
+- `generate_single_report.py` : un rapport à la fois (réseau entier **ou** une commune).
+- `generate_all_reports.py` : tout en une fois (réseau + toutes les communes), un dossier par rapport, avec script de compilation.
+- `generate_monthly_report.py` : le moteur interne (pas besoin de l'appeler directement).
 
-##### Rapport commune
-.venv/bin/python ./reports/generate_single_report.py --month 2026-07 --commune "Mérignac" --compile
+##### Rapport unique — réseau
+.venv/bin/python reports/generate_single_report.py --month 2026-08 --network --compile
 
-##### Rapports de toutes les communes + Bordeaux Métropole :
-./reports/generate_all_reports.py --month 2026-07 --compile
+##### Rapport unique — commune
+.venv/bin/python reports/generate_single_report.py --month 2026-08 --commune "Mérignac" --compile
 
-(.venv) ubuntu@ek-hub-vnic:~/Vigie-TBM$ .venv/bin/python reports/generate_all_municipal_reports.py --month 2026-07 --compile
-(.venv) ubuntu@ek-hub-vnic:~/Vigie-TBM$  bash /home/ubuntu/Vigie-TBM/reports/output/2026-07/communes/compile_all.sh
+##### Tous les rapports (réseau + toutes les communes), avec compilation :
+.venv/bin/python reports/generate_all_reports.py --month 2026-08 --compile
+# (--compile génère les PDF automatiquement ; compile_all.sh reste dispo pour relancer)

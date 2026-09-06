@@ -239,6 +239,12 @@ def _ensure_aggregates(conn: sqlite3.Connection) -> None:
     if n_daily == 0 or n_days_stop < n_days_daily:
         _db.refresh_aggregates(conn, days=None)
 
+    # Directions des arrêts : backfill one-shot (~min sur une grosse base).
+    conn.executescript(_db.STOP_DIRECTION_DDL)
+    n_dir = conn.execute("SELECT COUNT(*) FROM stop_direction").fetchone()[0]
+    if n_dir == 0:
+        _db.refresh_stop_directions(conn)
+
 
 class _MedianAgg:
     """Agrégat SQLite `median_s` : médiane exacte, identique à pandas.median().
@@ -907,7 +913,7 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         ).fetchall()
     if not rows:
         return pd.DataFrame(columns=[
-            "stop_id", "stop_name", "lat", "lon", "route_id", "ligne",
+            "stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne",
             "retard_median_s", "pct_retard_5min", "pct_a_l_heure", "observations",
             "score_fiabilite", "lignes",
         ])
@@ -915,6 +921,7 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         "stop_id", "stop_name", "stop_lat", "stop_lon", "route_id", "ligne",
         "sum_delay", "cnt_le300", "cnt_gt300", "obs",
     ])
+    directions = load_stop_directions(_conn)
     out = []
     best = df.sort_values("obs", ascending=False).drop_duplicates("stop_id", keep="first")
     by_stop = df.groupby("stop_id", sort=False)
@@ -929,6 +936,7 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         out.append({
             "stop_id": top["stop_id"],
             "stop_name": top["stop_name"],
+            "direction": directions.get((top["route_id"], top["stop_id"]), ""),
             "lat": float(top["stop_lat"]),
             "lon": float(top["stop_lon"]),
             "route_id": top["route_id"],
@@ -940,6 +948,19 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
             "lignes": lignes,
         })
     return pd.DataFrame(out)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_stop_directions(_conn) -> dict[tuple[str, str], str]:
+    """Étiquette de direction « vers <terminus> » par (route_id, stop_id).
+
+    Issu de la table stop_direction, calculée en backfill par le collecteur
+    (jamais depuis la table brute au moment du rendu).
+    """
+    rows = _conn.execute(
+        "SELECT route_id, stop_id, terminus FROM stop_direction WHERE terminus IS NOT NULL"
+    ).fetchall()
+    return {(route, stop): f"vers {terminus}" for route, stop, terminus in rows}
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1090,7 +1111,8 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
         line_width_min_pixels=1,
     )
     tooltip = {
-        "html": "<b>{stop_name}</b><br/>Ligne(s) : {lignes}<br/>"
+        "html": "<b>{stop_name}</b><br/>Direction : {direction}<br/>"
+                "Ligne(s) : {lignes}<br/>"
                 "Score de fiabilité : {score_fiabilite}/100<br/>"
                 "Retards &gt; 5 min : {pct_retard_5min} %<br/>"
                 "Passages : {observations}",
@@ -1236,6 +1258,8 @@ def main() -> None:
             st.markdown('<div class="section-note">La carte est le point de départ : '
                         'chaque point est un arrêt, coloré selon le score de fiabilité de la ligne '
                         'principale qui le dessert (dégradé magenta→vert, gradué 0/50/100). '
+                        'La taille du point correspond au nombre de passages analysés de l’arrêt '
+                        '(de 50 à 400) : plus un arrêt est fréquenté, plus le point est grand. '
                         'Survolez un arrêt pour le détail.</div>', unsafe_allow_html=True)
             territorial = load_territorial(conn, cutoff, since_ts, end_ts, commune=commune)
             territorial_network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
@@ -1252,8 +1276,8 @@ def main() -> None:
             _territorial_map(territorial, commune)
             if not territorial.empty:
                 st.markdown("#### Arrêts du périmètre")
-                tdisp = territorial[["stop_name", "ligne", "lignes", "score_fiabilite", "pct_retard_5min", "observations"]].copy()
-                tdisp.columns = ["Arrêt", "Ligne principale", "Lignes desservies", "Score / 100", "Retards > 5 min", "Passages"]
+                tdisp = territorial[["stop_name", "direction", "ligne", "lignes", "score_fiabilite", "pct_retard_5min", "observations"]].copy()
+                tdisp.columns = ["Arrêt", "Direction", "Ligne principale", "Lignes desservies", "Score / 100", "Retards > 5 min", "Passages"]
                 tstyled = (
                     tdisp.style
                     .background_gradient(cmap=SCORE_CMAP, subset=["Score / 100"], vmin=0, vmax=100)
