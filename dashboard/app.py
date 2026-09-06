@@ -280,6 +280,7 @@ def get_connection() -> sqlite3.Connection:
             pass
     conn.commit()
     for pragma in (
+        "PRAGMA busy_timeout = 120000",     # le collecteur écrit en continu : attendre, ne pas échouer
         "PRAGMA cache_size = -65536",        # page cache mémoire de 64 Mo (lectures)
         "PRAGMA mmap_size = 268435456",      # 256 Mo de mapping mémoire si dispo
         "PRAGMA temp_store = MEMORY",        # tris/group-by en mémoire
