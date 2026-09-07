@@ -772,7 +772,7 @@ def build_no_data_latex(month: str, scope: Scope, collected_at: str) -> str:
 \usepackage[french]{{babel}}
 \usepackage[margin=2cm]{{geometry}}
 \usepackage{{xcolor,fancyhdr,graphicx,tcolorbox}}
-\definecolor{{vigieblue}}{{HTML}}{{2A6F6F}}
+\definecolor{{vigiebleu}}{{HTML}}{{2A6F6F}}
 \definecolor{{olive}}{{HTML}}{{606C38}}
 \definecolor{{blackforest}}{{HTML}}{{283618}}
 \definecolor{{cornsilk}}{{HTML}}{{FEFAE0}}
@@ -1049,7 +1049,7 @@ def main() -> int:
         parser.error(f"Base introuvable : {args.db_path}")
     try:
         scope = load_scope(args)
-        with sqlite3.connect(args.db_path) as conn:
+        with sqlite3.connect(args.db_path, timeout=120) as conn:
             month = resolve_month(conn, args.month)
             scheduled, skipped, collected_at = query_observations(conn, month, scope)
             if scheduled.empty:

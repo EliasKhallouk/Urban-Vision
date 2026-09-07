@@ -91,6 +91,10 @@ def main() -> int:
         ] + extra
         result = subprocess.run(command, text=True, capture_output=True)
         if result.returncode:
+            # Nouvelle tentative : un premier échec peut être transitoire
+            # (verrou SQLite tenu par le collecteur, formatage de la table...).
+            result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode:
             failures.append((label, result.stderr.strip() or result.stdout.strip()))
             print(f"  ÉCHEC : {failures[-1][1]}", file=sys.stderr)
 
@@ -98,22 +102,31 @@ def main() -> int:
         compile_script = batch_root / "compile_all.sh"
         compile_script.write_text(
             "#!/usr/bin/env bash\n"
-            "set -e\n"
+            "set -u\n"
             'cd "$(dirname "$0")"\n'
-            'find . -name "*.tex" | sort | while read -r tex; do\n'
+            "failures=()\n"
+            'for tex in $(find . -name "*.tex" | sort); do\n'
             '  dir=$(dirname "$tex")\n'
             '  name=$(basename "$tex" .tex)\n'
             '  echo "Compilation : $name"\n'
-            '  (cd "$dir" && xelatex -interaction=nonstopmode -halt-on-error "$name")\n'
-            '  (cd "$dir" && xelatex -interaction=nonstopmode -halt-on-error "$name")\n'
+            '  if ! (cd "$dir" && xelatex -interaction=nonstopmode -halt-on-error "$name" \\\n'
+            '        && xelatex -interaction=nonstopmode -halt-on-error "$name"); then\n'
+            '    failures+=("$name")\n'
+            "  fi\n"
             "done\n"
+            'if [ ${#failures[@]} -gt 0 ]; then\n'
+            '  printf "Échec de compilation (%d) :\\n" "${#failures[@]}"\n'
+            '  printf "  %s\\n" "${failures[@]}"\n'
+            "  exit 1\n"
+            "fi\n"
+            'echo "Tous les rapports ont été compilés."\n'
         )
         compile_script.chmod(0o755)
         print(f"[+] Script de compilation : {compile_script}")
         print("[+] Compilation des PDF (xelatex)...")
         compile_result = subprocess.run(["bash", str(compile_script)], text=True)
         if compile_result.returncode:
-            print("Échec de la compilation.", file=sys.stderr)
+            print("Échec de la compilation (voir la liste ci-dessus).", file=sys.stderr)
             print(f"Relancez-la manuellement : bash {compile_script}", file=sys.stderr)
             return 1
         print("[+] PDF générés.")
