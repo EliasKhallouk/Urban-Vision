@@ -2,8 +2,9 @@
 
 Charte graphique « Urban Vision » (fond clair) : Black Forest #283618 (marque,
 titres), Olive Leaf #606c38 (texte secondaire), Sunlit Clay #DDA15E (bordures),
-Cornsilk #FEFAE0 (fond de page), Copperwood #bc6c25 → Teal #2a6f6f (dégradé de
-score mauvais → bon). Les observations les plus recentes
+Cornsilk #FEFAE0 (fond de page). Couleur de performance à 3 paliers, partagée
+avec les rapports via reports/palette.py : Olive Leaf = positif, Sunlit Clay =
+moyen, Copperwood = négatif (pas de dégradé continu). Les observations les plus recentes
 restent dans le flux GTFS-RT : elles sont ecartees afin de ne mesurer que des
 passages pour lesquels le retard est stabilise.
 
@@ -28,8 +29,6 @@ import streamlit as st
 
 import pydeck as pdk
 
-from matplotlib.colors import LinearSegmentedColormap
-
 from highcharts import (
     render as hc_render,
     ranking_chart,
@@ -51,13 +50,22 @@ FRESHNESS_BUFFER_SECONDS = 20 * 60
 CACHE_TTL_SECONDS = 60
 MIN_OBSERVATIONS = 50
 
-BLACK_FOREST = "#283618"
-COPPERWOOD = "#bc6c25"
-TEAL = "#2a6f6f"
-CORNSILK = "#FEFAE0"
-WHITE = "#FFFFFF"
-SUNLIT_CLAY = "#DDA15E"
-OLIVE_LEAF = "#606c38"
+# Constantes couleur : importées du module partagé reports/palette.py pour garantir
+# une seule source de vérité (palette et seuils de couleur identiques aux rapports).
+_SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
+if _SRC_PALETTE not in sys.path:
+    sys.path.insert(0, _SRC_PALETTE)
+from palette import (  # noqa: E402
+    BLACK_FOREST,
+    COPPERWOOD,
+    OLIVE_LEAF,
+    SUNLIT_CLAY,
+    CORNSILK,
+    WHITE,
+    TEAL,
+    hex as palette_hex,
+    kpi_tier as palette_kpi_tier,
+)
 
 SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
 SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
@@ -69,49 +77,51 @@ CAUTION_TEXT = (
     "les statistiques présentées."
 )
 
-# Dégradé continu Copperwood → Teal (0 = mauvais = #bc6c25, 100 = bon = #2a6f6f).
-# Utilisé pour colorer les tableaux et afficher les légendes « barre de dégradé ».
-_copperwood_rgb = (0xBC, 0x6C, 0x25)
-_teal_rgb = (0x2A, 0x6F, 0x6F)
-SCORE_CMAP = LinearSegmentedColormap.from_list(
-    "score_urban_vision",
-    [tuple(c / 255 for c in _copperwood_rgb),
-     tuple(c / 255 for c in (0x73, 0x6E, 0x4A)),
-     tuple(c / 255 for c in _teal_rgb)],
-)
+def _hex_rgb(color: str) -> tuple[int, int, int]:
+    """Tuple (r, g, b) d'une couleur hexadécimale #RRGGBB (attendu par pydeck)."""
+    h = color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
-def _color_from_gradient(value: float) -> str:
-    """Hex d'une valeur 0-100 sur le dégradé Copperwood→Teal."""
-    from highcharts import score_gradient_hex
-    return score_gradient_hex(value, higher_is_better=True)
+def _score_tier_style(value: float) -> str:
+    """Style de cellule selon le palier « score » des rapports (positif/moyen/négatif)."""
+    color = palette_hex(value, "score")
+    foreground = CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST
+    return f"background-color: {color}; color: {foreground};"
 
 
-def render_gradient_legend(title: str = "", left_label: str = "à surveiller",
-                           right_label: str = "bon", invert: bool = False) -> None:
-    """Petite légende « barre de dégradé » graduée 0/50/100.
+def render_tier_legend(title: str = "", left_label: str = "à surveiller",
+                       right_label: str = "bon", invert: bool = False) -> None:
+    """Légende à 3 paliers, alignée sur les seuils des rapports.
 
-    La barre va de la valeur 0 (gauche) à la valeur 100 (droite) sur l'axe.
-    `left_label`/`right_label` sont affichés aux deux extrémités dans cet ordre.
-    `invert=True` pour les métriques où « plus = pire » (retards, arrêts sautés,
-    dérive à l'horaire) : valeur 0 = bon = Teal à gauche, valeur 100 = mauvais =
-    Copperwood à droite. Sinon (score, ponctualité : plus = mieux) : 0 = Copperwood,
-    100 = Teal.
+    Trois pastilles (positif = Olive Leaf, moyen = Sunlit Clay, négatif =
+    Copperwood), sans dégradé continu. `invert=True` pour les métriques où
+    « plus = pire » (retards, arrêts sautés, dérive à l'horaire) : le palier
+    positif s'affiche à gauche.
     """
     if invert:
-        ramp = "linear-gradient(90deg, #2a6f6f 0%, #2a6f6f 25%, #736E4A 50%, #bc6c25 75%, #bc6c25 100%)"
+        tiers = [
+            ("positif", OLIVE_LEAF, left_label),
+            ("moyen", SUNLIT_CLAY, ""),
+            ("négatif", COPPERWOOD, right_label),
+        ]
     else:
-        ramp = "linear-gradient(90deg, #bc6c25 0%, #bc6c25 25%, #736E4A 50%, #2a6f6f 75%, #2a6f6f 100%)"
+        tiers = [
+            ("négatif", COPPERWOOD, left_label),
+            ("moyen", SUNLIT_CLAY, ""),
+            ("positif", OLIVE_LEAF, right_label),
+        ]
+    chips = ""
+    for name, color, label in tiers:
+        extra = f" <span style='color:{OLIVE_LEAF_70}'>({label})</span>" if label else ""
+        chips += (
+            '<span style="display:inline-flex;align-items:center;gap:.35rem;margin-right:1rem">'
+            f'<span style="width:.72rem;height:.72rem;border-radius:3px;background:{color}"></span>'
+            f'<b>{name}</b>{extra}</span>'
+        )
     st.markdown(
-        f"""
-        <div style="margin:.15rem 0 .6rem;font-size:.78rem;color:{OLIVE_LEAF_70}">
-          {('<b>'+title+'</b>&nbsp; ' if title else '')}<span>{left_label}</span>
-          <span style="display:inline-block;vertical-align:middle;width:9rem;height:.55rem;border-radius:4px;
-            background:{ramp};margin:0 .4rem;"></span>
-          <span>{right_label}</span>
-          <span style="color:{OLIVE_LEAF_70};margin-left:.4rem">0 — 50 — 100</span>
-        </div>
-        """,
+        f'<div style="margin:.15rem 0 .6rem;font-size:.78rem;color:{OLIVE_LEAF_70}">'
+        f'{(f"<b>{title}</b>&nbsp; " if title else "")}{chips}</div>',
         unsafe_allow_html=True,
     )
 
@@ -120,11 +130,11 @@ def render_gradient_legend(title: str = "", left_label: str = "à surveiller",
 
 
 MODE_LABELS = {0: "Tramway", 3: "Bus", 4: "Ferry", 2: "Rail", 5: "Câble", 7: "Funiculaire", 11: "Trolleybus"}
-# Chaque mode a une couleur propre et distincte des couleurs Urban Vision
-# (jamais vert/magenta qui véhiculeraient une polarité bien/mal). Découverte
-# dynamique via load_mode_stats (groupée sur route_type réellement présent).
-# Teal tramway · Copperwood bus · Olive Leaf ferry.
-MODE_COLORS = {0: "#2a6f6f", 3: "#bc6c25", 4: "#606c38"}
+# Chaque mode a une couleur propre et fixe, distincte des couleurs portant un sens
+# de performance. Découverte dynamique via load_mode_stats (groupée sur route_type
+# réellement présent).
+# Teal bus (#2A6F6F) · Copperwood tram (#bc6c25) · Black Forest ferry (#283618).
+MODE_COLORS = {0: COPPERWOOD, 3: TEAL, 4: BLACK_FOREST}
 CAUSE_LABELS = {
     1: "Inconnu", 2: "Autre", 3: "Problème technique", 4: "Grève", 5: "Demande",
     6: "Météo", 7: "Maintenance", 8: "Travaux", 9: "Activité de police",
@@ -865,17 +875,9 @@ def load_communes(_conn) -> list[str]:
     return [r[0] for r in rows]
 
 
-def _score_gradient(value: float) -> tuple[int, int, int]:
-    """Dégradé Copperwood (#bc6c25) → Teal (#2a6f6f), lu de gauche à droite.
-
-    calibrated_r = lerp(188 → 42), calibrated_g = lerp(108 → 111),
-    calibrated_b = lerp(37 → 111). Valeur 0 (mauvais) = Copperwood, 100 (bon) = Teal.
-    """
-    ratio = max(0.0, min(1.0, value / 100.0))
-    r = round(188 + (42 - 188) * ratio)
-    g = round(108 + (111 - 108) * ratio)
-    b = round(37 + (111 - 37) * ratio)
-    return (r, g, b)
+def _score_rgb(value: float) -> tuple[int, int, int]:
+    """Couleur (r, g, b) d'un score par seuil — pas de dégradé continu."""
+    return _hex_rgb(palette_hex(value, "score"))
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1003,12 +1005,22 @@ def load_perturbation_history(_conn, since_ts: int | None, end_ts: int | None,
         """, params,
     ).fetchall()
     results = []
+    seen = set()
     for route_id, ligne, header, desc, p_start, p_end in rows:
         p_end = p_end if p_end is not None else end_ts_int
         eff_start = max(p_start, start_ts)
         eff_end = min(p_end, end_ts_int)
         if eff_end <= eff_start:
             continue
+        # Déduplication par contenu : la même annonce peut être publiée sous
+        # plusieurs alert_id par le flux ServiceAlerts.
+        dedup_key = (route_id,
+                     header,
+                     datetime.fromtimestamp(eff_start).strftime("%d/%m/%Y"),
+                     datetime.fromtimestamp(eff_end).strftime("%d/%m/%Y"))
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
         jours_couverts = int(math.ceil((eff_end - eff_start) / 86400.0))
         results.append({
             "ligne": ligne,
@@ -1090,14 +1102,15 @@ def _territorial_score(df: pd.DataFrame) -> float:
 def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
     """Carte géographique interactive (pydeck) des arrêts colorés par score.
 
-    Le dégradé Copperwood (#bc6c25) → Teal (#2a6f6f) suit le score de fiabilité de
-    la ligne principale : orange = à surveiller, teal = bon.
+    Couleur par seuil (identique aux rapports) : le score de fiabilité de la ligne
+    principale reçoit Olive Leaf (positif ≥ 80/100), Sunlit Clay (moyen) ou
+    Copperwood (négatif).
     """
     if df.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
     df = df.copy()
-    df["color"] = df["score_fiabilite"].apply(lambda v: list(_score_gradient(v)))
+    df["color"] = df["score_fiabilite"].apply(lambda v: list(_score_rgb(v)))
     df["radius"] = df["observations"].clip(50, 400)
     layer = pdk.Layer(
         "ScatterplotLayer",
@@ -1155,10 +1168,12 @@ def render_sidebar() -> str:
     return page
 
 def _kpi_border(polarity: str) -> str:
-    if polarity == "good":
-        return TEAL
-    if polarity == "bad":
+    if polarity in ("positif", "good"):
+        return OLIVE_LEAF
+    if polarity in ("negatif", "négatif", "bad"):
         return COPPERWOOD
+    if polarity in ("moyen",):
+        return SUNLIT_CLAY
     return "rgba(221, 161, 94, 0.50)"
 
 def kpi_card(label: str, value: str, sublabel: str | None = None, polarity: str = "neutral") -> str:
@@ -1177,7 +1192,7 @@ def render_kpis(items) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Vigie TBM | Fiabilité", page_icon="◉", layout="wide")
+    st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon="◉", layout="wide")
     inject_style()
     page = render_sidebar()
     if not DB_PATH.exists():
@@ -1242,12 +1257,15 @@ def main() -> None:
             st.title("La fiabilité du réseau, en un coup d’œil.")
             st.markdown('<div class="hero-subtitle">Des indicateurs lisibles pour identifier les lignes, les modes et les créneaux qui demandent une attention.</div>', unsafe_allow_html=True)
         ponct_label = "Ponctualité" if commune is not None else "Ponctualité réseau"
+        kpi_ponct = palette_kpi_tier({"ponctualite": on_time}, "ponctualite")
+        kpi_retard = palette_kpi_tier({"retard": retard_moyen_network}, "retard")
+        kpi_skip = palette_kpi_tier({"skip_rate": skip_rate}, "skip_rate")
         render_kpis([
             ("Passages analysés", f"{total:,}".replace(",", " "), None, "neutral"),
-            (ponct_label, f"{on_time:.1f} %", "≤ 5 min de retard", "good" if on_time >= 80 else "bad"),
-            ("Retard moyen", format_seconds(retard_moyen_network, signed=True), None, "good" if retard_moyen_network <= 60 else "bad"),
+            (ponct_label, f"{on_time:.1f} %", "≤ 5 min de retard", kpi_ponct),
+            ("Retard moyen", format_seconds(retard_moyen_network, signed=True), None, kpi_retard),
             ("Lignes suivies", f"{len(ranking)}", None, "neutral"),
-            ("Arrêts sautés", f"{skip_rate:.2f} %", f"{skipped_total:,} / {eligible_total:,} attendus".replace(",", " "), "good" if skip_rate <= 5 else "bad"),
+            ("Arrêts sautés", f"{skip_rate:.2f} %", f"{skipped_total:,} / {eligible_total:,} attendus".replace(",", " "), kpi_skip),
         ])
         st.caption("**Passage analysé** : un départ programmé (SCHEDULED) avec retard connu, sorti du flux depuis ≥ 20 min. **Observation** : une ligne brute du flux GTFS-RT (sert à mesurer le volume de collecte). **Arrêts sautés** : arrêts annoncés SKIPPED, rapportés aux arrêts attendus (SCHEDULED + SKIPPED).")
 
@@ -1258,7 +1276,8 @@ def main() -> None:
         if page == "Vue territoriale":
             st.markdown('<div class="section-note">La carte est le point de départ : '
                         'chaque point est un arrêt, coloré selon le score de fiabilité de la ligne '
-                        'principale qui le dessert (dégradé magenta→vert, gradué 0/50/100). '
+                        'principale qui le dessert, selon les seuils des rapports '
+                        '(négatif = Copperwood, moyen = Sunlit Clay, positif = Olive Leaf). '
                         'La taille du point correspond au nombre de passages analysés de l’arrêt '
                         '(de 50 à 400) : plus un arrêt est fréquenté, plus le point est grand. '
                         'Survolez un arrêt pour le détail.</div>', unsafe_allow_html=True)
@@ -1273,7 +1292,7 @@ def main() -> None:
                 )
             elif territorial.empty:
                 st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
-            render_gradient_legend("Fiabilité par arrêt", "à surveiller", "bon")
+            render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
             _territorial_map(territorial, commune)
             if not territorial.empty:
                 st.markdown("#### Arrêts du périmètre")
@@ -1281,7 +1300,7 @@ def main() -> None:
                 tdisp.columns = ["Arrêt", "Direction", "Ligne principale", "Lignes desservies", "Score / 100", "Retards > 5 min", "Passages"]
                 tstyled = (
                     tdisp.style
-                    .background_gradient(cmap=SCORE_CMAP, subset=["Score / 100"], vmin=0, vmax=100)
+                    .map(_score_tier_style, subset=["Score / 100"])
                     .format({"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": "{:,}"})
                 )
                 st.dataframe(tstyled, use_container_width=True, hide_index=True, height=320)
@@ -1294,7 +1313,7 @@ def main() -> None:
             left, right = st.columns([1.05, .95], gap="large")
             with left:
                 st.markdown("#### Score de fiabilité")
-                render_gradient_legend(invert=False)
+                render_tier_legend(invert=False)
                 chart_data = visible_ranking.head(15).sort_values("score_fiabilite").copy()
                 chart_data["perturbed"] = chart_data["route_id"].isin(disturbed)
                 chart_data["ligne_plot"] = [
@@ -1315,14 +1334,14 @@ def main() -> None:
             left, right = st.columns(2, gap="large")
             with left:
                 st.markdown("#### Retards > 5 min par jour")
-                render_gradient_legend("Retards", "bon", "à surveiller", invert=True)
+                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
                 if daily.empty or len(daily) < 2:
                     st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
                 else:
                     hc_render(network_daily_chart(daily), height=300)
             with right:
                 st.markdown("#### Risque selon l'heure")
-                render_gradient_legend("Retards", "bon", "à surveiller", invert=True)
+                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
                 net_hourly = load_hourly(conn, cutoff, since_ts, end_ts=end_ts, commune=commune)
                 if net_hourly.empty:
                     st.info("Cette vue nécessite les heures de départ des observations.")
@@ -1332,11 +1351,11 @@ def main() -> None:
             st.markdown("#### Profil des retards du réseau")
             distribution = load_distribution(conn, cutoff, since_ts, end_ts=end_ts, commune=commune)
             if not distribution.empty:
-                render_gradient_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
+                render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
                 hc_render(delay_distribution_chart(distribution), height=280)
 
             st.markdown("#### Détail des lignes")
-            render_gradient_legend("Score de fiabilité", "à surveiller", "bon")
+            render_tier_legend("Score de fiabilité", "à surveiller", "bon")
             display = visible_ranking[["ligne", "mode", "score_fiabilite", "pct_a_l_heure", "retard_moyen_s", "retard_median_s", "pct_retard_5min", "pct_arrets_sautes", "observations"]].copy()
             display["ligne"] = [
                 f"⚠ {l}" if rid in disturbed else l
@@ -1345,7 +1364,7 @@ def main() -> None:
             display.columns = ["Ligne", "Mode", "Score / 100", "Ponctualité ≤ 5 min", "Retard moyen (s)", "Retard médian (s)", "Retards > 5 min", "Arrêts sautés", "Passages"]
             styled = (
                 display.style
-                .background_gradient(cmap=SCORE_CMAP, subset=["Score / 100"], vmin=0, vmax=100)
+                .map(_score_tier_style, subset=["Score / 100"])
                 .format({
                     "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}",
                     "Retard médian (s)": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %", "Passages": "{:,}",
@@ -1363,10 +1382,10 @@ def main() -> None:
                 st.warning("Aucune donnée exploitable par mode.")
                 return
             st.markdown("### Comparaison par mode de transport")
-            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa couleur propre (violet tram, orange bus, turquoise ferry) ; sur les cartes, la grande valeur garde le dégradé de ponctualité (magenta→vert).</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry), sans jugement de valeur ; sur les cartes, la ponctualité suit les seuils des rapports (positif / moyen / négatif).</div>', unsafe_allow_html=True)
             card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
             for r in mode_stats.itertuples():
-                ponct_color = _color_from_gradient(r.pct_a_l_heure)
+                ponct_color = palette_hex(r.pct_a_l_heure, "score")
                 card_html += (
                     f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
                     f'border-left:4px solid {r.mode_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
@@ -1384,7 +1403,7 @@ def main() -> None:
                 hc_render(mode_comparison_chart(mode_stats), height=330)
             with right:
                 st.markdown("#### Profil horaire par mode")
-                st.caption("Séries de comparaison : chaque mode a sa couleur propre (violet tram, orange bus, turquoise ferry), pas de jugement de valeur.")
+                st.caption("Séries de comparaison : chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry), pas de jugement de valeur.")
                 mh = load_mode_hourly(conn, cutoff, since_ts, end_ts, commune=commune)
                 if mh.empty:
                     st.info("Aucune donnée horaire par mode.")
@@ -1395,7 +1414,7 @@ def main() -> None:
             if md.empty or md["date_service"].nunique() < 2:
                 st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
             else:
-                st.caption("Séries de comparaison : chaque mode a sa couleur propre (violet tram, orange bus, turquoise ferry) ; le trait pointillé distingue le ferry.")
+                st.caption("Séries de comparaison : chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry) ; le trait pointillé distingue le ferry.")
                 hc_render(mode_daily_chart(md), height=300)
 
             table = mode_stats[["mode", "observations", "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min", "retard_moyen_s", "retard_median_s", "pct_arrets_sautes"]].copy()
@@ -1440,7 +1459,7 @@ def main() -> None:
                     hc_render(timeline_chart(timeline), height=285)
             with right:
                 st.markdown("#### Risque selon l'heure")
-                render_gradient_legend("Retards", "bon", "à surveiller", invert=True)
+                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
                 if hourly.empty:
                     st.info("Cette vue nécessite les heures de départ des observations.")
                 else:
@@ -1448,7 +1467,7 @@ def main() -> None:
             st.markdown("#### Profil des retards")
             distribution = load_distribution(conn, cutoff, since_ts, selected_route_id, end_ts, commune=commune)
             if not distribution.empty:
-                render_gradient_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
+                render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
                 hc_render(delay_distribution_chart(distribution), height=280)
 
         if page == "Perturbations":

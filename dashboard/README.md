@@ -1,10 +1,12 @@
-# Dashboard Vigie TBM
+# Dashboard Urban Vision
 
 Visualisation des données collectées dans [data/vigie_tbm.db](/home/elias/PROJECT/Vigie-TBM/data/vigie_tbm.db).
 Charte graphique « Urban Vision » alignée sur les rapports mensuels :
 Black Forest `#283618` (marque, titres), Olive Leaf `#606c38` (texte secondaire),
-Sunlit Clay `#DDA15E` (bordures), Cornsilk `#FEFAE0` (fond de page),
-Copperwood `#bc6c25` → Teal `#2a6f6f` (dégradé de score mauvais → bon).
+Sunlit Clay `#DDA15E` (bordures), Cornsilk `#FEFAE0` (fond de page).
+Les couleurs de performance utilisent les seuils partagés de `reports/palette.py`
+(sans dégradé continu) : positif = Olive Leaf `#606c38`, moyen = Sunlit Clay
+`#DDA15E`, négatif = Copperwood `#bc6c25`.
 
 ## 1) Installer la dépendance
 

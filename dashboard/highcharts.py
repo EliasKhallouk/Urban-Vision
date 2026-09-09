@@ -1,36 +1,38 @@
-"""Configurations Highcharts pour le dashboard Vigie TBM.
+"""Configurations Highcharts pour le dashboard Urban Vision.
 
-Charte graphique alignée sur les rapports mensuels. Palettes :
+Charte graphique alignée sur les rapports mensuels. Palette et seuils partagés
+via reports/palette.py (source unique de vérité) :
 - Black Forest (#283618) : marque, titres, éléments neutres (axes, séries sans polarité).
-- Copperwood (#bc6c25) : borne « mauvais » du dégradé de score.
-- Teal (#2a6f6f) : borne « bon » du dégradé de score.
+- Olive Leaf (#606c38) : palier positif (bonne performance).
+- Sunlit Clay (#DDA15E) : palier moyen (performance intermédiaire).
+- Copperwood (#bc6c25) : palier négatif (performance dégradée).
 - Cornsilk (#FEFAE0) : fond de page.
-- Sunlit Clay (#DDA15E) : bordures/séparateurs (opacité réduite).
 - Olive Leaf (#606c38) : texte secondaire (opacité 70 %).
 """
 
 import json
+import sys
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 
-BLACK_FOREST = "#283618"
-COPPERWOOD = "#bc6c25"
-TEAL = "#2a6f6f"
-CORNSILK = "#FEFAE0"
-WHITE = "#FFFFFF"
-SUNLIT_CLAY = "#DDA15E"
-OLIVE_LEAF = "#606c38"
+# Import du module partagé reports/palette.py (palette et seuils identiques aux
+# rapports) : on l'ajoute au sys.path s'il est absent.
+_SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
+if _SRC_PALETTE not in sys.path:
+    sys.path.insert(0, _SRC_PALETTE)
+from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, CORNSILK, WHITE, TEAL, hex as palette_hex  # noqa: E402
 
 # Variantes dérivées (opacités de la charte) pour les bordures et textes secondaires.
 SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
 SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
 OLIVE_LEAF_70 = "rgba(96, 108, 56, 0.70)"
 
-# Chaque mode a une couleur propre et distincte des couleurs Urban Vision
-# (jamais vert/magenta qui véhiculent une polarité bien/mal). Le ferry est
-# pointillé (MODE_DASH) pour se distinguer même en cas de couleurs proches.
-# Teal tramway · Copperwood bus · Olive Leaf ferry.
-MODE_COLORS = {0: "#2a6f6f", 3: "#bc6c25", 4: "#606c38"}
+# Chaque mode a une couleur propre et fixe. Le ferry est pointillé (MODE_DASH)
+# pour se distinguer même en cas de couleurs proches.
+# Teal bus (#2A6F6F) · Copperwood tram (#bc6c25) · Black Forest ferry (#283618).
+MODE_COLORS = {0: COPPERWOOD, 3: TEAL, 4: BLACK_FOREST}
 MODE_DASH = {0: "Solid", 3: "Solid", 4: "Dot"}
 
 LIGHT_THEME = {
@@ -90,32 +92,9 @@ def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
     st.components.v1.html(_html(config, height, use_stock), height=height + 60)
 
 
-def _lerp(a: float, b: float, t: float) -> int:
-    return int(round(a + (b - a) * t))
-
-
-def score_gradient_rgb(value: float, higher_is_better: bool = True) -> tuple[int, int, int]:
-    """Dégradé continu Copperwood (#bc6c25) → Teal (#2a6f6f) interpolé en RGB.
-
-    `value` est attendu sur 0-100. `higher_is_better=False` inverse le sens
-    (mauvais = Copperwood) pour les métriques où « plus = pire » (retards, arrêts
-    sautés) : un vrai dégradé linéaire, sans seuil catégoriel.
-    """
-    t = max(0.0, min(1.0, value / 100.0))
-    if not higher_is_better:
-        t = 1.0 - t
-    # 0 (mauvais) = Copperwood (188,108,37) ; 100 (bon) = Teal (42,111,111)
-    return (_lerp(188, 42, t), _lerp(108, 111, t), _lerp(37, 111, t))
-
-
-def score_gradient_hex(value: float, higher_is_better: bool = True) -> str:
-    r, g, b = score_gradient_rgb(value, higher_is_better)
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
 def ranking_chart(df: pd.DataFrame) -> dict:
     df = df.sort_values("score_fiabilite")
-    data = [{"y": round(r["score_fiabilite"], 1), "color": score_gradient_hex(r["score_fiabilite"])}
+    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score")}
             for _, r in df.iterrows()]
     labels = df["ligne_plot"].tolist() if "ligne_plot" in df.columns else df["ligne"].tolist()
     return {
@@ -159,7 +138,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
 
 def network_daily_chart(df: pd.DataFrame) -> dict:
     data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(r, 1),
-             "passages": int(obs), "color": score_gradient_hex(r, higher_is_better=False)}
+             "passages": int(obs), "color": palette_hex(r, "pourcent")}
             for ts, r, obs in zip(df["date_service"], df["pct_retard_5min"], df["observations"])]
     return {
         "chart": {"type": "line", "height": 300},
@@ -179,7 +158,7 @@ def network_hourly_chart(df: pd.DataFrame) -> dict:
     for h in range(24):
         if h in hm:
             v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": score_gradient_hex(v, higher_is_better=False)})
+            data.append({"y": v, "color": palette_hex(v, "pourcent")})
         else:
             data.append({"y": 0, "color": SUNLIT_CLAY})
     return {
@@ -264,7 +243,7 @@ def hourly_risk_chart(df: pd.DataFrame, threshold: float | None = None) -> dict:
     for h in range(24):
         if h in hm:
             v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": score_gradient_hex(v, higher_is_better=False)})
+            data.append({"y": v, "color": palette_hex(v, "pourcent")})
         else:
             data.append({"y": 0, "color": SUNLIT_CLAY})
     return {
@@ -278,16 +257,17 @@ def hourly_risk_chart(df: pd.DataFrame, threshold: float | None = None) -> dict:
 
 
 def delay_distribution_chart(df: pd.DataFrame) -> dict:
-    # Gradient continu le long de l'écart à l'horaire : proche du nominal = vert,
-    # écart extrême (en retard OU en avance) = magenta. Chaque plage reçoit un
-    # niveau de « dérive » 0-100 interpolé sur le barycentre de la classe.
-    drift_map = {
-        "< −10 min": 100, "−10 à −5": 85, "−5 à −2": 62, "−2 à −1": 35, "−1 à 0": 18,
-        "0 à +1": 18, "+1 à +2": 35, "+2 à +5": 62,
-        "+5 à +10": 85, "+10 à +20": 95, "> +20 min": 100,
+    # Palette par seuil (identique aux rapports) : chaque classe d'écart à
+    # l'horaire est rattachée aux seuils « retard » via l'écart absolu médian
+    # de la classe (positif ≤ 60 s, moyen ≤ 180 s, négatif au-delà). Aucun
+    # dégradé continu : seules les 3 couleurs de palier sont utilisées.
+    drift_seconds = {
+        "< −10 min": 900, "−10 à −5": 450, "−5 à −2": 210,
+        "−2 à −1": 90, "−1 à 0": 30, "0 à +1": 30, "+1 à +2": 90,
+        "+2 à +5": 210, "+5 à +10": 450, "+10 à +20": 900, "> +20 min": 1500,
     }
     data = [{"y": int(r["observations"]),
-             "color": score_gradient_hex(drift_map.get(r["plage"], 100), higher_is_better=False)}
+             "color": palette_hex(drift_seconds.get(r["plage"], 1500), "retard")}
             for _, r in df.iterrows()]
     return {
         "chart": {"type": "column", "height": 280},

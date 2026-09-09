@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Génère un rapport mensuel Vigie TBM au format LaTeX/PDF.
+"""Génère un rapport mensuel Urban Vision au format LaTeX/PDF.
 
 Le document commence volontairement par une synthèse exécutive d'une page :
 elle est destinée aux décideurs. Les tableaux complets sont reportés en annexe.
@@ -32,15 +32,17 @@ matplotlib.rcParams.update({
     "font.size": 9,
     "axes.unicode_minus": False,
 })
-plt.rcParams["axes.prop_cycle"] = plt.cycler(color=["#283618", "#2a6f6f", "#bc6c25", "#606c38", "#DDA15E"])
 
-BLACK_FOREST = "#283618"
-COPPERWOOD = "#bc6c25"
-TEAL = "#2a6f6f"
-CORNSILK = "#FEFAE0"
-WHITE = "#FFFFFF"
-SUNLIT_CLAY = "#DDA15E"
-OLIVE_LEAF = "#606c38"
+_REPORTS_DIR = str(Path(__file__).resolve().parent)
+if _REPORTS_DIR not in sys.path:
+    sys.path.insert(0, _REPORTS_DIR)
+from palette import (  # noqa: E402  (module partagé de charte et de seuils)
+    BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, CORNSILK, WHITE, TEAL,
+    hex as palette_hex, kpi_latex as palette_kpi_latex,
+)
+
+plt.rcParams["axes.prop_cycle"] = plt.cycler(color=[BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, TEAL])
+
 SUNLIT_CLAY_TINT = "#F6E7D7"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -94,20 +96,11 @@ def duration(seconds: float | None, signed: bool = True) -> str:
 
 
 def kpi_color(metrics: dict, key: str) -> str:
-    """Return a LaTeX color name based on the metric value."""
-    if key == "fiability":
-        v = metrics[key]
-        return "vigiebleu" if v >= 80 else "alert"
-    if key == "ponctualite":
-        v = metrics[key]
-        return "vigiebleu" if v >= 80 else "alert"
-    if key in ("retard", "retard_median"):
-        v = abs(metrics[key])
-        return "vigiebleu" if v <= 120 else "alert"
-    if key == "skip_rate":
-        v = metrics[key]
-        return "vigiebleu" if v <= 5 else "alert"
-    return "vigiebleu"
+    """Nom LaTeX du KPI évaluatif, déterminé par les seuils partagés (palette.py).
+
+    Trois paliers : positif=olive, moyen=sunlitclay, négatif=alert.
+    """
+    return palette_kpi_latex(metrics, key)
 
 
 def net_val(network_metrics: dict | None, key: str, formatter) -> str:
@@ -528,20 +521,6 @@ def operational_views(scheduled: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     return hourly, distribution
 
 
-def _score_color(value: float, thresholds: list[tuple[float, float, str]]) -> str:
-    """Return hex color based on thresholds: (low, high, color) tuples.
-    The first matching range (low <= value < high) wins."""
-    for lo, hi, color in thresholds:
-        if lo <= value < hi:
-            return color
-    return SUNLIT_CLAY
-
-
-SCORE_SEUILS = [(80, 101, TEAL), (50, 80, SUNLIT_CLAY), (0, 50, COPPERWOOD)]
-RETARD_SEUILS = [(0, 60, TEAL), (60, 180, SUNLIT_CLAY), (180, float("inf"), COPPERWOOD)]
-PCT5_SEUILS = [(0, 5, TEAL), (5, 15, SUNLIT_CLAY), (15, 101, COPPERWOOD)]
-
-
 def _setup_ax(ax: plt.Axes) -> None:
     ax.set_facecolor(SUNLIT_CLAY_TINT)
     ax.tick_params(color=BLACK_FOREST, labelcolor=BLACK_FOREST)
@@ -570,7 +549,7 @@ def reliability_chart(lines: pd.DataFrame, output_dir: Path, name: str,
         return None
     fig, ax = plt.subplots(figsize=(7.5, max(2.5, len(selected) * 0.35)))
     _setup_ax(ax)
-    colors = [_score_color(float(r.score), SCORE_SEUILS) for _, r in selected.iterrows()]
+    colors = [palette_hex(float(r.score), "score") for _, r in selected.iterrows()]
     y = range(len(selected))
     ax.barh(y, selected["score"], color=colors, height=0.55, zorder=3, edgecolor="white", linewidth=0.3, label="Score")
     if network_lines is not None and not network_lines.empty:
@@ -599,7 +578,7 @@ def risk_scatter_chart(lines: pd.DataFrame, output_dir: Path, name: str) -> Path
     fig, ax = plt.subplots(figsize=(6.5, 5))
     _setup_ax(ax)
     for _, row in lines.iterrows():
-        c = _score_color(float(row.score), SCORE_SEUILS)
+        c = palette_hex(float(row.score), "score")
         ax.scatter(float(row.retard_median), float(row.retard_5), c=c, s=30, zorder=3, edgecolors="white", linewidth=0.3)
     for _, row in lines.iterrows():
         ax.text(float(row.retard_median) + max(float(lines.retard_median.max()) * 0.025, 3),
@@ -625,7 +604,7 @@ def stop_chart(stop_stats: pd.DataFrame, output_dir: Path, name: str) -> Path | 
     selected = stop_stats.head(12).iloc[::-1].reset_index(drop=True)
     fig, ax = plt.subplots(figsize=(7, max(2.5, len(selected) * 0.4)))
     _setup_ax(ax)
-    colors = [_score_color(float(r.retard_median), RETARD_SEUILS) for _, r in selected.iterrows()]
+    colors = [palette_hex(float(r.retard_median), "retard") for _, r in selected.iterrows()]
     y = range(len(selected))
     ax.barh([i - 0.15 for i in y], selected["retard_moyen"], height=0.25, color=colors, zorder=3, label="Moyen", edgecolor="white", linewidth=0.3, alpha=0.5)
     ax.barh([i + 0.15 for i in y], selected["retard_median"], height=0.25, color=colors, zorder=3, label="Médian", edgecolor="white", linewidth=0.3)
@@ -654,7 +633,7 @@ def evolution_chart(monthly: pd.DataFrame, output_dir: Path, name: str) -> Path 
         return None
     fig, ax = plt.subplots(figsize=(7, 3.5))
     _setup_ax(ax)
-    colors = [_score_color(float(r.ponctualite), SCORE_SEUILS) for _, r in monthly.iterrows()]
+    colors = [palette_hex(float(r.ponctualite), "score") for _, r in monthly.iterrows()]
     for i in range(len(monthly) - 1):
         ax.plot([i, i + 1], [monthly.iloc[i]["ponctualite"], monthly.iloc[i + 1]["ponctualite"]],
                 color=BLACK_FOREST, linewidth=1.5, zorder=2)
@@ -675,7 +654,7 @@ def hourly_chart(hourly: pd.DataFrame, output_dir: Path, name: str) -> Path | No
         return None
     fig, ax = plt.subplots(figsize=(7, 4))
     _setup_ax(ax)
-    colors = [_score_color(float(r.retard_5), PCT5_SEUILS) for _, r in hourly.iterrows()]
+    colors = [palette_hex(float(r.retard_5), "pourcent") for _, r in hourly.iterrows()]
     ax.bar(hourly["heure"], hourly["retard_5"], color=colors, width=0.7, zorder=3, edgecolor="white", linewidth=0.3)
     for _, row in hourly.iterrows():
         ax.text(int(row.heure), float(row.retard_5) + 0.5, f"{row.retard_5:.1f}",
@@ -703,7 +682,7 @@ def distribution_chart(distribution: pd.DataFrame, output_dir: Path, name: str) 
     dist_color_map = {
         "< -10": COPPERWOOD, "-10 a -5": COPPERWOOD, "-5 a -2": COPPERWOOD,
         "-2 a -1": SUNLIT_CLAY,
-        "-1 a 0": TEAL, "0 a +1": TEAL, "+1 a +2": TEAL,
+        "-1 a 0": OLIVE_LEAF, "0 a +1": OLIVE_LEAF, "+1 a +2": OLIVE_LEAF,
         "+2 a +5": SUNLIT_CLAY,
         "+5 a +10": COPPERWOOD, "+10 a +20": COPPERWOOD, "> +20": COPPERWOOD,
     }
@@ -728,15 +707,15 @@ def graphical_annex(lines: pd.DataFrame, scheduled: pd.DataFrame,
                      monthly_evolution: pd.DataFrame | None = None,
                      output_dir: Path | None = None) -> str:
     if output_dir is None:
-        output_dir = Path("/tmp/vigie_charts")
+        output_dir = Path("/tmp/urban_vision_charts")
     hourly, distribution = operational_views(scheduled)
     imgs: list[str] = []
     imgs.append(r"\newpage\section*{Annexe — Analyse graphique}")
     imgs.append(r"\small\textbf{Seuils de couleur utilisés dans les graphiques :} "
-                r"Vert = bonne performance ($\geq$ 80/100 pour le score de fiabilité, "
+                r"positif = bonne performance ($\geq$ 80/100 pour le score de fiabilité, "
                 r"$\leq$ 60 s pour le retard moyen/médian, $\leq$ 5\% pour les retards $>$ 5 min), "
-                r"Orange = performance moyenne, "
-                r"Rouge = performance dégradée. Consulter la section Méthode pour le détail des calculs.\\[.3cm]")
+                r"moyen = performance intermédiaire, "
+                r"négatif = performance dégradée. Consulter la section Méthode pour le détail des calculs.\\[.3cm]")
     p = reliability_chart(lines, output_dir, "reliability", network_lines)
     if p:
         imgs.append(r"\begin{center}\includegraphics[width=\textwidth]{" + str(p) + r"}\end{center}")
@@ -772,16 +751,16 @@ def build_no_data_latex(month: str, scope: Scope, collected_at: str) -> str:
 \usepackage[french]{{babel}}
 \usepackage[margin=2cm]{{geometry}}
 \usepackage{{xcolor,fancyhdr,graphicx,tcolorbox}}
-\definecolor{{vigiebleu}}{{HTML}}{{2A6F6F}}
 \definecolor{{olive}}{{HTML}}{{606C38}}
 \definecolor{{blackforest}}{{HTML}}{{283618}}
+\definecolor{{teal}}{{HTML}}{{2A6F6F}}
 \definecolor{{cornsilk}}{{HTML}}{{FEFAE0}}
-\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{vigiebleu}}{{VIGIE TBM}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
+\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{blackforest}}{{URBAN VISION}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
 \begin{{document}}
 \begin{{center}}
 \begin{{tcolorbox}}[width=\textwidth,colback=blackforest,colframe=blackforest,arc=4pt,boxrule=0pt,left=14pt,right=14pt,top=12pt,bottom=12pt,halign=center]
 \includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
-{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[4pt]
+{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports}}\\[4pt]
 {{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
 {{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
 {{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
@@ -843,10 +822,12 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
     # Format service alerts for the dedicated "Infos trafic" section,
     # grouped by ligne and placed just before the methodology.
+    # Déduplication par CONTENU (route, titre, période) : le flux publie parfois
+    # la même annonce sous plusieurs alert_id, ce qui créait des doublons.
     alerts_by_line: dict[str, list[tuple[str, str]]] = {}
     seen = set()
     for a in alerts or []:
-        key = (a["alert_id"], a["route_id"])
+        key = (a["route_id"], a["header_text"], a["active_period_start"], a["active_period_end"])
         if key in seen:
             continue
         seen.add(key)
@@ -860,13 +841,25 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         alerts_by_line.setdefault(ligne, []).append((header, period))
 
     if alerts_by_line:
+        # Rapport réseau complet : détail uniquement pour les lignes prioritaires,
+        # les autres ne sont que mentionnées (volume du « Infos trafic »).
+        priority_routes = {row.route_id for row in worst.itertuples()} if not scope.communes else None
         line_items = []
         for ligne in sorted(alerts_by_line):
             details = " ; ".join(
                 f"{latex(header)} ({period})"
                 for header, period in alerts_by_line[ligne]
             )
+            if priority_routes is not None and ligne != "Réseau" and ligne not in priority_routes:
+                continue
             line_items.append(rf"\item \textbf{{Ligne {latex(ligne)}}} : {details}")
+        other_lines = [
+            ligne for ligne in sorted(alerts_by_line)
+            if priority_routes is not None and ligne != "Réseau" and ligne not in priority_routes
+        ]
+        if other_lines:
+            counts = ", ".join(f"{ligne} ({len(alerts_by_line[ligne])})" for ligne in other_lines)
+            line_items.append(rf"\item \textbf{{Autres lignes concernées}} (détail non affiché) : {counts}")
         alerts_section = (
             r"\newpage"
             r"\section*{Infos trafic}"
@@ -896,24 +889,25 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \usepackage[margin=1.7cm]{{geometry}}
 \usepackage{{amsmath,booktabs,longtable,array,xcolor,tabularx,enumitem,graphicx,tcolorbox}}
 \usepackage{{fancyhdr}}
-\definecolor{{vigiebleu}}{{HTML}}{{2A6F6F}}
-\definecolor{{vigielight}}{{HTML}}{{FFFFFF}}
+\definecolor{{uvwhite}}{{HTML}}{{FFFFFF}}
 \definecolor{{alert}}{{HTML}}{{BC6C25}}
 \definecolor{{olive}}{{HTML}}{{606C38}}
+\definecolor{{sunlitclay}}{{HTML}}{{DDA15E}}
 \definecolor{{blackforest}}{{HTML}}{{283618}}
+\definecolor{{teal}}{{HTML}}{{2A6F6F}}
 \definecolor{{cornsilk}}{{HTML}}{{FEFAE0}}
-\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{vigiebleu}}{{VIGIE TBM}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
+\pagestyle{{fancy}}\fancyhf{{}}\lhead{{\textcolor{{blackforest}}{{URBAN VISION}}}}\rhead{{Rapport mensuel}}\cfoot{{\thepage}}
 {footer_note}
 \setlength{{\parindent}}{{0pt}}
-\newcommand{{\kpi}}[3][vigiebleu]{{\begin{{tcolorbox}}[width=.28\textwidth,sharp corners,boxrule=0pt,leftrule=3pt,colback=vigielight,colframe=#1,arc=0pt,outer arc=0pt,left=6pt,right=4pt,top=4pt,bottom=4pt,halign=flush left,valign=top]{{\scriptsize #2\\[3pt]}}{{\Large\bfseries\color{{#1}} #3}}\end{{tcolorbox}}}}
-\newfontfamily{{\vigiesym}}[Scale=MatchUppercase]{{Symbola}}
-\newcommand{{\alertmark}}{{\textcolor{{alert}}{{\vigiesym ⚠}}}}
+\newcommand{{\kpi}}[3][blackforest]{{\begin{{tcolorbox}}[width=.28\textwidth,sharp corners,boxrule=0pt,leftrule=3pt,colback=uvwhite,colframe=#1,arc=0pt,outer arc=0pt,left=6pt,right=4pt,top=4pt,bottom=4pt,halign=flush left,valign=top]{{\scriptsize #2\\[3pt]}}{{\Large\bfseries\color{{#1}} #3}}\end{{tcolorbox}}}}
+\newfontfamily{{\uvsym}}[Scale=MatchUppercase]{{Symbola}}
+\newcommand{{\alertmark}}{{\textcolor{{alert}}{{\uvsym ⚠}}}}
 
 \begin{{document}}
 \begin{{center}}
 \begin{{tcolorbox}}[width=\textwidth,colback=blackforest,colframe=blackforest,arc=4pt,boxrule=0pt,left=14pt,right=14pt,top=12pt,bottom=12pt,halign=center]
 \includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
-{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports TBM}}\\[4pt]
+{{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports}}\\[4pt]
 {{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
 {{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
 {{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
@@ -1010,7 +1004,7 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 
 \vspace{{.4cm}}
 \hrule\vspace{{.3cm}}
-\small Elias Khallouk --- eliaskhallouk@gmail.com \hfill Vigie-TBM --- {latex(collected_at)}
+\small Elias Khallouk --- eliaskhallouk@gmail.com \hfill Urban Vision --- {latex(collected_at)}
 \end{{document}}
 """
 
@@ -1034,7 +1028,7 @@ def compile_pdf(tex_path: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Génère le rapport mensuel Vigie TBM (LaTeX/PDF).")
+    parser = argparse.ArgumentParser(description="Génère le rapport mensuel Urban Vision (LaTeX/PDF).")
     parser.add_argument("--month", help="Mois analysé au format AAAA-MM (par défaut : dernier mois disponible).")
     parser.add_argument("--db-path", default=DEFAULT_DB, type=Path, help="Base SQLite à analyser.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT, type=Path, help="Répertoire des rapports générés.")
@@ -1083,7 +1077,7 @@ def main() -> int:
                                       network_metrics, network_lines, stop_stats,
                                       monthly_evolution, gaps, alerts_data)
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        tex_path = args.output_dir / f"vigie-tbm-{month}-{safe_slug(scope.recipient)}.tex"
+        tex_path = args.output_dir / f"urban-vision-{month}-{safe_slug(scope.recipient)}.tex"
         tex_path.write_text(content, encoding="utf-8")
         if args.compile:
             pdf_path = compile_pdf(tex_path)

@@ -142,7 +142,7 @@ def get_last_known_success(conn):
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")    
-    logger.info("Démarrage de la collecte Vigie TBM (intervalle: %ss)", POLL_INTERVAL_SECONDS)
+    logger.info("Démarrage de la collecte Urban Vision (intervalle: %ss)", POLL_INTERVAL_SECONDS)
 
     last_success_ts = get_last_known_success(conn)
 

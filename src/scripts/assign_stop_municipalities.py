@@ -91,7 +91,7 @@ def reverse_geocode_commune(latitude: float, longitude: float) -> tuple[str, str
     code returned by the API is an INSEE code, which makes the result auditable.
     """
     url = REVERSE_ADDRESS_URL + urlencode({"lat": latitude, "lon": longitude})
-    request = Request(url, headers={"User-Agent": "Vigie-TBM/1.0 (stop municipality assignment)"})
+    request = Request(url, headers={"User-Agent": "UrbanVision/1.0 (stop municipality assignment)"})
     try:
         with urlopen(request, timeout=20) as response:  # nosec B310 - official public API
             payload = json.load(response)

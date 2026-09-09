@@ -59,15 +59,15 @@ Si le taux d'arrêts sautés dépasse 5 %, une phrase complémentaire l'indique.
 
 ### Couleurs des indicateurs KPI
 
-Chaque KPI du haut de page est coloré selon sa propre valeur :
+Chaque KPI évaluatif du haut de page est coloré selon sa valeur, via les seuils partagés du module `palette.py` (appliqués à l'identique dans les graphiques et le dashboard) :
 
-| Métrique | Vert (bon) | Orange (moyen) | Rouge (alerte) |
+| Métrique | Positif (bonne performance) | Moyen (intermédiaire) | Négatif (dégradé) |
 |---|---|---|---|
-| **Ponctualité** | ≥ 90 % | ≥ 80 % | < 80 % |
-| **Retard moyen / médian** | ≤ 60 s | ≤ 120 s | > 120 s |
-| **Arrêts sautés** | ≤ 1 % | ≤ 5 % | > 5 % |
+| **Fiabilité, Ponctualité** | ≥ 80/100 | 50 – 80 | < 50 |
+| **Retard moyen / médian** (valeur absolue) | ≤ 60 s | 60 – 180 s | > 180 s |
+| **Arrêts sautés** | ≤ 5 % | 5 – 15 % | > 15 % |
 
-Les couleurs LaTeX utilisées : `vigiegreen` (vert), `vigieorange` (orange), `alert` (rouge), `vigieblue` (bleu par défaut).
+Les couleurs LaTeX utilisées : `olive` (positif), `sunlitclay` (moyen), `alert` (négatif), `blackforest` (marque : KPI non évaluatif « Passages analysés », titres).
 
 ### Score de fiabilité
 
