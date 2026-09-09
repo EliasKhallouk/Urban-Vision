@@ -170,6 +170,12 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
     if latest is None:
         raise ValueError("La base ne contient aucune observation.")
     cutoff = int(latest) - FRESHNESS_BUFFER_SECONDS
+    month_latest = conn.execute(
+        "SELECT MAX(COALESCE(departure_time, last_seen_at)) FROM observations "
+        "WHERE strftime('%Y-%m', datetime(COALESCE(departure_time, last_seen_at), "
+        "'unixepoch', 'localtime')) = ?",
+        (month,),
+    ).fetchone()[0]
     route_filter = ""
     params: list[object] = [cutoff, month]
     if scope.routes:
@@ -224,7 +230,9 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
         + base + " AND o.schedule_relationship IN ('SCHEDULED', 'SKIPPED') GROUP BY o.route_id, ligne",
         conn, params=params,
     )
-    collected_at = datetime.fromtimestamp(cutoff).strftime("%d/%m/%Y à %H:%M")
+    collected_at = (
+        datetime.fromtimestamp(int(month_latest)) if month_latest else datetime.fromtimestamp(cutoff)
+    ).strftime("%d/%m/%Y à %H:%M")
     return scheduled, skipped, collected_at
 
 
