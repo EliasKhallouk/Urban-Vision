@@ -10,6 +10,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 REPORT_GENERATOR = PROJECT_ROOT / "generate_monthly_report.py"
+DEFAULT_OUTPUT = PROJECT_ROOT / "output"
+
+
+def _slug(value: str) -> str:
+    return "".join(char.lower() if char.isalnum() else "-" for char in value).strip("-") or "rapport"
 
 
 def main() -> int:
@@ -41,8 +46,14 @@ def main() -> int:
         cmd += ["--recipient", f"Mairie de {args.commune}", "--communes", args.commune]
     if args.db_path:
         cmd += ["--db-path", args.db_path]
-    if args.output_dir:
-        cmd += ["--output-dir", args.output_dir]
+
+    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT / args.month
+    if args.network:
+        output_dir = output_dir / "reseau" / "bordeaux-metropole"
+    else:
+        output_dir = output_dir / "communes" / _slug(args.commune)
+    cmd += ["--output-dir", str(output_dir)]
+
     if args.compile:
         cmd.append("--compile")
 

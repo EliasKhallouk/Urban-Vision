@@ -900,8 +900,12 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 {footer_note}
 \setlength{{\parindent}}{{0pt}}
 \newcommand{{\kpi}}[3][blackforest]{{\begin{{tcolorbox}}[width=.28\textwidth,sharp corners,boxrule=0pt,leftrule=3pt,colback=uvwhite,colframe=#1,arc=0pt,outer arc=0pt,left=6pt,right=4pt,top=4pt,bottom=4pt,halign=flush left,valign=top]{{\scriptsize #2\\[3pt]}}{{\Large\bfseries\color{{#1}} #3}}\end{{tcolorbox}}}}
-\newfontfamily{{\uvsym}}[Scale=MatchUppercase]{{Symbola}}
-\newcommand{{\alertmark}}{{\textcolor{{alert}}{{\uvsym ⚠}}}}
+\IfFontExistsTF{{Symbola}}{{%
+  \newfontfamily{{\uvsym}}[Scale=MatchUppercase]{{Symbola}}%
+  \newcommand{{\alertmark}}{{\textcolor{{alert}}{{\uvsym ⚠}}}}%
+}}{{%
+  \newcommand{{\alertmark}}{{\textcolor{{alert}}{{\textbf{{!}}}}}}%
+}}
 
 \begin{{document}}
 \begin{{center}}
