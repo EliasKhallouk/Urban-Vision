@@ -430,13 +430,13 @@ def comparison(current: dict[str, float | int], previous: dict[str, float | int]
                 "retard": "Historique en cours de constitution — comparaison disponible dès le rapport du mois prochain.",
                 "skip_rate": "Historique en cours de constitution — comparaison disponible dès le rapport du mois prochain."}
     return {
-        "fiability": f"{float(current['fiability']) - float(previous['fiability']):+.1f} pts vs mois précédent",
-        "ponctualite": f"{float(current['ponctualite']) - float(previous['ponctualite']):+.1f} pts vs mois précédent",
+        "fiability": f"{float(current['fiability']) - float(previous['fiability']):+.1f} / 100",
+        "ponctualite": f"{float(current['ponctualite']) - float(previous['ponctualite']):+.1f} %",
         "retard": (
             f"moy. {float(current['retard']) - float(previous['retard']):+.0f} s ; "
-            f"méd. {float(current['retard_median']) - float(previous['retard_median']):+.0f} s vs mois précédent"
+            f"méd. {float(current['retard_median']) - float(previous['retard_median']):+.0f} s"
         ),
-        "skip_rate": f"{float(current['skip_rate']) - float(previous['skip_rate']):+.2f} pts vs mois précédent",
+        "skip_rate": f"{float(current['skip_rate']) - float(previous['skip_rate']):+.2f} %",
     }
 
 
@@ -622,7 +622,7 @@ def stop_chart(stop_stats: pd.DataFrame, output_dir: Path, name: str) -> Path | 
             labels.append(f"{row.stop_name}{suffix}")
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=7)
-    ax.set_xlabel("Retard", color=BLACK_FOREST, fontsize=8)
+    ax.set_xlabel("Retard (secondes)", color=BLACK_FOREST, fontsize=8)
     ax.set_title("Arrêts les plus problématiques du périmètre", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
@@ -762,7 +762,7 @@ def build_no_data_latex(month: str, scope: Scope, collected_at: str) -> str:
 \includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
 {{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports}}\\[4pt]
 {{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
-{{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
+{{\color{{white}}\small {latex(report_month).capitalize()}}}\\[2pt]
 {{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
 {{\color{{white!70}}\scriptsize Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com}}
 \end{{tcolorbox}}
@@ -821,7 +821,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
     )
 
     # Format service alerts for the dedicated "Infos trafic" section,
-    # grouped by ligne and placed just before the methodology.
+    # grouped by ligne and placed after the methodology.
     # Déduplication par CONTENU (route, titre, période) : le flux publie parfois
     # la même annonce sous plusieurs alert_id, ce qui créait des doublons.
     alerts_by_line: dict[str, list[tuple[str, str]]] = {}
@@ -913,7 +913,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \includegraphics[height=1.05cm]{{{cover_logo}}}\\[7pt]
 {{\color{{cornsilk}}\LARGE\bfseries Rapport mensuel de fiabilité des transports}}\\[4pt]
 {{\color{{cornsilk!75}}\large Urban Vision}}\\[4pt]
-{{\color{{white}}\small {latex(report_month).capitalize()} — Destinataire : {latex(scope.recipient)}}}\\[2pt]
+{{\color{{white}}\small {latex(report_month).capitalize()}}}\\[2pt]
 {{\color{{white!85}}\footnotesize Périmètre : {latex(scope.description)}}}\\[2pt]
 {{\color{{white!70}}\scriptsize Rapport produit par Elias Khallouk --- eliaskhallouk@gmail.com}}
 \end{{tcolorbox}}
@@ -934,9 +934,9 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \vspace{{.7cm}}
 \begin{{tabularx}}{{\textwidth}}{{@{{}}lXXXX@{{}}}}
 \toprule
- & \textbf{{Fiabilité}} & \textbf{{Ponctualité}} & \textbf{{Retards moyen / médian}} & \textbf{{Arrêts sautés}} \\
+ & \textbf{{Fiabilité}} & \textbf{{Ponctualité}} & \textbf{{Retards moyen \& médian}} & \textbf{{Arrêts sautés}} \\
 \midrule
-\textbf{{Évolution}} & {latex(change['fiability'])} & {latex(change['ponctualite'])} & {latex(change['retard'])} & {latex(change['skip_rate'])} \\
+\textbf{{Évolution du mois précédent}} & {latex(change['fiability'])} & {latex(change['ponctualite'])} & {latex(change['retard'])} & {latex(change['skip_rate'])} \\
 \bottomrule
 \end{{tabularx}}
 
@@ -974,8 +974,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
 {graphical_annex(lines, scheduled, network_lines, stop_stats, monthly_evolution, output_dir)}
 
-{alerts_section}
-
+\newpage
 \section*{{Méthode et calcul de la fiabilité}}
 L'indice de fiabilité est un score synthétique (de 0 à 100) conçu pour identifier rapidement les lignes de transport qui posent le plus de difficultés aux usagers.
 
@@ -1005,6 +1004,8 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 {evolution_note}
 
 \textbf{{Alertes travaux.}} Les alertes de la section \textit{{Infos trafic}} (\alertmark) sont issues du flux ServiceAlerts TBM et sont reproduites à titre indicatif. Elles ne sont pas utilisées pour filtrer ou corriger les indicateurs de ponctualité. La présence d'une alerte sur une ligne ne signifie pas que les retards ou arrêts sautés observés sont causés par les travaux annoncés.
+
+{alerts_section}
 
 \vspace{{.4cm}}
 \hrule\vspace{{.3cm}}
