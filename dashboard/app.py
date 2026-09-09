@@ -1382,7 +1382,7 @@ def main() -> None:
                 st.warning("Aucune donnée exploitable par mode.")
                 return
             st.markdown("### Comparaison par mode de transport")
-            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry), sans jugement de valeur ; sur les cartes, la ponctualité suit les seuils des rapports (positif / moyen / négatif).</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa couleur propre (teal bus, cuivre tram, forêt ferry), sans jugement de valeur.</div>', unsafe_allow_html=True)
             card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
             for r in mode_stats.itertuples():
                 ponct_color = palette_hex(r.pct_a_l_heure, "score")
@@ -1403,7 +1403,7 @@ def main() -> None:
                 hc_render(mode_comparison_chart(mode_stats), height=330)
             with right:
                 st.markdown("#### Profil horaire par mode")
-                st.caption("Séries de comparaison : chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry), pas de jugement de valeur.")
+
                 mh = load_mode_hourly(conn, cutoff, since_ts, end_ts, commune=commune)
                 if mh.empty:
                     st.info("Aucune donnée horaire par mode.")
