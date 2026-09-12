@@ -64,3 +64,10 @@ Trois scripts dans `reports/` :
 ##### Tous les rapports (réseau + toutes les communes), avec compilation :
 .venv/bin/python reports/generate_all_reports.py --month 2026-08 --compile
 # (--compile génère les PDF automatiquement ; compile_all.sh reste dispo pour relancer)
+
+#### POUR LANCER LES TESTS
+Les tests vivent dans `tests/` et s'exécutent avec pytest sur des bases SQLite
+temporaires (aucune donnée réelle n'est touchée, pas de réseau).
+
+(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ .venv/bin/python -m pytest
+# sur la machine de dev : .venv/bin/python -m pytest -q  # 167 tests
