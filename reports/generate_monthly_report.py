@@ -46,7 +46,7 @@ plt.rcParams["axes.prop_cycle"] = plt.cycler(color=[BLACK_FOREST, COPPERWOOD, OL
 SUNLIT_CLAY_TINT = "#F6E7D7"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = PROJECT_ROOT / "data" / "vigie_tbm.db"
+DEFAULT_DB = PROJECT_ROOT / "data" / "urban_vision.db"
 DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "output"
 FRESHNESS_BUFFER_SECONDS = 20 * 60
 FRENCH_MONTHS = (
@@ -952,7 +952,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \textbf{{Lecture du mois.}} {executive_message(metrics, lines, scope)}
 
 \vspace{{.3cm}}
-\textbf{{Score de fiabilité.}} Il est calculé ainsi : \textit{{score = max(0 ; ponctualité - 2 x taux d'arrêts sautés)}}. La ponctualité (part des passages avec au plus cinq minutes de retard) constitue donc la base sur 100 ; chaque point d'arrêts sautés retire deux points. Un score faible signale une ligne prioritaire.
+\textbf{{Score de fiabilité.}} Ce score (sur 100) mesure la fiabilité du réseau sur le mois. Il part de la ponctualité : le pourcentage de passages avec au plus 5 minutes de retard. Puis il applique une pénalité pour les arrêts sautés : chaque pourcent d'arrêts sautés retire 2 points. Formule : \textit{{score = max(0 ; ponctualité - 2 $\times$ taux d'arrêts sautés)}}. Un score faible signale une ligne prioritaire.
 
 \vspace{{.35cm}}
 \textbf{{Alertes prioritaires}}
@@ -984,18 +984,21 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
 \newpage
 \section*{{Méthode et calcul de la fiabilité}}
-L'indice de fiabilité est un score synthétique (de 0 à 100) conçu pour identifier rapidement les lignes de transport qui posent le plus de difficultés aux usagers.
+L'indice de fiabilité est un score synthétique (de 0 à 100) qui mesure à quel point les transports ont été fiables sur la période. Plus le score est élevé, meilleure est la fiabilité observée.
 
 Contrairement à une simple mesure de temps, cet indicateur combine deux facteurs clés :
 
 \begin{{itemize}}[leftmargin=1.4em]
-\item \textbf{{La ponctualité (la base)}} : la part des passages effectués avec au maximum 5 minutes de retard. Au-delà de 5 minutes, le retard est jugé trop pénalisant pour l'usager et le trajet fait baisser cette note de base.
-\item \textbf{{Les arrêts sautés (la pénalité)}} : lorsqu'un véhicule ne dessert pas un arrêt prévu (événement \texttt{{SKIPPED}}), la gêne est maximale. Chaque pourcent d'arrêts sautés retire donc 2 points au score global.
+\item \textbf{{La ponctualité (la base)}} : le pourcentage de passages effectués avec au plus 5 minutes de retard. Chaque passage à l'heure fait monter ce score de base ; au-delà de 5 minutes, le retard est jugé trop pénalisant pour l'usager et le passage ne compte plus comme « à l'heure ».
+\item \textbf{{Les arrêts sautés (la pénalité)}} : lorsqu'un véhicule ne dessert pas un arrêt prévu (événement \texttt{{SKIPPED}}), la gêne est maximale. Chaque pourcent d'arrêts sautés retire donc 2 points au score.
 \end{{itemize}}
 
 \[
 \text{{Score de fiabilité}} = \max(0 \;,\; \text{{Ponctualité}} - 2 \times \text{{Taux d'arrêts sautés}})
 \]
+
+\vspace{{.2cm}}
+\textbf{{Exemple.}} Avec 92~\% de passages à l'heure et 3~\% d'arrêts sautés, le score est de $92 - 2 \times 3 = 86$ sur 100.
 
 \vspace{{.2cm}}
 À noter~:

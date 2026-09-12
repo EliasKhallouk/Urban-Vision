@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = PROJECT_ROOT / "data" / "vigie_tbm.db"
+DEFAULT_DB = PROJECT_ROOT / "data" / "urban_vision.db"
 REPORT_GENERATOR = Path(__file__).resolve().parent / "generate_monthly_report.py"
 
 

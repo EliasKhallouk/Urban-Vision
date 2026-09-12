@@ -1,6 +1,6 @@
 # Dashboard Urban Vision
 
-Visualisation des données collectées dans [data/vigie_tbm.db](/home/elias/PROJECT/Vigie-TBM/data/vigie_tbm.db).
+Visualisation des données collectées dans [data/urban_vision.db](/home/elias/PROJECT/Urban-Vision/data/urban_vision.db).
 Charte graphique « Urban Vision » alignée sur les rapports mensuels :
 Black Forest `#283618` (marque, titres), Olive Leaf `#606c38` (texte secondaire),
 Sunlit Clay `#DDA15E` (bordures), Cornsilk `#FEFAE0` (fond de page).

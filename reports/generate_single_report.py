@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--commune", help="Nom de la commune (ex: Bordeaux, Mérignac).")
     parser.add_argument("--network", action="store_true",
                         help="Génère le rapport réseau Bordeaux Métropole.")
-    parser.add_argument("--db-path", help="Base SQLite à analyser (défaut : data/vigie_tbm.db).")
+    parser.add_argument("--db-path", help="Base SQLite à analyser (défaut : data/urban_vision.db).")
     parser.add_argument("--output-dir", help="Dossier de sortie (défaut : reports/output).")
     parser.add_argument("--compile", action="store_true",
                         help="Compile aussi en PDF.")

@@ -45,7 +45,7 @@ from highcharts import (
     hourly_distribution_chart,
 )
 
-DB_PATH = Path(__file__).resolve().parents[1] / "data" / "vigie_tbm.db"
+DB_PATH = Path(__file__).resolve().parents[1] / "data" / "urban_vision.db"
 FRESHNESS_BUFFER_SECONDS = 20 * 60
 CACHE_TTL_SECONDS = 60
 MIN_OBSERVATIONS = 50

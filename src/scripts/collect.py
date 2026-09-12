@@ -21,7 +21,7 @@ URL_TRIPUPDATES = (
     "https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux"
     "?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt"
 )
-DB_PATH = str(PROJECT_ROOT / "data" / "vigie_tbm.db")
+DB_PATH = str(PROJECT_ROOT / "data" / "urban_vision.db")
 POLL_INTERVAL_SECONDS = 60
 GAP_THRESHOLD_SECONDS = 180  # 3x l'intervalle normal de 60s, marge de sécurité
 

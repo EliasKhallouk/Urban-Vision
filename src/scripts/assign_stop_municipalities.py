@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = PROJECT_ROOT / "data" / "vigie_tbm.db"
+DEFAULT_DB = PROJECT_ROOT / "data" / "urban_vision.db"
 DEFAULT_BOUNDARIES_URL = (
     "https://opendata.bordeaux-metropole.fr/api/explore/v2.1/catalog/datasets/"
     "fv_commu_s/exports/geojson?lang=fr&timezone=Europe%2FParis"

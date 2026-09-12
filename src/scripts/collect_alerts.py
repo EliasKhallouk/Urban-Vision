@@ -20,7 +20,7 @@ URL_SERVICEALERTS = (
     "https://bdx.mecatran.com/utw/ws/gtfsfeed/alerts/bordeaux"
     "?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt"
 )
-DB_PATH = str(PROJECT_ROOT / "data" / "vigie_tbm.db")
+DB_PATH = str(PROJECT_ROOT / "data" / "urban_vision.db")
 POLL_INTERVAL_SECONDS = 120
 
 

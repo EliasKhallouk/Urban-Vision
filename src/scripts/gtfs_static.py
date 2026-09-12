@@ -18,7 +18,7 @@ GTFS_STATIC_URL = (
     "https://bdx.mecatran.com/utw/ws/gtfsfeed/static/bordeaux"
     "?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt"
 )
-DB_PATH = str(PROJECT_ROOT / "data" / "vigie_tbm.db")
+DB_PATH = str(PROJECT_ROOT / "data" / "urban_vision.db")
 
 
 def download_gtfs_zip(url: str) -> zipfile.ZipFile:
