@@ -7,3 +7,5 @@ reports/recipients.json
 data/*.log
 data/collect.log
 .env
+opencode.json
+.vscode/
