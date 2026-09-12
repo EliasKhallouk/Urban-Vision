@@ -22,6 +22,9 @@ URL_SERVICEALERTS = (
 )
 DB_PATH = str(PROJECT_ROOT / "data" / "urban_vision.db")
 POLL_INTERVAL_SECONDS = 120
+# Le collecteur principal tient le verrou d'écriture pendant le recalcul des
+# agrégats : on attend 3 minutes au lieu d'échouer après 5s (défaut sqlite3).
+DB_BUSY_TIMEOUT_MS = 180_000
 
 
 logging.basicConfig(
@@ -85,7 +88,7 @@ def process_feed(conn, feed: gtfs_realtime_pb2.FeedMessage) -> int:
 
         periods = alert.active_period
         if not periods:
-            periods = [gtfs_realtime_pb2.Alert.TimeRange()]  # single unbounded period
+            periods = [gtfs_realtime_pb2.TimeRange()]  # single unbounded period
 
         for period in periods:
             period_start = period.start if period.HasField("start") else 0
@@ -120,6 +123,7 @@ def process_feed(conn, feed: gtfs_realtime_pb2.FeedMessage) -> int:
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS};")
     init_db(conn)
 
     logger.info("Demarrage de la collecte des alertes (intervalle: %ss)", POLL_INTERVAL_SECONDS)
@@ -136,6 +140,7 @@ def main():
         except requests.RequestException as e:
             logger.warning("Echec de recuperation du flux d'alertes : %s", e)
         except Exception as e:
+            conn.rollback()
             logger.exception("Erreur inattendue pendant le traitement des alertes : %s", e)
 
         elapsed = time.monotonic() - cycle_start

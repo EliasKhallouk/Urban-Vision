@@ -1,9 +1,11 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "urban_vision.db"
-conn = sqlite3.connect(DB_PATH)
-conn.executescript("""
+# Schéma SQLite : source unique de vérité, réutilisé par init_db() à l'import et
+# par les tests sur une base temporaire. Idempotent (CREATE IF NOT EXISTS).
+# service_alerts est défini ici (et non seulement dans collect_alerts.py) pour
+# que le schéma soit auto-porteur : l'index idx_service_alerts_period en dépend.
+SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS observations (
     trip_id TEXT NOT NULL,
     start_date TEXT NOT NULL,
@@ -45,6 +47,18 @@ CREATE TABLE IF NOT EXISTS trip_status (
     schedule_relationship TEXT NOT NULL,
     last_seen_at INTEGER NOT NULL,
     PRIMARY KEY (trip_id, start_date)
+);
+
+CREATE TABLE IF NOT EXISTS service_alerts (
+    alert_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    active_period_start INTEGER NOT NULL,
+    active_period_end INTEGER,
+    header_text TEXT,
+    description_text TEXT,
+    cause INTEGER,
+    last_seen_at INTEGER NOT NULL,
+    PRIMARY KEY (alert_id, route_id, active_period_start)
 );
 
 CREATE INDEX IF NOT EXISTS idx_observations_last_seen_at
@@ -115,8 +129,18 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
-""")
-conn.commit()
+"""
+
+
+def init_db(conn) -> None:
+    """Applique le schéma complet (idempotent) puis valide la transaction."""
+    conn.executescript(SCHEMA_DDL)
+    conn.commit()
+
+
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "urban_vision.db"
+conn = sqlite3.connect(DB_PATH)
+init_db(conn)
 
 
 columns = {

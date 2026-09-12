@@ -24,6 +24,13 @@ URL_TRIPUPDATES = (
 DB_PATH = str(PROJECT_ROOT / "data" / "urban_vision.db")
 POLL_INTERVAL_SECONDS = 60
 GAP_THRESHOLD_SECONDS = 180  # 3x l'intervalle normal de 60s, marge de sécurité
+# Attendre le verrou d'écriture (ex. un autre script qui écrit) au lieu d'échouer.
+DB_BUSY_TIMEOUT_MS = 120_000
+# Recadence du recalcul des agrégats. Les agrégats sont (re)calculés intégralement
+# depuis `observations` à chaque fois : la valeur reste exacte, seule sa fraîcheur
+# baisse jusqu'à cet intervalle. Ce recalcul tient le verrou d'écriture ~2 min sur
+# une VM 1 vCPU : l'espace à 60s bloquait la collecte et le service d'alertes.
+AGGREGATE_REFRESH_INTERVAL_SECONDS = 300
 
 
 logging.basicConfig(
@@ -141,10 +148,12 @@ def get_last_known_success(conn):
 
 def main():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")    
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS};")
     logger.info("Démarrage de la collecte Urban Vision (intervalle: %ss)", POLL_INTERVAL_SECONDS)
 
     last_success_ts = get_last_known_success(conn)
+    last_refresh_ts = 0.0
 
     while True:
         cycle_start = time.monotonic()
@@ -157,12 +166,13 @@ def main():
 
             n_rows = process_feed(conn, feed)
 
-            # Agrégats du dashboard : on ne (re)calcule que les jours d'hier et
-            # d'aujourd'hui (chaque jour est figé ~20 min après minuit suivant).
+            # Agrégats du dashboard : recalcul espacé, pas à chaque poll.
             try:
-                today = datetime.now().strftime("%Y-%m-%d")
-                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-                dbio.refresh_aggregates(conn, days=[yesterday, today])
+                if time.time() - last_refresh_ts >= AGGREGATE_REFRESH_INTERVAL_SECONDS:
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    dbio.refresh_aggregates(conn, days=[yesterday, today])
+                    last_refresh_ts = time.time()
             except Exception as e:
                 logger.warning("Refresh des agrégats échoué : %s", e)
 
