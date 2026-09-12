@@ -71,3 +71,15 @@ temporaires (aucune donnée réelle n'est touchée, pas de réseau).
 
 (.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ .venv/bin/python -m pytest
 # sur la machine de dev : .venv/bin/python -m pytest -q  # 167 tests
+
+#### SÉCURITÉ & EXPLOITATION PROD (durcissement appliqué le 12/09/2026)
+
+> Les fichiers ci-dessous vivent sur la VM (`/etc/...`) et ne sont **pas** dans git. Ce README est leur trace.
+
+- **Accès SSH** : clé uniquement, mot de passe système désactivé. Brute-force bannie 1 h par `fail2ban` (5 échecs / 10 min).
+- **Dashboard** : accessible **uniquement en HTTPS** via nginx (`https://urban-vision.duckdns.org`), qui reverse vers `127.0.0.1:8501`. Le port `8501` est fermé dans `/etc/iptables/rules.v4` — ne jamais le rouvrir.
+- **Firewall** : iptables persistés (`netfilter-persistent`) ; seuls `22/80/443` sont ouverts. `rpcbind` (port 111) désactivé.
+- **Sudo `ubuntu`** : **`NOPASSWD:ALL`** (comportement OCI d'origine, restauré le 12/09/2026). Le compte n'a **pas de mot de passe** (verrouillé, jamais créé par l'image OCI) — le sudo ne demandera donc jamais de mot de passe. C'est le réglage de confort choisi ; si tu veux resserrer un jour, la règle vit dans `/etc/sudoers.d/90-cloud-init-users` et `/etc/sudoers`.
+- **Root / dépannage** : en cas de blocage réseau ou système, la **console OCI** de l'instance (portail → Compute → Instances → `ek-hub` → **Console connection**) donne un accès série hors-bande.
+- **Services systemd** : les 3 unités (`/etc/systemd/system/urban-vision-*.service`) tournent en user `ubuntu` avec `NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`, `RestrictAddressFamilies`.
+- **Secrets** : `.env` gitignoré (permissions 600), absent de prod. Token DuckDNS inutilisé par le code → supprimé de la machine de dev, à régénérer sur duckdns.org si besoin.
