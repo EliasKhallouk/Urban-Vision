@@ -15,6 +15,7 @@ graphiques) et les loaders sont mis en cache 60 secondes.
 """
 
 import base64
+import html
 import json
 import math
 import sqlite3
@@ -1285,7 +1286,7 @@ def main() -> None:
             territorial_network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
             if commune is not None and not territorial.empty:
                 st.markdown(
-                    f'<div class="insight">La fiabilité de <b>{commune}</b> est de '
+                    f'<div class="insight">La fiabilité de <b>{html.escape(commune)}</b> est de '
                     f'<b>{_territorial_score(territorial)}/100</b>, contre '
                     f'{_territorial_score(territorial_network)}/100 pour l’ensemble du réseau.</div>',
                     unsafe_allow_html=True,
@@ -1327,7 +1328,7 @@ def main() -> None:
             worst_note = ""
             if worst.route_id in disturbed:
                 worst_note = " — ⚠ ligne signalée en perturbation sur la période"
-            st.markdown(f'<div class="insight">À surveiller en premier : <b>ligne {worst.ligne}</b>{worst_note} — score de fiabilité {worst.score_fiabilite:.1f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de 5 minutes.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="insight">À surveiller en premier : <b>ligne {html.escape(str(worst.ligne))}</b>{worst_note} — score de fiabilité {worst.score_fiabilite:.1f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de 5 minutes.</div>', unsafe_allow_html=True)
 
             st.markdown("### Évolution du réseau")
             daily = load_network_daily(conn, cutoff, since_ts, end_ts, commune=commune)
@@ -1439,7 +1440,7 @@ def main() -> None:
             selected_route_id = route_labels[selected_label] if selected_label in route_labels else default_line
             line = ranking[ranking.route_id == selected_route_id].iloc[0]
             marker = " ⚠" if selected_route_id in disturbed else ""
-            st.markdown(f"### Ligne {line['ligne']}{marker} · <span style='color:{line['mode_color']}'>{line['mode']}</span>", unsafe_allow_html=True)
+            st.markdown(f"### Ligne {html.escape(str(line['ligne']))}{marker} · <span style='color:{line['mode_color']}'>{line['mode']}</span>", unsafe_allow_html=True)
             if selected_route_id in disturbed:
                 st.warning(CAUTION_TEXT)
             render_kpis([
@@ -1521,7 +1522,7 @@ def main() -> None:
                         with st.expander(acc):
                             for x in inner:
                                 st.markdown(
-                                    f"**{x.header_text}**  \n"
+                                    f"**{html.escape(x.header_text or '')}**  \n"
                                     f"<span style='color:{OLIVE_LEAF_70}'>{x.debut_effectif} → "
                                     f"{x.fin_effective} · {x.jours_couverts} j</span>",
                                     unsafe_allow_html=True,

@@ -487,6 +487,43 @@ class TestGraphicalAnnex:
         assert len(list(tmp_path.glob("*.png"))) >= 1
 
 
+class TestBuildLatexAlertsEscaping:
+    def test_route_id_et_header_hostiles_echappes(self, tmp_path):
+        lines = pd.DataFrame([
+            {"route_id": "A", "ligne": "1", "score": 65.0, "retard_moyen": 90.0,
+             "retard_median": 120, "retard_5": 10, "ponctualite": 90,
+             "arrets_sautes": 2, "passages": 100},
+        ])
+        scheduled = pd.DataFrame({
+            "departure_delay": [10, 200],
+            "departure_time": [
+                _epoch_local(2026, 9, 11, 8, 0),
+                _epoch_local(2026, 9, 11, 9, 0),
+            ],
+        })
+        metrics = {"fiability": 80, "passages": 100, "ponctualite": 85.0,
+                   "retard": 120.0, "retard_median": 90.0, "skip_rate": 2.0}
+        change = {"fiability": "+2", "ponctualite": "+1", "retard": "-10", "skip_rate": "0"}
+        alerts = [
+            {"route_id": "9&1", "header_text": "Colis & découverte %",
+             "active_period_start": _epoch_local(2026, 9, 1, 8, 0),
+             "active_period_end": _epoch_local(2026, 9, 3, 0, 0)},
+            {"route_id": "A", "header_text": "Travaux &_%",
+             "active_period_start": _epoch_local(2026, 9, 5, 8, 0),
+             "active_period_end": _epoch_local(2026, 9, 7, 0, 0)},
+        ]
+        scope = report.Scope("test", [], [], "test scope")
+        tex = report.build_latex(
+            "2026-09", scope, metrics, change, lines, scheduled,
+            "01/10/2026 à 08:00", tmp_path, alerts=alerts,
+        )
+        assert "Autres lignes concernées" in tex
+        assert r"9\&1 (1)" in tex
+        assert r"Travaux \&\_\%" in tex
+        assert "9&1 (1)" not in tex
+        assert "Travaux &_%" not in tex
+
+
 class TestCompilePdf:
     def test_sans_latex_lance_runtime_error(self, monkeypatch):
         import shutil

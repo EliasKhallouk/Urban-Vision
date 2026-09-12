@@ -866,7 +866,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
             if priority_routes is not None and ligne != "Réseau" and ligne not in priority_routes
         ]
         if other_lines:
-            counts = ", ".join(f"{ligne} ({len(alerts_by_line[ligne])})" for ligne in other_lines)
+            counts = ", ".join(f"{latex(ligne)} ({len(alerts_by_line[ligne])})" for ligne in other_lines)
             line_items.append(rf"\item \textbf{{Autres lignes concernées}} (détail non affiché) : {counts}")
         alerts_section = (
             r"\newpage"
