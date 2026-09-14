@@ -1,85 +1,70 @@
+<div align="center">
+
 # Urban Vision
 
-Observatoire indépendant de la fiabilité du réseau de transport TBM (Bordeaux Métropole).
+**Observatoire indépendant de la fiabilité du réseau de transport TBM — Bordeaux Métropole**
 
-GTFS statique (horaires théoriques) :
-https://bdx.mecatran.com/utw/ws/gtfsfeed/static/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt
+</div>
 
-GTFS-RT TripUpdates (retards/annulations) :
-https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt
+Urban Vision est un projet de **données ouvertes au service de la mobilité** :
+il mesure, en continu et de façon indépendante, la fiabilité effective du réseau
+de transports en commun de Bordeaux Métropole (tram, bus, ferry), puis rend ces
+informations visibles et accessibles.
 
-GTFS-RT VehiclePositions (position des véhicules) :
-https://bdx.mecatran.com/utw/ws/gtfsfeed/vehicles/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt
+Le projet s'appuie sur les **flux temps réel publiés par TBM** (retards,
+avances, annulations, alertes travaux) pour construire un suivi objectif de la
+ponctualité, au niveau du réseau, de chaque ligne et de chaque commune, mois
+après mois.
 
-#### POUR CE CONNECTER
-elias@hp-info-01:~/PROJECT/Urban-Vision$ ssh -i ~/.ssh/oracle-ek-hub.key ubuntu@88.96.51.44
+## À quoi ça sert ?
 
-#### POUR CE METTRE DANS L'ENVIRONNEMENT
-ubuntu@ek-hub-vnic:~$ cd Urban-Vision/
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ source .venv/bin/activate
+- **Pour les collectivités** (mairies de la Métropole, Bordeaux Métropole) : un
+  rapport mensuel par commune avec un indicateur unique de fiabilité, pour
+  objectiver l'état du service sur leur territoire et suivre son évolution
+  dans le temps — indépendamment des chiffres communiqués par l'exploitant.
+- **Pour les acteurs de la mobilité** (associations d'usagers, élus,
+  journalistes) : une donnée continue et publique là où n'existent
+  aujourd'hui que des bilans annuels ou des chiffres ponctuels — de quoi
+  appuyer un argumentaire avec des faits vérifiables.
+- **Pour la transparence** : une mesure indépendante de l'exploitant,
+  méthode documentée et reproductible, consultable librement par quiconque
+  souhaite explorer les données par lui-même.
 
-#### CRÉER LA BDD
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ python3 src/scripts/db.py
+## Pourquoi une mesure indépendante ?
 
-#### POUR LANCER LE SCRIPTE DE COLLECT DE DONNÉES
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo nano /etc/systemd/system/urban-vision-collect.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl daemon-reload
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl enable urban-vision-collect.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl start urban-vision-collect.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl status urban-vision-collect.service
+Le réseau TBM est exploité par Keolis, dans le cadre d'une délégation de
+service public confiée par Bordeaux Métropole. Les indicateurs de
+performance aujourd'hui disponibles proviennent essentiellement de bilans
+annuels produits par l'exploitant lui-même. Urban Vision propose une mesure
+continue et indépendante, construite directement à partir des flux temps
+réel publics — sans dépendre de ce que l'exploitant choisit de publier, ni
+quand.
 
-#### POUR LANCER LE SCRIPTE DE COLLECT D'ALERTES
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo nano /etc/systemd/system/urban-vision-collect-alerts.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl daemon-reload
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl enable urban-vision-collect-alerts.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl start urban-vision-collect-alerts.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl status urban-vision-collect-alerts.service
+## Fonctionnalités principales
 
-#### POUR AFFICHER LE STATUS DES SERVICES
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl status urban-vision-collect.service urban-vision-collect-alerts.service urban-vision-dashboard.service
+- **Tableau de bord web public** : vue territoriale par commune, vue réseau,
+  comparaison des modes de transport (tram / bus / ferry), analyse par ligne,
+  perturbations en cours, suivi de la collecte.
+  → <https://urban-vision.duckdns.org>
+- **Rapports mensuels PDF**, un pour le réseau, un pour chacune des
+  28 communes de Bordeaux Métropole.
+- **Indicateur clair** : un score de fiabilité par ligne, conçu pour être
+  lisible par tous (pas seulement par les techniciens).
+- **Données ouvertes** : collectées à partir des flux publics GTFS-RT de TBM,
+  sans aucune donnée nominative.
 
-#### POUR AFFICHER LES LOG DE LA COLLECT
-ubuntu@ek-hub-vnic:~/Urban-Vision$ tail -f data/collect.log
+## Pour aller plus loin
 
-#### LANCER LE DASHBOARD
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl daemon-reload
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl enable urban-vision-dashboard.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl start urban-vision-dashboard.service
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ sudo systemctl status urban-vision-dashboard.service
+- 📚 **Documentation technique** (architecture, installation, production,
+  maintenance) : [`docs/DOCUMENTATION_TECHNIQUE.md`](docs/DOCUMENTATION_TECHNIQUE.md)
+- 🔧 **Prise en main pour développeurs** : une fois sur la machine, `docs/DOCUMENTATION_TECHNIQUE.md`
+  (§ 5 Installation et § 13 Référence des scripts) donne toutes les commandes.
+- 🧪 **Tests** : suite `pytest` complète (170 tests), isolée de toute donnée réelle.
 
-//avant :(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ .venv/bin/streamlit run dashboard/app.py
+## Le projet
 
-#### GÉNERER LES RAPPORTS
-Trois scripts dans `reports/` :
-- `generate_single_report.py` : un rapport à la fois (réseau entier **ou** une commune).
-- `generate_all_reports.py` : tout en une fois (réseau + toutes les communes), un dossier par rapport, avec script de compilation.
-- `generate_monthly_report.py` : le moteur interne (pas besoin de l'appeler directement).
-
-##### Rapport unique — réseau
-.venv/bin/python reports/generate_single_report.py --month 2026-08 --network --compile
-
-##### Rapport unique — commune
-.venv/bin/python reports/generate_single_report.py --month 2026-08 --commune "Mérignac" --compile
-
-##### Tous les rapports (réseau + toutes les communes), avec compilation :
-.venv/bin/python reports/generate_all_reports.py --month 2026-08 --compile
-# (--compile génère les PDF automatiquement ; compile_all.sh reste dispo pour relancer)
-
-#### POUR LANCER LES TESTS
-Les tests vivent dans `tests/` et s'exécutent avec pytest sur des bases SQLite
-temporaires (aucune donnée réelle n'est touchée, pas de réseau).
-
-(.venv) ubuntu@ek-hub-vnic:~/Urban-Vision$ .venv/bin/python -m pytest
-# sur la machine de dev : .venv/bin/python -m pytest -q  # 167 tests
-
-#### SÉCURITÉ & EXPLOITATION PROD (durcissement appliqué le 12/09/2026)
-
-> Les fichiers ci-dessous vivent sur la VM (`/etc/...`) et ne sont **pas** dans git. Ce README est leur trace.
-
-- **Accès SSH** : clé uniquement, mot de passe système désactivé. Brute-force bannie 1 h par `fail2ban` (5 échecs / 10 min).
-- **Dashboard** : accessible **uniquement en HTTPS** via nginx (`https://urban-vision.duckdns.org`), qui reverse vers `127.0.0.1:8501`. Le port `8501` est fermé dans `/etc/iptables/rules.v4` — ne jamais le rouvrir.
-- **Firewall** : iptables persistés (`netfilter-persistent`) ; seuls `22/80/443` sont ouverts. `rpcbind` (port 111) désactivé.
-- **Sudo `ubuntu`** : **`NOPASSWD:ALL`** (comportement OCI d'origine, restauré le 12/09/2026). Le compte n'a **pas de mot de passe** (verrouillé, jamais créé par l'image OCI) — le sudo ne demandera donc jamais de mot de passe. C'est le réglage de confort choisi ; si tu veux resserrer un jour, la règle vit dans `/etc/sudoers.d/90-cloud-init-users` et `/etc/sudoers`.
-- **Root / dépannage** : en cas de blocage réseau ou système, la **console OCI** de l'instance (portail → Compute → Instances → `ek-hub` → **Console connection**) donne un accès série hors-bande.
-- **Services systemd** : les 3 unités (`/etc/systemd/system/urban-vision-*.service`) tournent en user `ubuntu` avec `NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`, `RestrictAddressFamilies`.
-- **Secrets** : `.env` gitignoré (permissions 600), absent de prod. Token DuckDNS inutilisé par le code → supprimé de la machine de dev, à régénérer sur duckdns.org si besoin.
+- **Contexte** : renseigner l'évolution de la fiabilité du réseau de
+  Bordeaux Métropole, mois après mois, avec une mesure stable et comparable.
+- **Auteur** : Elias Khallouk.
+- **Licence** : projet personnel, disponible publiquement sur
+  <https://github.com/EliasKhallouk/Urban-Vision>.

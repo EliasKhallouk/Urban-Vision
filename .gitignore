@@ -9,3 +9,4 @@ data/collect.log
 .env
 opencode.json
 .vscode/
+.pytest_cache/

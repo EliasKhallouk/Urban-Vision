@@ -1053,7 +1053,7 @@ def main() -> int:
     parser.add_argument("--communes", help="Communes séparées par des virgules : le rapport est alors filtré sur leurs arrêts.")
     parser.add_argument("--profile", help="Identifiant d'un destinataire dans le fichier de profils.")
     parser.add_argument("--recipients-file", default=PROJECT_ROOT / "reports" / "recipients.json", help="Fichier JSON de profils territoriaux.")
-    parser.add_argument("--compile", action="store_true", help="Compile aussi le .tex en PDF avec pdflatex.")
+    parser.add_argument("--compile", action="store_true", help="Compile aussi le .tex en PDF avec xelatex/lualatex.")
     args = parser.parse_args()
     if not args.db_path.exists():
         parser.error(f"Base introuvable : {args.db_path}")

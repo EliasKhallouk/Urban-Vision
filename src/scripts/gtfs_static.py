@@ -13,7 +13,7 @@ import csv
 from pathlib import Path
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GTFS_STATIC_URL = (
     "https://bdx.mecatran.com/utw/ws/gtfsfeed/static/bordeaux"
     "?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt"

@@ -1,11 +1,17 @@
 """Tests de analyze.py : stabilisation (buffer 20 min) et métriques par ligne."""
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 
 import analyze
 import gtfs_static
+
+
+def test_db_path_pointe_sur_data_a_la_racine():
+    expected = Path(__file__).resolve().parents[1] / "data" / "urban_vision.db"
+    assert analyze.DB_PATH == expected
 
 
 def _insert_observation(conn, trip_id, last_seen_at, delay, rel="SCHEDULED",

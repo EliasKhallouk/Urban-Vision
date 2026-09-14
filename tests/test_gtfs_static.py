@@ -2,12 +2,19 @@
 
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 
 import gtfs_static
 
 SQUARE = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]]
+
+
+class TestDbPath:
+    def test_db_path_pointe_sur_data_a_la_racine(self):
+        expected = Path(__file__).resolve().parents[1] / "data" / "urban_vision.db"
+        assert Path(gtfs_static.DB_PATH) == expected
 
 ROUTES_CSV = (
     "route_id,route_short_name,route_long_name,route_type\n"
