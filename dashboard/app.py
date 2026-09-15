@@ -36,9 +36,12 @@ from highcharts import (
     scatter_chart,
     network_daily_chart,
     network_hourly_chart,
+    commune_ranking_chart,
     mode_comparison_chart,
     mode_daily_chart,
     mode_hourly_chart,
+    period_punctuality_chart,
+    period_mode_chart,
     timeline_chart,
     hourly_risk_chart,
     delay_distribution_chart,
@@ -150,6 +153,9 @@ DIST_LABELS = [
     "< −10 min", "−10 à −5", "−5 à −2", "−2 à −1", "−1 à 0",
     "0 à +1", "+1 à +2", "+2 à +5", "+5 à +10", "+10 à +20", "> +20 min",
 ]
+
+# Créneaux de fiabilité par période : combinaison jour de semaine × tranche horaire.
+PERIOD_ORDER = ["Matin", "Journée", "Pointe du soir", "Soirée & nuit", "Week-end"]
 
 # Présélections du time picker, en JOURS de service (les agrégats sont journaliers).
 PRESET_RANGES = [
@@ -331,6 +337,30 @@ def format_date(ts: int | None) -> str:
 
 def _day_midnight(d: datetime.date) -> datetime:
     return datetime.combine(d, dtime(0, 0))
+
+
+def _period_labels(date_service: pd.Series, heure: pd.Series) -> list[str]:
+    """Créneau (jour de semaine × tranche horaire) de chaque agrégat horaire.
+
+    Lundi–vendredi : Matin (06–10), Journée (10–16), Pointe du soir (16–20),
+    Soirée & nuit (20–06). Samedi et dimanche : un seul créneau Week-end.
+    """
+    dow = pd.to_datetime(date_service).dt.dayofweek
+    labels = []
+    for d, h in zip(dow, heure.astype(int)):
+        if d >= 5:
+            labels.append("Week-end")
+        elif h < 6:
+            labels.append("Soirée & nuit")
+        elif h < 10:
+            labels.append("Matin")
+        elif h < 16:
+            labels.append("Journée")
+        elif h < 20:
+            labels.append("Pointe du soir")
+        else:
+            labels.append("Soirée & nuit")
+    return labels
 
 
 def time_range_picker(cutoff_ts: int) -> tuple[int | None, int | None, str]:
@@ -725,6 +755,85 @@ def load_hourly(_conn, cutoff_ts: int, since_ts: int | None, route_id: str | Non
     return h[["heure", "observations", "retard_moyen_s", "pct_retard_5min"]]
 
 
+def _sort_periods(df: pd.DataFrame) -> pd.DataFrame:
+    """Reclasse par l'ordre canonique PERIOD_ORDER, sans ajouter de colonne."""
+    order = {p: i for i, p in enumerate(PERIOD_ORDER)}
+    return df.assign(_ord=df["période"].map(order).fillna(len(PERIOD_ORDER))) \
+             .sort_values("_ord", kind="stable").drop(columns="_ord")
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_period_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                      commune: str | None = None) -> pd.DataFrame:
+    """Fiabilité par créneau (Matin/Journée/Pointe du soir/Soirée & nuit/Week-end)."""
+    core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    if core.empty:
+        return pd.DataFrame(columns=["période", "observations", "retard_moyen_s",
+                                     "pct_a_l_heure", "pct_retard_5min"])
+    core = core.copy()
+    core["période"] = _period_labels(core["date_service"], core["heure"])
+    g = (core.groupby("période", sort=False)
+         .agg(observations=("obs", "sum"), sum_delay=("sum_delay", "sum"),
+              cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+         .reset_index())
+    g["retard_moyen_s"] = g["sum_delay"] / g["observations"].replace(0, np.nan)
+    g["pct_a_l_heure"] = g["cnt_le300"] / g["observations"].replace(0, np.nan) * 100
+    g["pct_retard_5min"] = g["cnt_gt300"] / g["observations"].replace(0, np.nan) * 100
+    return _sort_periods(g).reset_index(drop=True)[
+        ["période", "observations", "retard_moyen_s", "pct_a_l_heure", "pct_retard_5min"]]
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_period_mode(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                     commune: str | None = None) -> pd.DataFrame:
+    """Retards > 5 min par créneau et par mode, depuis les agrégats horaires."""
+    core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    if core.empty:
+        return pd.DataFrame(columns=["période", "route_type", "pct_retard_5min", "mode", "mode_color"])
+    core = core.copy()
+    core["période"] = _period_labels(core["date_service"], core["heure"])
+    m = (core.groupby(["période", "route_type"], sort=False)
+         .agg(observations=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum")).reset_index())
+    m = m[m["observations"] > 0].copy()
+    m["pct_retard_5min"] = m["cnt_gt300"] / m["observations"] * 100
+    m = _sort_periods(m)[["période", "route_type", "pct_retard_5min"]]
+    return _attach_mode(m)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_period_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                      periode: str | None = None, commune: str | None = None) -> pd.DataFrame:
+    """Classement des lignes pour un créneau, depuis les agrégats horaires."""
+    empty = pd.DataFrame(columns=["ligne", "mode", "observations", "pct_a_l_heure",
+                                  "pct_retard_5min", "retard_moyen_s", "mode_color"])
+    core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    if core.empty:
+        return empty
+    core = core.copy()
+    core["période"] = _period_labels(core["date_service"], core["heure"])
+    if periode is not None:
+        core = core[core["période"] == periode]
+    lines = (core.groupby(["route_id", "route_type"], sort=False)
+             .agg(observations=("obs", "sum"), sum_delay=("sum_delay", "sum"),
+                  cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+             .reset_index())
+    lines = lines[lines["observations"] >= MIN_OBSERVATIONS]
+    if lines.empty:
+        return empty
+    lines["retard_moyen_s"] = lines["sum_delay"] / lines["observations"].replace(0, np.nan)
+    lines["pct_a_l_heure"] = lines["cnt_le300"] / lines["observations"].replace(0, np.nan) * 100
+    lines["pct_retard_5min"] = lines["cnt_gt300"] / lines["observations"].replace(0, np.nan) * 100
+    rows = _conn.execute(
+        "SELECT route_id, COALESCE(route_short_name, route_id) FROM routes"
+    ).fetchall()
+    ligne_map = {rid: nom for rid, nom in rows}
+    lines["ligne"] = lines["route_id"].map(ligne_map).fillna(lines["route_id"])
+    out = _attach_mode(lines)
+    return out.sort_values(["pct_a_l_heure", "observations"], ascending=[True, False])[
+        ["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min",
+         "retard_moyen_s", "mode_color"]]
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_distribution(_conn, cutoff_ts: int, since_ts: int | None, route_id: str | None = None,
                       end_ts: int | None = None, commune: str | None = None) -> pd.DataFrame:
@@ -874,6 +983,56 @@ def load_communes(_conn) -> list[str]:
         "SELECT DISTINCT commune_name FROM stop_municipalities ORDER BY commune_name"
     ).fetchall()
     return [r[0] for r in rows]
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_open_dataset(_conn, name: str, cutoff_ts: int, since_ts: int | None,
+                      end_ts: int | None = None) -> pd.DataFrame:
+    """Dataset open data (agrégats) pour la période, via src/scripts/export_open_data."""
+    src_dir = Path(__file__).resolve().parents[1] / "src" / "scripts"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    import export_open_data as _open_data
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    return pd.DataFrame(_open_data.dataset_rows(_conn, name, since=since_day, end=end_day))
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
+    """Fiabilité par commune, agrégée depuis agg_daily_stop (jamais la table brute)."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    rows = _conn.execute(
+        """
+        SELECT sm.commune_name AS commune,
+               SUM(d.obs) AS obs, SUM(d.sum_delay) AS sum_delay,
+               SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300,
+               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible,
+               COUNT(DISTINCT d.route_id) AS n_lignes
+        FROM agg_daily_stop d
+        JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
+        WHERE d.date_service >= ? AND d.date_service < ?
+        GROUP BY sm.commune_name
+        """, (since_day, end_day),
+    ).fetchall()
+    empty = pd.DataFrame(columns=[
+        "commune", "observations", "retard_moyen_s", "pct_a_l_heure",
+        "pct_retard_5min", "pct_arrets_sautes", "score_fiabilite", "n_lignes",
+    ])
+    if not rows:
+        return empty
+    df = pd.DataFrame(rows, columns=[
+        "commune", "obs", "sum_delay", "cnt_le300", "cnt_gt300", "skipped", "eligible", "n_lignes",
+    ])
+    df["observations"] = df["obs"]
+    df["retard_moyen_s"] = df["sum_delay"] / df["obs"].replace(0, np.nan)
+    df["pct_a_l_heure"] = df["cnt_le300"] / df["obs"].replace(0, np.nan) * 100
+    df["pct_retard_5min"] = df["cnt_gt300"] / df["obs"].replace(0, np.nan) * 100
+    df["pct_arrets_sautes"] = np.where(df["eligible"] > 0, df["skipped"] / df["eligible"] * 100, 0)
+    df["score_fiabilite"] = (df["pct_a_l_heure"] - df["pct_arrets_sautes"] * 2).clip(0, 100)
+    return df[
+        ["commune", "observations", "retard_moyen_s", "pct_a_l_heure",
+         "pct_retard_5min", "pct_arrets_sautes", "score_fiabilite", "n_lignes"]
+    ].sort_values("score_fiabilite", ascending=True).reset_index(drop=True)
 
 
 def _score_rgb(value: float) -> tuple[int, int, int]:
@@ -1146,7 +1305,8 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
 
 
 NAV_ITEMS = [
-    "Vue territoriale", "Vue réseau", "Modes de transport", "Analyse d'une ligne",
+    "Vue territoriale", "Vue réseau", "Modes de transport", "Fiabilité par période",
+    "Analyse d'une ligne",
     "Perturbations", "Collecte des données", "Méthode & données",
 ]
 
@@ -1295,6 +1455,39 @@ def main() -> None:
                 st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
             render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
             _territorial_map(territorial, commune)
+            if commune is None:
+                st.markdown("#### Comparaison des communes")
+                communes = load_commune_stats(conn, cutoff, since_ts, end_ts)
+                if not communes.empty:
+                    n = len(communes)
+                    worst_c, best_c = communes.iloc[0], communes.iloc[-1]
+                    st.markdown(
+                        f'<div class="insight">Sur {n} communes, la fiabilité s’étend de '
+                        f'<b>{html.escape(str(best_c["commune"]))}</b> ({best_c["score_fiabilite"]:.1f}/100) '
+                        f'à <b>{html.escape(str(worst_c["commune"]))}</b> ({worst_c["score_fiabilite"]:.1f}/100). '
+                        f'Le score combine ponctualité ≤ 5 min et arrêts sautés, comme le classement des lignes.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    left, right = st.columns([1.0, 1.0], gap="large")
+                    with left:
+                        st.markdown("#### Classement par score")
+                        render_tier_legend("Score de fiabilité", "à surveiller", "bon")
+                        hc_render(commune_ranking_chart(communes), height=460)
+                    with right:
+                        st.markdown("#### Détail par commune")
+                        table = communes[["commune", "score_fiabilite", "pct_a_l_heure", "pct_retard_5min",
+                                          "retard_moyen_s", "pct_arrets_sautes", "n_lignes", "observations"]].copy()
+                        table.columns = ["Commune", "Score / 100", "Ponctualité ≤ 5 min", "Retards > 5 min",
+                                         "Retard moyen", "Arrêts sautés", "Lignes", "Passages"]
+                        styled = (table.style
+                                  .map(_score_tier_style, subset=["Score / 100"])
+                                  .format({"Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %",
+                                           "Retards > 5 min": "{:.1f} %",
+                                           "Retard moyen": lambda x: format_seconds(x),
+                                           "Arrêts sautés": "{:.2f} %", "Lignes": "{:.0f}", "Passages": "{:,}"}))
+                        st.dataframe(styled, use_container_width=True, hide_index=True, height=460)
+                else:
+                    st.info("Aucune donnée par commune pour cette période.")
             if not territorial.empty:
                 st.markdown("#### Arrêts du périmètre")
                 tdisp = territorial[["stop_name", "direction", "ligne", "lignes", "score_fiabilite", "pct_retard_5min", "observations"]].copy()
@@ -1424,6 +1617,54 @@ def main() -> None:
                 "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
                 "En avance > 1 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}", "Arrêts sautés": "{:.2f} %",
             }), use_container_width=True, hide_index=True, height=220)
+
+        if page == "Fiabilité par période":
+            st.markdown("### Fiabilité selon la période de la journée")
+            st.markdown('<div class="section-note">Combinaison jour de semaine × tranche horaire, depuis les agrégats horaires : Matin (06–10), Journée (10–16), Pointe du soir (16–20), Soirée & nuit (20–06) du lundi au vendredi, et un créneau Week-end (samedi + dimanche). La vue mesure ponctualité, retard moyen et retards > 5 min ; les arrêts sautés n’y sont pas décomptés.</div>', unsafe_allow_html=True)
+            period = load_period_stats(conn, cutoff, since_ts, end_ts, commune=commune)
+            if period.empty:
+                st.info("Aucune donnée horaire disponible sur ce périmètre pour la période.")
+                return
+            st.markdown("#### Vue d'ensemble")
+            render_tier_legend("Ponctualité ≤ 5 min", "à surveiller", "bon")
+            left, right = st.columns([1.05, 0.95], gap="large")
+            with left:
+                hc_render(period_punctuality_chart(period), height=300)
+            with right:
+                st.markdown("#### Retards > 5 min par mode et créneau")
+                pm = load_period_mode(conn, cutoff, since_ts, end_ts, commune=commune)
+                if pm.empty:
+                    st.info("Aucune donnée par mode sur ce périmètre.")
+                else:
+                    hc_render(period_mode_chart(pm), height=300)
+            st.markdown("#### Métriques par créneau")
+            table = period[["période", "observations", "pct_a_l_heure", "pct_retard_5min", "retard_moyen_s"]].copy()
+            table.columns = ["Créneau", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "Retard moyen"]
+            styled = (table.style
+                      .map(_score_tier_style, subset=["Ponctualité ≤ 5 min"])
+                      .format({"Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %",
+                               "Retards > 5 min": "{:.1f} %",
+                               "Retard moyen": lambda x: format_seconds(x)}))
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=200)
+            st.markdown("#### Détail des lignes par créneau")
+            selected_period = st.selectbox(
+                "Créneau", period["période"].tolist(), key="period_selector",
+            )
+            lines = load_period_lines(conn, cutoff, since_ts, end_ts,
+                                      periode=selected_period, commune=commune)
+            if lines.empty:
+                st.info(f"Aucune ligne n'atteint le seuil de {MIN_OBSERVATIONS} passages sur le créneau {selected_period}.")
+            else:
+                worst = lines.iloc[0]
+                st.markdown(f'<div class="insight">Sur le créneau <b>{html.escape(selected_period)}</b>, la ligne la moins ponctuelle de ce périmètre est <b>{html.escape(str(worst["ligne"]))}</b> : {worst.pct_a_l_heure:.1f} % de passages à l’heure, {worst.pct_retard_5min:.1f} % au-delà de 5 min.</div>', unsafe_allow_html=True)
+                display = lines[["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min", "retard_moyen_s"]].copy()
+                display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "Retard moyen"]
+                styled = (display.style
+                          .map(_score_tier_style, subset=["Ponctualité ≤ 5 min"])
+                          .format({"Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %",
+                                   "Retards > 5 min": "{:.1f} %",
+                                   "Retard moyen": lambda x: format_seconds(x)}))
+                st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
         if page == "Analyse d'une ligne":
             options = visible_ranking if not visible_ranking.empty else ranking
@@ -1588,6 +1829,30 @@ def main() -> None:
                 f"strict : le véhicule ne circule pas du tout.</div>",
                 unsafe_allow_html=True,
             )
+            st.markdown("#### Données ouvertes (CSV)")
+            st.markdown('<div class="section-note">Les agrégats (pas les observations brutes) sont exportés en CSV — format stable, sans donnée nominative. Le collecteur régénère ces fichiers sur la période (`src/scripts/export_open_data.py`) ; les boutons ci-dessous produisent le même export pour la période sélectionnée.</div>', unsafe_allow_html=True)
+            open_specs = [
+                ("lignes_journalier", "lignes-journalier.csv", "Journalier par ligne",
+                 "Ponctualité, retards et arrêts sautés par ligne et par jour (avec l'histogramme des écarts)."),
+                ("arrets_journalier", "arrets-journalier.csv", "Journalier par arrêt",
+                 "Détail par arrêt, ligne et jour, avec commune, direction et coordonnées."),
+                ("horaire", "horaire.csv", "Horaire par ligne",
+                 "Retards par tranche horaire et par ligne."),
+                ("communes_journalier", "communes-journalier.csv", "Journalier par commune",
+                 "Agrégats par commune et par jour (code Insee, nombre de lignes)."),
+            ]
+            open_cols = st.columns(2)
+            for i, (name, fname, title, desc) in enumerate(open_specs):
+                df = load_open_dataset(conn, name, cutoff, since_ts, end_ts)
+                with open_cols[i % 2]:
+                    st.markdown(f"**{title}**  \n{desc}  \n{len(df):,} lignes pour cette période".replace(",", " "))
+                    st.download_button(
+                        "Télécharger le CSV",
+                        data=df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=fname,
+                        mime="text/csv",
+                        key=f"open_{name}",
+                    )
             st.caption(f"Fenêtre analysée : {total:,} passages programmés stabilisés ; dernier point retenu le {format_date(cutoff)}.")
     finally:
         conn.close()

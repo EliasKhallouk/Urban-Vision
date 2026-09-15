@@ -198,8 +198,9 @@ Urban-Vision/
 │   │   ├── collect.py              # collecteur TripUpdates (60 s)
 │   │   ├── collect_alerts.py       # collecteur ServiceAlerts (120 s)
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
+│   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 15 fichiers, 170 tests pytest
+└── tests/                          # 16 fichiers, 183 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -317,7 +318,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 170 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 183 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -719,28 +720,45 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
 
-1. **Vue territoriale** (`app.py:1277`) — carte pydeck
+1. **Vue territoriale** (`app.py:1437`) — carte pydeck
    (`pdk.ScatterplotLayer`, fond « light ») des arrêts par commune, filtre
    « Territoire » en haut à droite, tableau des arrêts (retard médian, passages,
-   direction…).
-2. **Vue réseau** (`1311`) — KPI band (5 cartes) + classement des lignes
+   direction…). En périmètre « Réseau complet », un bloc **Comparaison des
+   communes** (loader `load_commune_stats`, agrégé depuis `agg_daily_stop`) :
+   classement par score (même formule que les lignes : ponctualité ≤ 5 min
+   pénalisée par les arrêts sautés), graphique `commune_ranking_chart` et
+   tableau détaillé (ponctualité, retards > 5 min, retard moyen, arrêts sautés,
+   lignes, passages).
+2. **Vue réseau** (`1504`) — KPI band (5 cartes) + classement des lignes
    (barres, top 15), carte de risque (retard médian × retards > 5 min, bulles
    par mode), série quotidienne « retards > 5 min », colonnes du risque horaire,
    distribution des retards (11 classes), tableaux détaillés.
-3. **Modes de transport** (`1380`) — comparaison d'indicateurs par mode
+3. **Modes de transport** (`1573`) — comparaison d'indicateurs par mode
    (ponctualité, > 5 min, en avance, arrêts sautés), profil horaire par mode,
    évolution quotidienne par mode.
-4. **Analyse d'une ligne** (`1428`) — sélecteur de ligne, timeline quotidienne,
+4. **Fiabilité par période** (`1621`) — fiabilité selon le créneau (jour de
+   semaine × tranche horaire) : Matin 06–10, Journée 10–16, Pointe du soir
+   16–20, Soirée & nuit 20–06 (lundi–vendredi) et Week-end (samedi + dimanche).
+   Charge `agg_hourly` (jamais la table brute) via les loaders
+   `load_period_stats` (métriques par créneau), `load_period_mode` (retards
+   > 5 min par mode × créneau) et `load_period_lines` (classement des lignes
+   d'un créneau, seuil `MIN_OBSERVATIONS`). Le classificateur
+   `_period_labels` déduit le jour de semaine de `date_service`. Les arrêts
+   sautés ne sont pas décomptés (absents de `agg_hourly`) — c'est mentionné
+   dans la note de la page.
+5. **Analyse d'une ligne** (`1669`) — sélecteur de ligne, timeline quotidienne,
    risque selon l'heure, profil des retards, tableau d'arrêts.
-5. **Perturbations** (`1474`) — alertes actives à l'instant courant +
+6. **Perturbations** (`1715`) — alertes actives à l'instant courant +
    historique (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-6. **Collecte des données** (`1536`) — totaux bruts (observations, trajets,
+7. **Collecte des données** (`1777`) — totaux bruts (observations, trajets,
    lignes, stabilisées), graphique « observations/min » sur 7 jours glissants
    (Highcharts Stock, zoom), répartition horaire.
-7. **Méthode & données** (`1572`) — définitions, seuils, sources, mention de la
-   stabilisation 20 min.
+8. **Méthode & données** (`1813`) — définitions, seuils, sources, mention de la
+   stabilisation 20 min, et bloc **Données ouvertes** : boutons de
+   téléchargement CSV de la période (loader `load_open_dataset`, qui passe par
+   `src/scripts/export_open_data.py` — voir §11.6).
 
 Sélecteur de période : menu popover « Grafana-style »
 (`time_range_picker`) avec presets relatifs (1/7/30/90 jours, « tout »),
@@ -756,8 +774,9 @@ Injection de HTML via `st.components.v1.html` : charge
 `highstock.js` (et `highcharts-more.js` pour les bulles) depuis le CDN,
 applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
 70 %). Fonctions : `ranking_chart`, `scatter_chart`, `network_daily_chart`,
-`network_hourly_chart`, `mode_comparison_chart`, `mode_daily_chart`,
-`mode_hourly_chart`, `timeline_chart`, `hourly_risk_chart`,
+`network_hourly_chart`, `commune_ranking_chart`, `mode_comparison_chart`,
+`mode_daily_chart`, `mode_hourly_chart`, `period_punctuality_chart`,
+`period_mode_chart`, `timeline_chart`, `hourly_risk_chart`,
 `delay_distribution_chart`, `collection_minutely_chart` (Stock), et
 `hourly_distribution_chart`. Les couleurs par palier sont calculées par
 `palette.hex(value, kind)` — cohérentes avec les rapports.
@@ -772,6 +791,38 @@ médian de la classe (ex. `+1 à +2` → 90 s → palier « retard ») ; seules 
 - Pydeck : fond de carte par défaut (fournisseur Carto/Mapbox via pydeck).
 - Logo local `assets/logo/urban-vision-logo-white.png` (data-URI base64).
 - **Aucun appel API ni `os.getenv`** dans `app.py`.
+
+### 11.6 Export open data (`src/scripts/export_open_data.py`)
+
+Lecture seule des tables d'agrégation (jamais la table brute) ; intervalles
+demi-ouverts `[since, end)` sur `date_service`. Ecrit dans `data/open_data/`
+des **CSV UTF-8 (BOM, séparateur virgule, en-tête stable)** plus un
+`METADATA.json` (date de génération, bornes, nombre de lignes).
+
+Quatre datasets :
+
+| Dataset | Fichier | Contenu |
+|---|---|---|
+| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), ponctualité ≤ 5 min, retards > 5 min, en avance, arrêts sautés, histogramme JSON |
+| `arrets_journalier` | `arrets-journalier.csv` | Par (date, ligne, arrêt) : + nom, commune, direction, coordonnées |
+| `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retard moyen, ponctualité, retards > 5 min |
+| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts sautés, nombre de lignes |
+
+Commandes :
+
+```bash
+.venv/bin/python src/scripts/export_open_data.py --print-datasets
+.venv/bin/python src/scripts/export_open_data.py --since 2026-09-10 --until 2026-09-14
+# options : --db <chemin> (défaut : DATA_ROOT/urban_vision.db), --out <dossier>
+```
+
+Connexion avec `PRAGMA query_only = ON` et une transaction `BEGIN...ROLLBACK`
+pour un instantané cohérent pendant que le collecteur écrit. La régénération
+périodique est confiée au collecteur (cron côté `ek-hub`, procédure §20) ; le
+dashboard fournit les mêmes exports à la demande via `load_open_dataset` pour
+la période sélectionnée. La médiane est calculée avec la même règle que le
+dashboard (`_median_seconds`), les tables optionnelles (`routes`, `stops`,
+`stop_municipalities`, `stop_direction`) sont détectées avant jointure.
 
 ---
 
@@ -882,6 +933,7 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/analyze.py` | Bilan quotidien → `daily_line_stats` | *aucun* |
 | `src/scripts/assign_stop_municipalities.py` | Rattache arrêts ↔ communes | `--db-path`, `--boundaries-file`, `--boundaries-url`, `--no-reverse-fallback`, `--unassigned-csv` |
 | `src/scripts/db.py` | Schéma + agrégats (auto-porteur) | *aucun* (l'import suffit) |
+| `src/scripts/export_open_data.py` | Export CSV open data (30 derniers jours) | `--db`, `--out`, `--since`, `--until`, `--print-datasets` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
 | `reports/generate_single_report.py` | Rapport unique | `--month` (obligatoire), `--commune` XOR `--network`, `--db-path`, `--output-dir`, `--compile` |
 | `reports/generate_all_reports.py` | Tous les rapports | `--month` (obligatoire), `--db-path`, `--output-dir`, `--compile`, `--communes …` |
@@ -1086,7 +1138,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 170 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 183 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1325,7 +1377,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - CLI complète des 5 scripts et du moteur.
 - Cache dashboard 60 s, buffer 20 min, views et loaders (noms de fonctions et
   lignes exacts fournis en annexe de la section 11).
-- Tests : 170, isolés (suite `pytest` complète : 170 passed), flux synthétiques
+- Tests : 183, isolés (suite `pytest` complète : 183 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Git : branche `main`, remote GitHub ; la production est synchronisée sur le
   commit `13cf796` (identique au dev).

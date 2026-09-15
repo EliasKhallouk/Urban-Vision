@@ -107,6 +107,61 @@ class TestLoadDistribution:
         assert len(dist) == 11  # toutes les classes, même vides
 
 
+def _seed_agg_hourly(conn):
+    conn.executemany(
+        """INSERT INTO agg_hourly
+           (date_service, route_id, heure, obs, sum_delay, cnt_le300, cnt_gt300)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            ("2026-09-01", "A", 8, 10, 2000, 9, 1),    # mardi 8h -> Matin
+            ("2026-09-01", "A", 13, 8, 1200, 8, 0),    # Journée
+            ("2026-09-01", "A", 18, 60, 30000, 30, 30),  # Pointe du soir
+            ("2026-09-01", "A", 22, 6, 3000, 3, 3),    # Soirée & nuit
+            ("2026-09-01", "A", 3, 2, 1000, 1, 1),     # nuit -> Soirée & nuit
+            ("2026-09-05", "A", 11, 20, 8000, 16, 4),  # samedi -> Week-end
+        ],
+    )
+    conn.commit()
+
+
+class TestLoadPeriodStats:
+    def _seed(self, conn):
+        _seed_routes(conn)
+        _seed_agg_hourly(conn)
+
+    def test_creneaux_combines_jour_et_heure(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        df = app_mod.load_period_stats(conn, cutoff, since, end)
+        assert df["période"].tolist() == app_mod.PERIOD_ORDER
+        by_period = {r["période"]: r for _, r in df.iterrows()}
+        assert by_period["Matin"]["observations"] == 10
+        assert round(by_period["Matin"]["pct_retard_5min"], 6) == 10.0
+        assert round(by_period["Journée"]["pct_a_l_heure"], 6) == 100.0
+        assert by_period["Pointe du soir"]["observations"] == 60
+        assert by_period["Soirée & nuit"]["observations"] == 8       # 22h + 3h
+        assert by_period["Week-end"]["observations"] == 20
+
+    def test_lignes_classees_par_creneau(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        lines = app_mod.load_period_lines(conn, cutoff, since, end_ts=end, periode="Pointe du soir")
+        assert list(lines["ligne"]) == ["1"]
+        assert round(lines.iloc[0]["pct_a_l_heure"], 6) == 50.0
+
+    def test_vide_sans_donnees(self, conn):
+        _seed_routes(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        assert app_mod.load_period_stats(conn, cutoff, since, end).empty
+        assert app_mod.load_period_mode(conn, cutoff, since, end).empty
+
+
 class TestLoadActiveAlerts:
     def test_filtre_les_alertes_actives_a_instant_donne(self, conn):
         _seed_routes(conn)
@@ -170,6 +225,52 @@ class TestLoadCommunes:
         )
         conn.commit()
         assert app_mod.load_communes(conn) == ["Ambarès", "Lormont"]
+
+
+class TestLoadCommuneStats:
+    def _seed(self, conn):
+        _seed_routes(conn)
+        initialize_tables(conn)
+        conn.executemany(
+            "INSERT INTO stop_municipalities (stop_id, insee_code, commune_name, "
+            "assignment_method, assigned_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("s1", "33200", "Lormont", "point-in-polygon", 1),
+                ("s2", "33063", "Ambarès", "point-in-polygon", 1),
+            ],
+        )
+        conn.executemany(
+            """INSERT INTO agg_daily_stop
+               (date_service, route_id, stop_id, obs, sum_delay, cnt_le300, cnt_gt300,
+                cnt_lt60, skipped, eligible, histogram)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                ("2026-09-11", "A", "s1", 100, 3000, 90, 10, 0, 0, 100, '{}'),
+                ("2026-09-11", "A", "s2", 100, 20000, 70, 30, 0, 10, 100, '{}'),
+            ],
+        )
+        conn.commit()
+
+    def test_classement_et_score_pondere_par_saute(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        df = app_mod.load_commune_stats(conn, cutoff, since, end)
+        assert list(df["commune"]) == ["Ambarès", "Lormont"]
+        assert [round(v, 6) for v in df["score_fiabilite"]] == [50.0, 90.0]
+        row = df[df["commune"] == "Ambarès"].iloc[0]
+        assert round(row["pct_arrets_sautes"], 6) == 10.0
+        assert round(row["retard_moyen_s"], 6) == 200.0
+        assert int(row["n_lignes"]) == 1
+
+    def test_vide_sans_donnees(self, conn):
+        _seed_routes(conn)
+        initialize_tables(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        assert app_mod.load_commune_stats(conn, cutoff, since, end).empty
 
 
 class TestLoadPerturbations:

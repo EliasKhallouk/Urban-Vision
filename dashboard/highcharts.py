@@ -108,6 +108,22 @@ def ranking_chart(df: pd.DataFrame) -> dict:
     }
 
 
+def commune_ranking_chart(df: pd.DataFrame) -> dict:
+    df = df.sort_values("score_fiabilite")
+    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score"),
+             "pct": round(r["pct_a_l_heure"], 1), "passages": int(r["observations"])}
+            for _, r in df.iterrows()]
+    return {
+        "chart": {"type": "bar", "height": 430},
+        "title": {"text": None},
+        "xAxis": {"categories": df["commune"].tolist(), "title": {"text": None}},
+        "yAxis": {"title": {"text": "Score de fiabilité / 100"}, "max": 100, "min": 0},
+        "series": [{"name": "Score", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:.1f}</b> / 100<br/>Ponctualité ≤ 5 min : {point.pct:.1f} %<br/>Passages : {point.passages:,}"}}],
+        "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
+    }
+
+
 def scatter_chart(df: pd.DataFrame) -> dict:
     """Carte de risque : retard médian (x) vs retards > 5 min (y), coloré par moyen de transport."""
     series_data: dict[str, dict] = {}
@@ -222,6 +238,39 @@ def mode_hourly_chart(df: pd.DataFrame) -> dict:
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": series,
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.1, "pointPadding": 0.05}},
+    }
+
+
+def period_punctuality_chart(df: pd.DataFrame) -> dict:
+    data = [{"y": round(r["pct_a_l_heure"], 1), "color": palette_hex(r["pct_a_l_heure"], "score"),
+             "passages": int(r["observations"]), "moy": float(r["retard_moyen_s"])}
+            for _, r in df.iterrows()]
+    return {
+        "chart": {"type": "column", "height": 300},
+        "title": {"text": None},
+        "xAxis": {"categories": df["période"].tolist(), "title": {"text": None}},
+        "yAxis": {"title": {"text": "Ponctualité ≤ 5 min (%)"}, "min": 0, "max": 100},
+        "series": [{"name": "Ponctualité", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,}<br/>Retard moyen : {point.moy:+.0f} s"}}],
+        "plotOptions": {"column": {"borderRadius": 4, "groupPadding": 0.05, "pointPadding": 0.08}},
+    }
+
+
+def period_mode_chart(df: pd.DataFrame) -> dict:
+    categories = list(dict.fromkeys(df["période"]))
+    series = []
+    for mode, sub in df.groupby("mode", sort=False):
+        pa = sub.set_index("période").reindex(categories)
+        data = [round(float(r["pct_retard_5min"]), 1) if pd.notna(r["pct_retard_5min"]) else 0
+                for _, r in pa.iterrows()]
+        series.append({"name": mode, "data": data, "color": pa["mode_color"].iloc[0]})
+    return {
+        "chart": {"type": "column", "height": 300},
+        "title": {"text": None},
+        "xAxis": {"categories": categories, "title": {"text": None}},
+        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
+        "series": series,
+        "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.06, "pointPadding": 0.05}},
     }
 
 
