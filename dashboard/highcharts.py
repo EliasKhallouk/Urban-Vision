@@ -71,19 +71,39 @@ LIGHT_THEME = {
 }
 
 
+def _accessibility_description(chart_config: dict) -> str:
+    ctype = (chart_config.get("chart") or {}).get("type", "")
+    base = {
+        "bar": "classement", "column": "comparaison en colonnes",
+        "line": "série temporelle", "area": "série temporelle",
+        "scatter": "nuage de points",
+    }.get(ctype, "graphique")
+    names = [s.get("name") for s in (chart_config.get("series") or []) if s.get("name")]
+    if not names:
+        return f"Graphique en {base}"
+    return f"Graphique en {base} : {', '.join(str(n) for n in names)}"
+
+
 def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
-    chart_id = "hc_" + str(abs(hash(json.dumps(chart_config, sort_keys=True, default=str))))[:10]
+    config = dict(chart_config)
+    acc = dict(config.get("accessibility") or {})
+    acc["enabled"] = True
+    acc.setdefault("description", _accessibility_description(config))
+    config["accessibility"] = acc
+    chart_id = "hc_" + str(abs(hash(json.dumps(config, sort_keys=True, default=str, ensure_ascii=False))))[:10]
     constructor = "stockChart" if use_stock else "chart"
-    more_js = '<script src="https://code.highcharts.com/highcharts-more.js"></script>' if not use_stock else ""
+    scripts = '<script src="https://code.highcharts.com/stock/highstock.js"></script>'
+    if not use_stock:
+        scripts += '\n<script src="https://code.highcharts.com/highcharts-more.js"></script>'
+        scripts += '\n<script src="https://code.highcharts.com/modules/accessibility.js"></script>'
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<script src="https://code.highcharts.com/stock/highstock.js"></script>
-{more_js}
+<html lang="fr"><head><meta charset="utf-8">
+{scripts}
 </head><body>
 <div id="{chart_id}" style="width:100%;height:{height}px;"></div>
 <script>
-Highcharts.setOptions({json.dumps(LIGHT_THEME)});
-Highcharts.{constructor}('{chart_id}', {json.dumps(chart_config)});
+Highcharts.setOptions({json.dumps(LIGHT_THEME, ensure_ascii=False)});
+Highcharts.{constructor}('{chart_id}', {json.dumps(config, ensure_ascii=False)});
 </script>
 </body></html>"""
 

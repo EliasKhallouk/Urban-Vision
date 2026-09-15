@@ -1378,6 +1378,12 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
                  map_style="light", height=420),
         use_container_width=True,
     )
+    st.caption(
+        f"Lecture non visuelle de la carte : {len(df)} arrêts affichés, "
+        f"score de fiabilité de {df['score_fiabilite'].min():.0f} à "
+        f"{df['score_fiabilite'].max():.0f}/100 "
+        "(vert = bon, orange = moyen, rouge/brun = à surveiller)."
+    )
 
 
 NAV_ITEMS = [

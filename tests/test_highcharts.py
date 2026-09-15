@@ -266,3 +266,20 @@ class TestHtml:
         html_b = hc._html({"x": 2}, height=100)
         assert html_a == html_a2
         assert html_a != html_b
+
+    def test_html_accessibilite_langue_module_et_description(self):
+        config = {"chart": {"type": "bar"}, "series": [{"name": "Ligne A"}, {"name": "Ligne B"}]}
+        html = hc._html(config, height=300)
+        assert 'lang="fr"' in html
+        assert "modules/accessibility.js" in html
+        assert '"enabled": true' in html
+        assert "Graphique en classement : Ligne A, Ligne B" in html
+
+    def test_html_accessibilite_stock_sans_module_separe(self):
+        html = hc._html({"chart": {"type": "line"}}, height=300, use_stock=True)
+        assert "modules/accessibility.js" not in html
+        assert "graphSeries" in html or '"enabled": true' in html
+
+    def test_html_description_sans_series_nommees(self):
+        html = hc._html({"chart": {"type": "line"}, "series": [{}]}, height=100)
+        assert "Graphique en série temporelle" in html
