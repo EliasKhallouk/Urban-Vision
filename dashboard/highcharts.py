@@ -274,6 +274,60 @@ def period_mode_chart(df: pd.DataFrame) -> dict:
     }
 
 
+def engagement_trend_chart(trend: pd.DataFrame, metric: str) -> dict:
+    """Série quotidienne d'une métrique + moyenne glissante sur 7 jours."""
+    df = trend.sort_values("date_service").reset_index(drop=True)
+    dates_ms = [int(pd.Timestamp(ts).timestamp() * 1000) for ts in df["date_service"]]
+    values = df[metric].astype(float)
+    raw = [[ms, round(float(v), 1)] for ms, v in zip(dates_ms, values)]
+    ma = [round(float(values.iloc[max(0, i - 6):i + 1].mean()), 1) for i in range(len(df))]
+    titles = {
+        "pct_a_l_heure": "Ponctualité ≤ 5 min (%)",
+        "pct_retard_5min": "Retards > 5 min (%)",
+        "pct_arrets_sautes": "Arrêts sautés (%)",
+        "retard_moyen_s": "Retard moyen (s)",
+    }
+    y_axis = {"title": {"text": titles[metric]}, "min": 0}
+    if metric != "retard_moyen_s":
+        y_axis["max"] = 100
+    return {
+        "chart": {"type": "line", "height": 320},
+        "title": {"text": None},
+        "xAxis": {"type": "datetime", "title": {"text": None}},
+        "yAxis": y_axis,
+        "series": [
+            {"name": "Quotidien", "data": raw, "color": BLACK_FOREST, "lineWidth": 2,
+             "marker": {"enabled": True, "radius": 3},
+             "zIndex": 2},
+            {"name": "Moyenne 7 jours", "data": [[ms, v] for ms, v in zip(dates_ms, ma)],
+             "color": OLIVE_LEAF, "dashStyle": "ShortDash", "lineWidth": 2,
+             "marker": {"enabled": False}},
+        ],
+        "tooltip": {"shared": True},
+    }
+
+
+def engagement_progression_chart(prog: pd.DataFrame) -> dict:
+    """Évolution du score de fiabilité par ligne (moitié récente − moitié précédente)."""
+    df = prog.sort_values("delta_score")
+    data = [{"y": round(r["delta_score"], 1),
+             "color": OLIVE_LEAF if r["delta_score"] >= 2
+                      else COPPERWOOD if r["delta_score"] <= -2 else SUNLIT_CLAY,
+             "score": round(r["score_fiabilite"], 1),
+             "prec": round(r["score_fiabilite_prev"], 1)}
+            for _, r in df.iterrows()]
+    return {
+        "chart": {"type": "bar", "height": 300},
+        "title": {"text": None},
+        "xAxis": {"categories": df["ligne"].tolist(), "title": {"text": None}},
+        "yAxis": {"title": {"text": "Évolution du score (/100)"}},
+        "series": [{"name": "Δ score", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:+.1f} pts</b><br/>"
+                                               "Récent : {point.score} · Précédent : {point.prec}"}}],
+        "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
+    }
+
+
 def timeline_chart(df: pd.DataFrame) -> dict:
     data = [[int(pd.Timestamp(ts).timestamp() * 1000), round(r, 1)] for ts, r in zip(df["date_service"], df["pct_retard_5min"])]
     return {

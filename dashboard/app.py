@@ -42,6 +42,8 @@ from highcharts import (
     mode_hourly_chart,
     period_punctuality_chart,
     period_mode_chart,
+    engagement_trend_chart,
+    engagement_progression_chart,
     timeline_chart,
     hourly_risk_chart,
     delay_distribution_chart,
@@ -92,6 +94,15 @@ def _score_tier_style(value: float) -> str:
     color = palette_hex(value, "score")
     foreground = CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST
     return f"background-color: {color}; color: {foreground};"
+
+
+def _delta_style(value: float, threshold: float = 2.0) -> str:
+    """Style d'une cellule d'évolution (Δ) : positif → Olive Leaf, négatif → Copperwood."""
+    if value >= threshold:
+        return f"color: {OLIVE_LEAF}; font-weight: 600;"
+    if value <= -threshold:
+        return f"color: {COPPERWOOD}; font-weight: 600;"
+    return f"color: {SUNLIT_CLAY};"
 
 
 def render_tier_legend(title: str = "", left_label: str = "à surveiller",
@@ -724,6 +735,71 @@ def load_network_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_engagement_trend(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                          commune: str | None = None) -> pd.DataFrame:
+    """Série quotidienne du réseau (ou commune) pour suivre l'évolution de la fiabilité.
+
+    Une ligne par jour de service : ponctualité ≤ 5 min, retards > 5 min,
+    arrêts sautés, avance, retard moyen, depuis les agrégats précalculés.
+    """
+    core = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    if core.empty:
+        return core[["date_service"]].head(0)
+    g = (core.groupby("date_service", sort=False)
+         .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"),
+              cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"),
+              cnt_lt60=("cnt_lt60", "sum"), skipped=("skipped", "sum"),
+              eligible=("eligible", "sum"))
+         .reset_index())
+    g["observations"] = g["obs"]
+    g["pct_a_l_heure"] = g["cnt_le300"] / g["obs"].replace(0, np.nan) * 100
+    g["pct_retard_5min"] = g["cnt_gt300"] / g["obs"].replace(0, np.nan) * 100
+    g["pct_avance_1min"] = g["cnt_lt60"] / g["obs"].replace(0, np.nan) * 100
+    g["pct_arrets_sautes"] = np.where(g["eligible"] > 0, g["skipped"] / g["eligible"] * 100, 0)
+    g["retard_moyen_s"] = g["sum_delay"] / g["obs"].replace(0, np.nan)
+    return g[["date_service", "observations", "pct_a_l_heure", "pct_retard_5min",
+              "pct_avance_1min", "pct_arrets_sautes", "retard_moyen_s"]]
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                                commune: str | None = None) -> pd.DataFrame:
+    """Tendance ligne par ligne : la période est coupée en deux moitiés égales
+    (par nombre de jours de service) et la plus récente est comparée à la
+    précédente. Seules les lignes atteignant MIN_OBSERVATIONS dans les deux
+    moitiés sont retenues. Triée par évolution du score croissante (déclin d'abord).
+    """
+    empty = pd.DataFrame(columns=[
+        "ligne", "route_id", "mode", "mode_color", "observations", "observations_prev",
+        "pct_a_l_heure", "pct_a_l_heure_prev", "pct_arrets_sautes", "score_fiabilite",
+        "score_fiabilite_prev", "delta_score", "delta_pct_a_l_heure",
+    ])
+    core = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    if core.empty:
+        return empty
+    dates = list(dict.fromkeys(core["date_service"].sort_values().tolist()))
+    if len(dates) < 2:
+        return empty
+    mid = dates[len(dates) // 2]
+    prev_half = _daily_to_network(core[core["date_service"] < mid])
+    recent = _daily_to_network(core[core["date_service"] >= mid])
+    prev_rank = make_ranking(*prev_half)[["route_id", "observations", "pct_a_l_heure",
+                                          "pct_arrets_sautes", "score_fiabilite"]]
+    prev_rank = prev_rank.rename(columns={c: f"{c}_prev" for c in prev_rank.columns if c != "route_id"})
+    recent_rank = make_ranking(*recent)[["route_id", "ligne", "mode", "mode_color",
+                                         "observations", "pct_a_l_heure", "pct_arrets_sautes",
+                                         "score_fiabilite"]]
+    out = recent_rank.merge(prev_rank, on="route_id", how="inner")
+    out = out[(out["observations"] >= MIN_OBSERVATIONS)
+              & (out["observations_prev"] >= MIN_OBSERVATIONS)].copy()
+    if out.empty:
+        return empty
+    out["delta_score"] = out["score_fiabilite"] - out["score_fiabilite_prev"]
+    out["delta_pct_a_l_heure"] = out["pct_a_l_heure"] - out["pct_a_l_heure_prev"]
+    return out.sort_values("delta_score", ascending=True).reset_index(drop=True)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_line_timeline(_conn, cutoff_ts: int, since_ts: int | None, route_id: str, end_ts: int | None = None,
                        commune: str | None = None) -> pd.DataFrame:
     """Timeline quotidienne d'une ligne, depuis les agrégats."""
@@ -1306,7 +1382,7 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
 
 NAV_ITEMS = [
     "Vue territoriale", "Vue réseau", "Modes de transport", "Fiabilité par période",
-    "Analyse d'une ligne",
+    "Analyse d'une ligne", "Évolution & tendances",
     "Perturbations", "Collecte des données", "Méthode & données",
 ]
 
@@ -1711,6 +1787,88 @@ def main() -> None:
             if not distribution.empty:
                 render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
                 hc_render(delay_distribution_chart(distribution), height=280)
+
+        if page == "Évolution & tendances":
+            st.markdown("### Évolution de la fiabilité dans le temps")
+            st.markdown('<div class="section-note">Suivre la tendance, c\'est vérifier que le service s\'améliore — un indicateur direct pour juger du respect des engagements annoncés. La période sélectionnée est partagée en deux moitiés de durée égale (par nombre de jours de service) : la plus récente est comparée à la précédente, ligne par ligne. Les définitions (retard ≤ 5 min, arrêts sautés, score) sont celles du reste du tableau de bord.</div>', unsafe_allow_html=True)
+            trend = load_engagement_trend(conn, cutoff, since_ts, end_ts, commune=commune)
+            if trend.empty:
+                st.info("Aucune donnée quotidienne sur ce périmètre pour la période.")
+            else:
+                dates = list(dict.fromkeys(trend["date_service"].sort_values().tolist()))
+                if len(dates) >= 2:
+                    mid = dates[len(dates) // 2]
+                    recent = trend[trend["date_service"] >= mid]
+                    prev = trend[trend["date_service"] < mid]
+
+                    def _weighted_mean(s: pd.Series, v: pd.Series) -> float:
+                        total = float((s * v).sum())
+                        return total / max(float(s.sum()), 1)
+
+                    r_ponct = _weighted_mean(recent["observations"], recent["pct_a_l_heure"])
+                    p_ponct = _weighted_mean(prev["observations"], prev["pct_a_l_heure"])
+                    delta_ponct = r_ponct - p_ponct
+                    r_skip = _weighted_mean(recent["observations"], recent["pct_arrets_sautes"])
+                    p_skip = _weighted_mean(prev["observations"], prev["pct_arrets_sautes"])
+                    arrow = "▲" if delta_ponct >= 0 else "▼"
+                    delta_color = OLIVE_LEAF if delta_ponct >= 0 else COPPERWOOD
+                    st.markdown(
+                        f'<div class="insight">Sur la période la plus récente, la ponctualité '
+                        f'(≤ 5 min) est de <b>{r_ponct:.1f} %</b>, soit '
+                        f'<span style="color:{delta_color}"><b>{arrow}{abs(delta_ponct):.1f} '
+                        f'point(s)</b></span> par rapport à la moitié précédente. Les arrêts '
+                        f'sautés passent de <b>{p_skip:.2f} %</b> à <b>{r_skip:.2f} %</b>.</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("L'analyse récent / précédent apparaîtra dès que plusieurs jours de service seront couverts.")
+                trend_metrics = [
+                    ("Ponctualité ≤ 5 min", "pct_a_l_heure"),
+                    ("Retards > 5 min", "pct_retard_5min"),
+                    ("Arrêts sautés", "pct_arrets_sautes"),
+                    ("Retard moyen", "retard_moyen_s"),
+                ]
+                metric_label = st.selectbox(
+                    "Métrique suivie", [label for label, _ in trend_metrics], key="trend_metric",
+                )
+                metric_col = dict((label, col) for label, col in trend_metrics)[metric_label]
+                hc_render(engagement_trend_chart(trend, metric_col), height=340)
+            st.markdown("#### Progression par ligne (moitié récente vs précédente)")
+            prog = load_engagement_progression(conn, cutoff, since_ts, end_ts, commune=commune)
+            if prog.empty:
+                st.info(f"Aucune ligne ne cumule au moins {MIN_OBSERVATIONS} passages sur chacune des deux moitiés de la période.")
+            else:
+                worst, best = prog.iloc[0], prog.iloc[-1]
+                st.markdown(
+                    f'<div class="insight">La plus forte dégradation concerne '
+                    f'<b>{html.escape(str(worst["ligne"]))}</b> ({worst["delta_score"]:+.1f} points de '
+                    f'score, {worst["pct_a_l_heure"]:.1f} % de ponctualité récente) et la meilleure '
+                    f'progression <b>{html.escape(str(best["ligne"]))}</b> '
+                    f'({best["delta_score"]:+.1f} points). Le score combine ponctualité '
+                    f'≤ 5 min et arrêts sautés.</div>',
+                    unsafe_allow_html=True,
+                )
+                left, right = st.columns([1.0, 1.0], gap="large")
+                with left:
+                    st.markdown("#### Évolution du score")
+                    hc_render(engagement_progression_chart(prog), height=330)
+                with right:
+                    st.markdown("#### Détail par ligne")
+                    table = prog[["ligne", "mode", "score_fiabilite_prev", "score_fiabilite",
+                                  "delta_score", "pct_a_l_heure", "pct_arrets_sautes",
+                                  "observations"]].copy()
+                    table.columns = ["Ligne", "Mode", "Score précédent", "Score récent",
+                                     "Évolution", "Ponctualité récente", "Arrêts sautés récents",
+                                     "Passages récents"]
+                    styled = (table.style
+                              .map(_delta_style, subset=["Évolution"])
+                              .format({"Score précédent": "{:.1f}", "Score récent": "{:.1f}",
+                                       "Évolution": lambda x: f"{x:+.1f} pts",
+                                       "Ponctualité récente": "{:.1f} %",
+                                       "Arrêts sautés récents": "{:.2f} %",
+                                       "Passages récents": "{:,}"}))
+                    st.dataframe(styled, use_container_width=True, hide_index=True, height=330)
+                st.caption(f"Score de fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil de visibilité : {MIN_OBSERVATIONS} passages dans chacune des deux moitiés.")
 
         if page == "Perturbations":
             st.markdown("### Perturbations sur la période")

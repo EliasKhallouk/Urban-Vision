@@ -356,3 +356,68 @@ class TestEnsureAggregates:
             "SELECT route_id, terminus FROM stop_direction"
         ).fetchall()
         assert any(route == "A" for route, _ in directions)
+
+
+class TestLoadEngagement:
+    def _seed(self, conn):
+        _seed_routes(conn)
+        conn.execute(
+            "INSERT INTO routes (route_id, route_short_name, route_type) VALUES ('B','2',3), ('C','3',3)"
+        )
+        conn.executemany(
+            """INSERT INTO agg_daily
+               (date_service, route_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
+                skipped, eligible, histogram)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                ("2026-09-01", "A", 100, 20000, 80, 20, 0, 0, 100, '{}'),
+                ("2026-09-02", "A", 100, 20000, 80, 20, 0, 0, 100, '{}'),
+                ("2026-09-03", "A", 100, 40000, 60, 40, 0, 0, 100, '{}'),
+                ("2026-09-04", "A", 100, 40000, 60, 40, 0, 0, 100, '{}'),
+                ("2026-09-01", "B", 100, 50000, 50, 50, 0, 0, 100, '{}'),
+                ("2026-09-02", "B", 100, 50000, 50, 50, 0, 0, 100, '{}'),
+                ("2026-09-03", "B", 100, 10000, 90, 10, 0, 0, 100, '{}'),
+                ("2026-09-04", "B", 100, 10000, 90, 10, 0, 0, 100, '{}'),
+                ("2026-09-03", "C", 100, 30000, 70, 30, 0, 0, 100, '{}'),
+                ("2026-09-04", "C", 100, 30000, 70, 30, 0, 0, 100, '{}'),
+            ],
+        )
+        conn.commit()
+
+    def test_tendance_quotidienne_du_reseau(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        df = app_mod.load_engagement_trend(conn, cutoff, since, end_ts=end)
+        assert len(df) == 4
+        row = df[df["date_service"] == pd.Timestamp("2026-09-01")].iloc[0]
+        assert row["observations"] == 200
+        assert round(row["pct_a_l_heure"], 6) == 65.0
+        assert round(row["pct_retard_5min"], 6) == 35.0
+        assert round(row["retard_moyen_s"], 6) == 350.0
+
+    def test_progression_compare_moitiers_et_trie_par_declin(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        df = app_mod.load_engagement_progression(conn, cutoff, since, end)
+        assert list(df["ligne"]) == ["1", "2"]  # déclin d'abord, puis progression
+        a = df[df["ligne"] == "1"].iloc[0]
+        assert a["score_fiabilite_prev"] == 80.0
+        assert a["score_fiabilite"] == 60.0
+        assert a["delta_score"] == -20.0
+        b = df[df["ligne"] == "2"].iloc[0]
+        assert b["score_fiabilite_prev"] == 50.0
+        assert b["score_fiabilite"] == 90.0
+        assert b["delta_score"] == 40.0
+        assert "C" not in df["route_id"].tolist()  # présente sur une seule moitié
+
+    def test_vide_sans_donnees(self, conn):
+        _seed_routes(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        since = _epoch_local(2026, 9, 1)
+        end = _epoch_local(2026, 9, 12)
+        assert app_mod.load_engagement_trend(conn, cutoff, since, end).empty
+        assert app_mod.load_engagement_progression(conn, cutoff, since, end).empty

@@ -200,7 +200,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 16 fichiers, 183 tests pytest
+└── tests/                          # 16 fichiers, 189 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -318,7 +318,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 183 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 189 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -720,7 +720,7 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
 
-1. **Vue territoriale** (`app.py:1437`) — carte pydeck
+1. **Vue territoriale** (`app.py:1513`) — carte pydeck
    (`pdk.ScatterplotLayer`, fond « light ») des arrêts par commune, filtre
    « Territoire » en haut à droite, tableau des arrêts (retard médian, passages,
    direction…). En périmètre « Réseau complet », un bloc **Comparaison des
@@ -729,14 +729,14 @@ Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
    pénalisée par les arrêts sautés), graphique `commune_ranking_chart` et
    tableau détaillé (ponctualité, retards > 5 min, retard moyen, arrêts sautés,
    lignes, passages).
-2. **Vue réseau** (`1504`) — KPI band (5 cartes) + classement des lignes
+2. **Vue réseau** (`1580`) — KPI band (5 cartes) + classement des lignes
    (barres, top 15), carte de risque (retard médian × retards > 5 min, bulles
    par mode), série quotidienne « retards > 5 min », colonnes du risque horaire,
    distribution des retards (11 classes), tableaux détaillés.
-3. **Modes de transport** (`1573`) — comparaison d'indicateurs par mode
+3. **Modes de transport** (`1649`) — comparaison d'indicateurs par mode
    (ponctualité, > 5 min, en avance, arrêts sautés), profil horaire par mode,
    évolution quotidienne par mode.
-4. **Fiabilité par période** (`1621`) — fiabilité selon le créneau (jour de
+4. **Fiabilité par période** (`1697`) — fiabilité selon le créneau (jour de
    semaine × tranche horaire) : Matin 06–10, Journée 10–16, Pointe du soir
    16–20, Soirée & nuit 20–06 (lundi–vendredi) et Week-end (samedi + dimanche).
    Charge `agg_hourly` (jamais la table brute) via les loaders
@@ -746,16 +746,27 @@ Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
    `_period_labels` déduit le jour de semaine de `date_service`. Les arrêts
    sautés ne sont pas décomptés (absents de `agg_hourly`) — c'est mentionné
    dans la note de la page.
-5. **Analyse d'une ligne** (`1669`) — sélecteur de ligne, timeline quotidienne,
+5. **Analyse d'une ligne** (`1745`) — sélecteur de ligne, timeline quotidienne,
    risque selon l'heure, profil des retards, tableau d'arrêts.
-6. **Perturbations** (`1715`) — alertes actives à l'instant courant +
+6. **Évolution & tendances** (`1791`) — suivi de la fiabilité dans le temps :
+   la période sélectionnée est partagée en deux moitiés de durée égale et la plus
+   récente est comparée à la précédente. Charge `agg_daily` (ou `agg_daily_stop` en
+   périmètre commune) via `load_engagement_trend` (série quotidienne du réseau :
+   ponctualité, retards > 5 min, arrêts sautés, retard moyen) et
+   `load_engagement_progression` (score de fiabilité de chaque ligne sur les deux
+   moitiés, seules les lignes ≥ `MIN_OBSERVATIONS` sur chacune). Graphiques
+   `engagement_trend_chart` (avec moyenne glissante 7 jours) et
+   `engagement_progression_chart`. C'est un indicateur de tendance au regard des
+   engagements de service annoncés : aucun seuil d'engagement chiffré externe n'est
+   retenu.
+7. **Perturbations** (`1873`) — alertes actives à l'instant courant +
    historique (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-7. **Collecte des données** (`1777`) — totaux bruts (observations, trajets,
+8. **Collecte des données** (`1935`) — totaux bruts (observations, trajets,
    lignes, stabilisées), graphique « observations/min » sur 7 jours glissants
    (Highcharts Stock, zoom), répartition horaire.
-8. **Méthode & données** (`1813`) — définitions, seuils, sources, mention de la
+9. **Méthode & données** (`1971`) — définitions, seuils, sources, mention de la
    stabilisation 20 min, et bloc **Données ouvertes** : boutons de
    téléchargement CSV de la période (loader `load_open_dataset`, qui passe par
    `src/scripts/export_open_data.py` — voir §11.6).
@@ -776,7 +787,8 @@ applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
 70 %). Fonctions : `ranking_chart`, `scatter_chart`, `network_daily_chart`,
 `network_hourly_chart`, `commune_ranking_chart`, `mode_comparison_chart`,
 `mode_daily_chart`, `mode_hourly_chart`, `period_punctuality_chart`,
-`period_mode_chart`, `timeline_chart`, `hourly_risk_chart`,
+`period_mode_chart`, `engagement_trend_chart`, `engagement_progression_chart`,
+`timeline_chart`, `hourly_risk_chart`,
 `delay_distribution_chart`, `collection_minutely_chart` (Stock), et
 `hourly_distribution_chart`. Les couleurs par palier sont calculées par
 `palette.hex(value, kind)` — cohérentes avec les rapports.
@@ -1138,7 +1150,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 183 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 189 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1377,7 +1389,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - CLI complète des 5 scripts et du moteur.
 - Cache dashboard 60 s, buffer 20 min, views et loaders (noms de fonctions et
   lignes exacts fournis en annexe de la section 11).
-- Tests : 183, isolés (suite `pytest` complète : 183 passed), flux synthétiques
+- Tests : 189, isolés (suite `pytest` complète : 189 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Git : branche `main`, remote GitHub ; la production est synchronisée sur le
   commit `13cf796` (identique au dev).

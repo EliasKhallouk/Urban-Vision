@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import highcharts as hc
-from palette import BLACK_FOREST, OLIVE_LEAF, SUNLIT_CLAY, hex as palette_hex
+from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, hex as palette_hex
 
 
 def _assert_json_serializable(config):
@@ -204,6 +204,52 @@ class TestDistribution:
         config = hc.hourly_distribution_chart(df)
         assert config["series"][0]["data"] == [10, 12]
         assert config["xAxis"]["categories"] == ["8", "9"]
+
+
+class TestEngagement:
+    def _trend(self):
+        return pd.DataFrame(
+            {
+                "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-03"]),
+                "pct_a_l_heure": [90.0, 80.0, 70.0],
+                "retard_moyen_s": [100.0, 110.0, 120.0],
+            }
+        )
+
+    def test_trend_serie_et_moyenne_glissante(self):
+        config = hc.engagement_trend_chart(self._trend(), "pct_a_l_heure")
+        names = [s["name"] for s in config["series"]]
+        assert names == ["Quotidien", "Moyenne 7 jours"]
+        assert config["xAxis"]["type"] == "datetime"
+        assert config["yAxis"]["max"] == 100
+        assert config["series"][0]["data"][0][0] == int(
+            pd.Timestamp("2026-09-01").timestamp() * 1000
+        )
+        assert config["series"][0]["data"][0][1] == 90.0
+        assert config["series"][1]["data"][2][1] == 80.0  # moyenne des 3 points
+        _assert_json_serializable(config)
+
+    def test_trend_retard_moyen_sans_max(self):
+        config = hc.engagement_trend_chart(self._trend(), "retard_moyen_s")
+        assert "max" not in config["yAxis"]
+
+    def _prog(self):
+        return pd.DataFrame(
+            {
+                "ligne": ["L1", "L2"],
+                "delta_score": [-20.0, 40.0],
+                "score_fiabilite": [60.0, 90.0],
+                "score_fiabilite_prev": [80.0, 50.0],
+            }
+        )
+
+    def test_progression_colore_par_signe(self):
+        config = hc.engagement_progression_chart(self._prog())
+        assert config["xAxis"]["categories"] == ["L1", "L2"]
+        assert config["series"][0]["data"][0]["color"] == COPPERWOOD
+        assert config["series"][0]["data"][1]["color"] == OLIVE_LEAF
+        assert config["series"][0]["data"][0]["y"] == -20.0
+        _assert_json_serializable(config)
 
 
 class TestHtml:
