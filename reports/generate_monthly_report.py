@@ -49,6 +49,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "urban_vision.db"
 DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "output"
 FRESHNESS_BUFFER_SECONDS = 20 * 60
+# Seuil de volume pour classer une ligne (aligné sur le dashboard app.py:57) :
+# en dessous, les pourcentages (arrêts sautés notamment) ne sont pas exploitables.
+MIN_PASSAGES_FOR_RANKING = 50
+FLEX_ROUTES_SQL = " AND o.route_id NOT IN (SELECT route_id FROM routes WHERE route_long_name LIKE '%Flex%')"
 FRENCH_MONTHS = (
     "janvier", "février", "mars", "avril", "mai", "juin",
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
@@ -218,6 +222,7 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
           AND strftime('%Y-%m', datetime(COALESCE(o.departure_time, o.last_seen_at), 'unixepoch', 'localtime')) = ?
           {route_filter}
           {commune_filter}
+          {FLEX_ROUTES_SQL}
     """
     scheduled = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, o.departure_delay, o.departure_time "
@@ -265,6 +270,7 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
           AND strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) = ?
           {route_filter}
           {commune_filter}
+          {FLEX_ROUTES_SQL}
           AND o.schedule_relationship = 'SCHEDULED'
           AND o.departure_delay IS NOT NULL
     """
@@ -277,6 +283,9 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
         passages=("departure_delay", "count"),
         main_route=("route_id", lambda xs: xs.value_counts().index[0]),
     ).sort_values("retard_median", ascending=False)
+    kept = stats[stats["passages"] >= MIN_PASSAGES_FOR_RANKING]
+    if not kept.empty:
+        stats = kept
     route_names = pd.read_sql_query("SELECT route_id, route_short_name FROM routes", conn)
     stats = stats.merge(route_names, left_on="main_route", right_on="route_id", how="left")
     try:
@@ -414,6 +423,21 @@ def make_line_stats(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFr
     rows["arrets_sautes"] = rows["skipped"] / rows["eligible"].replace(0, 1) * 100
     rows["score"] = (rows["ponctualite"] - 2 * rows["arrets_sautes"]).clip(0, 100)
     return rows.sort_values(["score", "passages"], ascending=[True, False])
+
+
+def ranking_lines(lines: pd.DataFrame) -> pd.DataFrame:
+    """Restreint le classement aux lignes à volume suffisant sur la période.
+
+    Une ligne apparue quelques jours seulement produit des pourcentages
+    d'arrêts sautés hors d'échelle (ex. 1 saut sur 6 = 16,7 %). On conserve
+    les lignes avec au moins MIN_PASSAGES_FOR_RANKING passages ; si aucune
+    ligne n'atteint le seuil, on restitue l'ensemble (périmètres de très
+    faible volume).
+    """
+    if lines.empty:
+        return lines
+    filtered = lines[lines["passages"] >= MIN_PASSAGES_FOR_RANKING].copy()
+    return filtered if not filtered.empty else lines
 
 
 def kpis(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> dict[str, float | int]:
@@ -632,6 +656,7 @@ def stop_chart(stop_stats: pd.DataFrame, output_dir: Path, name: str) -> Path | 
     ax.set_yticklabels(labels, fontsize=7)
     ax.set_xlabel("Retard (secondes)", color=BLACK_FOREST, fontsize=8)
     ax.set_title("Arrêts les plus problématiques du périmètre", color=BLACK_FOREST, fontsize=10, fontweight="bold")
+    ax.legend(loc="best", fontsize=7, frameon=True, framealpha=0.9, ncol=2, title="Retard")
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
 
@@ -821,12 +846,15 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
     alert_routes = {a["route_id"] for a in (alerts or []) if a["route_id"]}
 
-    priority_alerts = "\n".join(
-        rf"\item \alertmark{{}} \textbf{{Ligne {latex(row.ligne)}}}"
-        + (f" (rang réseau : {net_rank.get(row.route_id, '—')}/{net_total})" if net_rank else "")
-        + f" : score {row.score:.1f}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts sautés."
-        for row in worst.itertuples()
-    )
+    priority_items = []
+    for row in worst.itertuples():
+        marker = r"\alertmark{} " if row.route_id in alert_routes else ""
+        net = f" (rang réseau : {net_rank.get(row.route_id, '—')}/{net_total})" if net_rank else ""
+        priority_items.append(
+            rf"\item {marker}\textbf{{Ligne {latex(row.ligne)}}}{net}"
+            rf" : score {row.score:.1f}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts sautés."
+        )
+    priority_alerts = "\n".join(priority_items)
 
     # Format service alerts for the dedicated "Infos trafic" section,
     # grouped by ligne and placed after the methodology.
@@ -980,6 +1008,8 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \bottomrule
 \end{{longtable}}
 
+\small\color{{olive}} Sont exclues du classement les lignes comptant moins de {MIN_PASSAGES_FOR_RANKING} passages sur le mois (volume insuffisant pour un pourcentage d\'arrêts sautés exploitable) ainsi que les lignes à la demande (Flex\', Flex\'Night), sans desserte à horaires fixes. Le graphique « Arrêts les plus problématiques » ne retient que les arrêts d\'au moins {MIN_PASSAGES_FOR_RANKING} passages.
+
 {graphical_annex(lines, scheduled, network_lines, stop_stats, monthly_evolution, output_dir)}
 
 \newpage
@@ -1068,7 +1098,7 @@ def main() -> int:
                 network_lines = None
                 stop_stats = None
             else:
-                lines = make_line_stats(scheduled, skipped)
+                lines = ranking_lines(make_line_stats(scheduled, skipped))
                 current = kpis(scheduled, skipped)
                 previous_scheduled, previous_skipped, _ = query_observations(conn, previous_month(month), scope)
                 previous = kpis(previous_scheduled, previous_skipped) if not previous_scheduled.empty else None
@@ -1081,7 +1111,7 @@ def main() -> int:
                     net_scheduled, net_skipped, _ = query_observations(conn, month, net_scope)
                     if not net_scheduled.empty:
                         network_metrics = kpis(net_scheduled, net_skipped)
-                        network_lines = make_line_stats(net_scheduled, net_skipped)
+                        network_lines = ranking_lines(make_line_stats(net_scheduled, net_skipped))
                     stop_stats = query_stop_stats(conn, month, scope)
                 monthly_evolution = query_monthly_evolution(conn, month, scope)
                 gaps = query_collection_gaps(conn, month)

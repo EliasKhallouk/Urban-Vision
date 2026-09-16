@@ -246,6 +246,44 @@ class TestMakeLineStats:
         assert lines.iloc[0]["score"] == 0.0
 
 
+class TestRankingLines:
+    def _lines(self):
+        return pd.DataFrame(
+            {
+                "route_id": ["L10", "L90", "L95"],
+                "ligne": ["10", "90", "95"],
+                "score": [10.0, 90.0, 95.0],
+                "passages": [5, 90, 95],
+            }
+        )
+
+    def test_exclut_les_lignes_a_faible_volume(self):
+        kept = report.ranking_lines(self._lines())
+        assert list(kept["route_id"]) == ["L90", "L95"]
+
+    def test_exclut_la_ligne_164_dans_une_commune(self):
+        lines = pd.DataFrame(
+            {
+                "route_id": ["07", "164", "59"],
+                "ligne": ["7", "F", "59"],
+                "score": [88.0, 66.6, 92.0],
+                "passages": [26106, 5, 34530],
+            }
+        )
+        kept = report.ranking_lines(lines)
+        assert "164" not in set(kept["route_id"])
+        assert set(kept["route_id"]) == {"07", "59"}
+
+    def test_tout_le_perimetre_reste_si_rien_n_atteint_le_seuil(self):
+        small = self._lines()
+        small["passages"] = [5, 40, 12]
+        kept = report.ranking_lines(small)
+        assert set(kept["route_id"]) == {"L10", "L90", "L95"}
+
+    def test_dataframe_vide(self):
+        assert report.ranking_lines(pd.DataFrame()).empty
+
+
 class TestExecutiveMessage:
     def test_bon_et_pire_ligne(self):
         scheduled = _scheduled_delays([10, 400])
@@ -401,6 +439,65 @@ class TestQueryStopStats:
         assert len(stats) == 1
         assert stats.iloc[0]["direction"] == "vers Terminus Nord"
 
+    def test_seuil_passages_par_arret(self, conn, monkeypatch):
+        gtfs_static.create_static_tables(conn)
+        conn.execute("INSERT INTO routes VALUES ('A', '1', 'Ligne 1', 3)")
+        conn.execute("INSERT INTO stops VALUES ('s1', 'Arret 1', 44.8, -0.5)")
+        conn.execute("INSERT INTO stops VALUES ('s2', 'Arret 2', 44.8, -0.5)")
+        recent = _epoch_local(2026, 9, 12, 12, 0)
+        conn.execute(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+            "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+            "departure_time, last_seen_at) "
+            "VALUES ('t_recent', '20260912', 'A', 0, 1, 's1', 'SCHEDULED', NULL, NULL, ?)",
+            (recent,),
+        )
+
+        def seed(stop, k):
+            for i in range(k):
+                t = _epoch_local(2026, 9, 11, 8, 0) + i
+                conn.execute(
+                    "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+                    "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+                    "departure_time, last_seen_at) "
+                    "VALUES (?, '20260911', 'A', 0, 1, ?, 'SCHEDULED', 10, ?, ?)",
+                    (f"t_{stop}_{i}", stop, t, recent - 3600),
+                )
+
+        seed("s1", 3)
+        seed("s2", 1)
+        conn.commit()
+        monkeypatch.setattr(report, "MIN_PASSAGES_FOR_RANKING", 2)
+        scope = report.Scope("test", [], [], "test")
+        stats = report.query_stop_stats(conn, "2026-09", scope)
+        assert list(stats["stop_id"]) == ["s1"]
+
+    def test_flex_exclue_des_statistiques(self, conn):
+        gtfs_static.create_static_tables(conn)
+        conn.execute("INSERT INTO routes VALUES ('568', 'Artigues', \"Flex' Artigues\", 3)")
+        conn.execute("INSERT INTO stops VALUES ('s1', 'Buttinière', 44.8, -0.5)")
+        recent = _epoch_local(2026, 9, 12, 12, 0)
+        conn.execute(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+            "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+            "departure_time, last_seen_at) "
+            "VALUES ('t_recent', '20260912', '568', 0, 1, 's1', 'SCHEDULED', NULL, NULL, ?)",
+            (recent,),
+        )
+        for i in range(3):
+            t = _epoch_local(2026, 9, 11, 8, 0) + i
+            conn.execute(
+                "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+                "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+                "departure_time, last_seen_at) "
+                "VALUES (?, '20260911', '568', 0, 1, 's1', 'SCHEDULED', 10, ?, ?)",
+                (f"tflex{i}", t, recent - 3600),
+            )
+        conn.commit()
+        scope = report.Scope("test", [], [], "test")
+        stats = report.query_stop_stats(conn, "2026-09", scope)
+        assert stats.empty
+
 
 class TestQueryObservations:
     def _seed(self, conn):
@@ -453,6 +550,37 @@ class TestQueryObservations:
         scope = report.Scope("test", [], ["Lormont"], "test")
         with pytest.raises(ValueError, match="inconnue"):
             report.query_observations(conn, "2026-09", scope)
+
+    def test_flex_exclue_des_observations(self, conn):
+        gtfs_static.create_static_tables(conn)
+        conn.execute("INSERT INTO routes VALUES ('A', '1', 'L1', 3)")
+        conn.execute("INSERT INTO routes VALUES ('568', 'Flex', \"Flex' Artigues\", 3)")
+        conn.execute("INSERT INTO stops VALUES ('s1', 'Arret 1', 44.8, -0.5)")
+        recent = _epoch_local(2026, 9, 12, 12, 0)
+        conn.execute(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+            "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+            "departure_time, last_seen_at) "
+            "VALUES ('t_recent', '20260912', 'A', 0, 1, 's1', 'SCHEDULED', NULL, NULL, ?)",
+            (recent,),
+        )
+
+        def obs(route, i):
+            t = _epoch_local(2026, 9, 11, 8, 0) + i
+            conn.execute(
+                "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
+                "stop_sequence, stop_id, schedule_relationship, departure_delay, "
+                "departure_time, last_seen_at) "
+                "VALUES (?, '20260911', ?, 0, 1, 's1', 'SCHEDULED', 10, ?, ?)",
+                (f"t_{route}_{i}", route, t, recent - 3600),
+            )
+
+        obs("A", 0)
+        obs("568", 1)
+        conn.commit()
+        scope = report.Scope("test", [], [], "test")
+        scheduled, _, _ = report.query_observations(conn, "2026-09", scope)
+        assert set(scheduled["route_id"]) == {"A"}
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +650,41 @@ class TestBuildLatexAlertsEscaping:
         assert r"Travaux \&\_\%" in tex
         assert "9&1 (1)" not in tex
         assert "Travaux &_%" not in tex
+
+    def test_priority_alerts_sans_glyphe_pour_ligne_sans_infos_trafic(self, tmp_path):
+        lines = pd.DataFrame([
+            {"route_id": "A", "ligne": "A", "score": 40.0, "retard_moyen": 90.0,
+             "retard_median": 120, "retard_5": 20, "ponctualite": 80,
+             "arrets_sautes": 1, "passages": 100},
+            {"route_id": "6", "ligne": "6", "score": 50.0, "retard_moyen": 90.0,
+             "retard_median": 120, "retard_5": 15, "ponctualite": 85,
+             "arrets_sautes": 0, "passages": 100},
+            {"route_id": "7", "ligne": "7", "score": 55.0, "retard_moyen": 90.0,
+             "retard_median": 120, "retard_5": 10, "ponctualite": 90,
+             "arrets_sautes": 0, "passages": 100},
+        ])
+        scheduled = pd.DataFrame({
+            "departure_delay": [10],
+            "departure_time": [_epoch_local(2026, 9, 11, 8, 0)],
+        })
+        metrics = {"fiability": 80, "passages": 100, "ponctualite": 85.0,
+                   "retard": 120.0, "retard_median": 90.0, "skip_rate": 2.0}
+        change = {"fiability": "+2", "ponctualite": "+1", "retard": "-10", "skip_rate": "0"}
+        alerts = [
+            {"route_id": "A", "header_text": "Travaux",
+             "active_period_start": _epoch_local(2026, 9, 5, 8, 0),
+             "active_period_end": _epoch_local(2026, 9, 7, 0, 0)},
+        ]
+        scope = report.Scope("test", [], [], "test scope")
+        tex = report.build_latex(
+            "2026-09", scope, metrics, change, lines, scheduled,
+            "01/10/2026 à 08:00", tmp_path, alerts=alerts,
+        )
+        assert r"\item \alertmark{} \textbf{Ligne A}" in tex
+        assert r"\item \alertmark{} \textbf{Ligne 6}" not in tex
+        assert r"\item \alertmark{} \textbf{Ligne 7}" not in tex
+        assert r"\item \textbf{Ligne 6}" in tex
+        assert r"\item \textbf{Ligne 7}" in tex
 
 
 class TestCompilePdf:

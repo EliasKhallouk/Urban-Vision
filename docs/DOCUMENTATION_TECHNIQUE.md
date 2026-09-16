@@ -200,7 +200,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 16 fichiers, 192 tests pytest
+└── tests/                          # 16 fichiers, 200 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -318,7 +318,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 192 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 200 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -898,9 +898,12 @@ reports/output/<AAAA-MM>/
 - **Mois** : `--month AAAA-MM` ou auto := dernier mois présent dans
   `observations` (max `departure_time`).
 - **Interrogations** (`query_*`) : observations SCHEDULED/SKIPPED du mois (avec
-  filtre lignes/communes et seuil de stabilisation de 20 min), stats par arrêt,
+  filtre lignes/communes et seuil de stabilisation de 20 min), stats par arrêt
+  (uniquement si ≥ `MIN_PASSAGES_FOR_RANKING` passages, sinon tout le périmètre),
   évolution mensuelle, trous de collecte, alertes ServiceAlerts actives sur la
-  période pour les lignes du périmètre.
+  période pour les lignes du périmètre. **Les lignes à la demande** (Flex',
+  Flex'Night) ne sont **pas traitées** dans ces requêtes ni dans les classements
+  ni dans le graphique « Arrêts les plus problématiques ».
 - **KPIs** : `kpis()` calcule passages, ponctualité, retard moyen/médian, > 5 min,
   arrêts sautés + taux, **fiabilité**. `comparison()` calcule la variation
   vs mois précédent. Les rapports communaux comparent **aussi** la ligne au
@@ -910,9 +913,14 @@ reports/output/<AAAA-MM>/
   « intermédiaire », ≥75 % « notables », ≥65 % « insuffisante », <65 %
   « retards critiques »), complété si `skip_rate > 5 %`.
 - **Sections du PDF** : couverture (logo, rapport, date, périmètre),
-  synthèse exécutive (6 KPI colorés + évolution), alertes prioritaires, annexe
+  synthèse exécutive (6 KPI colorés + évolution), alertes prioritaires (top 3
+  des lignes les plus en difficulté ; le glyphe ⚠ n'apparaît que pour les
+  lignes ayant un ServiceAlert TBM actif sur la période — cohérent avec
+  l'annexe et le tableau de bord), annexe
   résultats détaillés (longtable par ligne, triée par score croissant — les
-  plus prioritaires en premier), annexe graphique (5 graphiques matplotlib Antialias),
+  plus prioritaires en premier), annexe graphique (5 graphiques matplotlib Antialias ;
+  l'arrêté « Arrêts les plus problématiques » oppose retard moyen et retard médian,
+  deux barres par arrêt avec légende),
   profil opérationnel (risque horaire, distribution), Infos trafic (page dédiée
   des ServiceAlerts, dédoublonnées par contenu :
   route × titre × période), méthode (formule, marge ± 60 s, trous de collecte,
@@ -1158,7 +1166,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 192 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 200 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1400,7 +1408,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 192, isolés (suite `pytest` complète : 192 passed), flux synthétiques
+- Tests : 200, isolés (suite `pytest` complète : 200 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Git : branche `main`, remote GitHub ; la production est synchronisée sur le
   commit `13cf796` (identique au dev).

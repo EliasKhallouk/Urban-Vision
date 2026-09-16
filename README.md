@@ -59,7 +59,7 @@ quand.
   maintenance) : [`docs/DOCUMENTATION_TECHNIQUE.md`](docs/DOCUMENTATION_TECHNIQUE.md)
 - 🔧 **Prise en main pour développeurs** : une fois sur la machine, `docs/DOCUMENTATION_TECHNIQUE.md`
   (§ 5 Installation et § 13 Référence des scripts) donne toutes les commandes.
-- 🧪 **Tests** : suite `pytest` complète 192 tests, isolée de toute donnée réelle.
+- 🧪 **Tests** : suite `pytest` complète 200 tests, isolée de toute donnée réelle.
 
 ## Le projet
 
