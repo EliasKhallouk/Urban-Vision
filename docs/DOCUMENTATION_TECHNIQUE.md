@@ -200,7 +200,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 16 fichiers, 200 tests pytest
+└── tests/                          # 17 fichiers, 221 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -318,7 +318,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 200 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 221 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -1127,10 +1127,115 @@ Lecture en direct :
 tail -f data/collect.log
 ```
 
-Les logs **ne tournent pas** : aucune règle logrotate dédiée, aucun cron ; seuls
+Les logs **ne tournent pas** : aucune règle logrotate dédiée, aucun cron de
+rotation ; seuls
 les logs système globaux sont gérés par `logrotate.timer`. Volumes en
 production : `collect.log` ≈ 6,2 Mo et `alerts.log` ≈ 5,6 Mo — volumes faibles,
 mais la base principale, elle, est volumineuse (section 18.2).
+
+### 17.1 Dashboards GoAccess des connexions nginx
+
+Le trafic HTTP/HTTPS est analysé avec **GoAccess** (`--ignore-crawlers` pour
+n'exclure que les bots — les visites « humaines » uniquement). Le HTML généré
+est placé dans `reports/analytics/` (gitignoré) :
+
+```bash
+sudo goaccess --log-format=COMBINED --ignore-crawlers /var/log/nginx/access.log \
+  -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
+sudo chown -R ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics
+```
+
+Rafraîchissement automatique toutes les 5 min (cron root) :
+
+```bash
+sudo crontab -e   # ligne : */5 * * * * goaccess --log-format=COMBINED --ignore-crawlers \
+# /var/log/nginx/access.log -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
+```
+
+Sans ce cron, le fichier HTML est un **instantané** : il reflet l'état des logs
+à l'instant de la dernière génération (le mode « temps réel » de GoAccess impose
+un serveur WebSocket, non déployé).
+
+GoAccess n'expose **pas** l'horodatage exact des connexions par IP (le panneau
+« Hosts » agrège hits/visiteurs/volume, « Visit hours » répartit par heure) :
+pour répondre « qui s'est connecté, et à quelle heure », on parse le log brut
+(vision dédiée, §17.2).
+
+### 17.2 Veille des visiteurs humains — dernières connexions
+
+Le script `src/scripts/veille_visiteurs.py` (stdlib uniquement) détecte les
+**visites humaines** et conserve pour chaque IP la première et la dernière
+connexion. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
+
+- **Filtre d'entrée** : requêtes `GET/POST/HEAD` avec statut `200/101/206/304`,
+  User-Agent « navigateur » (Chrome/Firefox/Safari/Edge/OPR avec numéro de
+  version) et hors liste de bots (Googlebot, Odin, libredtail, Censys,
+  l9scan/leakix, Infrawatch, InternetMeasurement, zgrab, …).
+- **Traitement incrémental** : l'état est conservé dans
+  `reports/analytics/veille_state.json` (gitignoré) ; le script ne ré-examine
+  que les lignes postérieures au dernier horodatage traité.
+- **Géolocalisation** : pour toute IP jamais vue, appel ponctuel de l'API gratuite
+  `ip-api.com/batch` (champs pays/ville/ISP/AS + `lat`/`lon`/`zip`) — hors IPv6.
+  Une passe couvre ≤ 500 IP inconnues, ré-essai après 1 h en cas d'échec.
+- **Précision affinée (région NA)** : le script lit la clé `BigDataCloud` via
+  `bdc_key()` — d'abord la variable d'environnement `BDC_API_KEY`, sinon le
+  fichier `BDC_API_KEY_FILE` (défaut `/etc/urban-vision/bdc.key`). Cette passe
+  affine **uniquement les IP françaises** déjà géolocalisées : `localityName`
+  (sous-localité), `postcode`, coordonnées et niveau de confiance (`geo.bdc`
+  dans l'état). Re-sollicitation au plus 1 fois/7 jours par IP ; sans clé, la
+  passe est ignorée sans erreur.
+- **Sorties** (dans `reports/analytics/`, gitignoré) : `veille_state.json`
+  (données brutes, tous pays) et `visiteurs_reels.html` (page auto-raffraîchie
+  toutes les 5 min). Le HTML ne liste en table principale que les visites
+  **françaises de Nouvelle-Aquitaine** (détection région : `countryCode == "FR"`
+  et `regionName` contenant « AQUITAINE ») — et place le reste (autres régions
+  France, hors France ou non géolocalisé) dans des sections dépliables. Chaque
+  ligne porte une couleur de fond + barre latérale associables : **violet** =
+  IP de l'utilisateur (`SELF_IPS`, actuellement `90.120.193.41`), vert =
+  résidentiel/entreprise, orange = hébergeur/cloud probable, gris = hors
+  France ou non géolocalisé. La colonne « Ville » affiche la **localité
+  affinée** BigDataCloud quand elle existe, suivie du code postal, avec la
+  commune ip-api en indicatif gris (`≈ Le Bouscat`) si elle diffère. Badge
+  « aujourd'hui » sur les visiteurs actifs le jour même.
+- **Carte des connexions** : une section dépliable (ouverte) affiche une carte
+  Leaflet avec des tuiles **CARTO basemaps** (données OpenStreetMap,
+  attribution incluse) et un point coloré par IP de Nouvelle-Aquitaine
+  (infobulle : commune, code postal, localité affinée, IP, ISP, plage de
+  connexion et nombre de requêtes). Coordonnées prises dans `geo.bdc`
+  (BigDataCloud) puis `geo` (ip-api) si le champ affiné est absent.
+
+Déploiement en production (VM `ek-hub`) :
+
+```bash
+sudo install -o ubuntu -g ubuntu -m 755 \
+  src/scripts/veille_visiteurs.py \
+  /home/ubuntu/Urban-Vision/src/scripts/
+# crontab root (inchangé, aucun secret) :
+# */5 * * * * /usr/bin/python3 \
+#   /home/ubuntu/Urban-Vision/src/scripts/veille_visiteurs.py \
+#   && chown ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics/veille_state.json \
+#   /home/ubuntu/Urban-Vision/reports/analytics/visiteurs_reels.html
+```
+
+Stockage **sécurisé** de la clé BigDataCloud (jamais dans le crontab) :
+
+```bash
+sudo mkdir -p /etc/urban-vision
+sudo vi /etc/urban-vision/bdc.key            # coller la clé sur 1 ligne, sans retour ligne
+sudo chown root:root /etc/urban-vision/bdc.key
+sudo chmod 600 /etc/urban-vision/bdc.key
+sudo /usr/bin/python3 /home/ubuntu/Urban-Vision/src/scripts/veille_visiteurs.py
+grep -o '"bdc"' /home/ubuntu/Urban-Vision/reports/analytics/veille_state.json | head -1
+```
+
+Le fichier n'est lisible que par `root` ; le cron root lit la clé à l'exécution
+(canon `bdc_key()`), aucun secret ne transite par le crontab ni par la ligne de
+commande. Démarches initiales, une fois pour toutes : compte gratuit sur
+`bigdatacloud.com` (sans carte bancaire, 10 k requêtes/mois, suffisant — une
+passe NA < 20 requêtes) → `API Keys` → clé « IP Geolocation ».
+
+Mise à jour en local (hors VM) : `python3 src/scripts/veille_visiteurs.py
+--logs-dir <dossier>` ; `--no-lookup` désactive ip-api et BigDataCloud.
 
 ---
 
@@ -1166,7 +1271,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 200 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 221 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1183,9 +1288,10 @@ via un Python shell ou le collecteur.
 ## 19. Sauvegarde et restauration
 
 Il n'existe **aucun mécanisme de sauvegarde automatisé** sur la VM de
-production : pas de `crontab` (utilisateur `ubuntu` ni root), pas de timer
-systemd dédié, pas de script de sauvegarde. Seuls les **snapshots OCI** de
-l'instance (console du cloud) ne sont pas accessibles depuis le système.
+production : ni script de sauvegarde, ni timer systemd dédié (le `crontab` root
+existait pour l'analyse des logs — sections 17 —, pas pour les données). Seuls
+les **snapshots OCI** de l'instance (console du cloud) ne sont pas accessibles
+depuis le système.
 
 Base minimaliste recommandée (SQLite = un fichier) :
 
@@ -1408,31 +1514,37 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 200, isolés (suite `pytest` complète : 200 passed), flux synthétiques
+- Tests : 221, isolés (suite `pytest` complète : 221 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
-- Git : branche `main`, remote GitHub ; la production est synchronisée sur le
-  commit `13cf796` (identique au dev).
+- Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
+  `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
+  (gitignoré).
+- Git : branche `main`, remote GitHub ; production synchronisée sur le commit
+  `13cf796` + filtre Nouvelle-Aquitaine de `veille_visiteurs.py` déployé le
+  16/09/2026 (modification locale non commitée, sha256 identique VM/dev).
 - Environnement de production : unités systemd exactes (section 14), vhost
   nginx + cert Let's Encrypt (exp. 11/12/2026, renouvelé par `certbot.timer`),
-  venv Python **3.12.14**, `xelatex` + fonts-inter présents ; aucune tâche cron,
-  aucun logrotate dédié, aucune sauvegarde automatique, `reports/recipients.json`
+  venv Python **3.12.14**, `xelatex` + fonts-inter présents ; `crontab` root
+  depuis le 16/09/2026 (GoAccess + veille des visiteurs, sections 17), pas de
+  logrotate dédié, aucune sauvegarde automatique, `reports/recipients.json`
   absent.
 - `requirements.txt`, `requirements-dev.txt`, `apt-requirement.txt`,
   `pytest.ini`, `.streamlit/config.toml`, `.vscode/settings.json`, `.gitignore`.
 
 ### 26.2 Environnement de production
 
-État relevé sur la VM de production le 14/09/2026 :
+État relevé sur la VM de production le 16/09/2026 :
 
 | # | Point | État en production |
 |---|---|---|
 | U1 | Contenu exact des 3 unités systemd | Intégral en section 14 ; les 3 services sont `active` ; dashboard = `--server.address=127.0.0.1 --server.port=8501` |
 | U2 | Configuration nginx | Vhost `urban-vision` : 443 ssl → `proxy_pass 127.0.0.1:8501` (headers WebSocket), bloc :80 = 301 HTTPS (`$host` exact) sinon 404 ; vhost `default` de stock présent (page par défaut) |
-| U3 | Sauvegarde / rotation | Aucune : pas de `crontab` (ubuntu ni root), pas de timer systemd dédié, pas de règle logrotate dédiée ; snapshots OCI non accessibles depuis le système (console du cloud) |
+| U3 | Sauvegarde / rotation | Aucune sauvegarde (snapshots OCI non accessibles depuis le système) ; aucune règle logrotate dédiée ; `crontab` root (ajouté le 16/09/2026) : génération GoAccess toutes les 5 min (§17.1) et veille des visiteurs toutes les 5 min (§17.2) |
 | U4 | Version Python | venv **3.12.14**, Python système **3.10.12** (dev local : 3.11.2) |
 | U5 | URL de geocoding | Code prod identique au dev (`13cf796`) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
+| U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP de l'utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** intégrée au HTML, tuiles **CARTO** (remplacées suite au blocage tile.openstreetmap.org 16/09) ; passe BigDataCloud sur IP FR/NA (clé `root:600` `/etc/urban-vision/bdc.key`, active depuis le 17/09), localité affinée + code postal affichés dans la colonne « Ville » |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 

@@ -1,1 +1,4 @@
 pytest>=8,<9
+# Dépendance système (hors pip) : tableau de bord des connexions nginx
+# sudo apt-get update && sudo apt-get install -y goaccess
+# veille_visiteurs.py : standard library uniquement (aucune dépendance)

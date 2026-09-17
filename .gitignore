@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 reports/output/
+reports/analytics/
 reports/recipients.json
 data/*.log
 data/collect.log
