@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -161,7 +162,11 @@ def lookup_bdc(visitors, now, key):
         geo = rec.get("geo") or {}
         if geo.get("countryCode") != "FR" or ":" in ip:
             continue
-        if rec.get("bdc_t", 0) > now.timestamp() - 7 * 86400:
+        if profile_class(rec) == "p-bot":
+            continue
+        bdc = geo.get("bdc")
+        delay = 7 * 86400 if bdc else 2 * 3600
+        if rec.get("bdc_t", 0) > now.timestamp() - delay:
             continue
         rec["bdc_t"] = now.timestamp()
         url = ("https://api-bdc.net/data/ip-geolocation?ip=%s"
@@ -174,6 +179,8 @@ def lookup_bdc(visitors, now, key):
             continue
         if isinstance(data, dict) and ("localityName" in data or "location" in data):
             geo["bdc"] = parse_bdc(data)
+            rec["bdc_t"] = now.timestamp()
+        time.sleep(0.5)
 
 
 def flag(rec):
@@ -300,6 +307,28 @@ PTS.forEach(function(p){
 </script></details>""" % (len(pts), data)
 
 
+def _dernier_fr(ip, rec, today_iso):
+    if not ip:
+        return "<div class='dernier'><span class='lbl'>Dernier visiteur en France</span> &ndash;</div>"
+    geo = rec.get("geo") or {}
+    region = geo.get("regionName") or ""
+    if region.upper() == "NEW AQUITAINE":
+        region = "Nouvelle-Aquitaine"
+    loc = (geo.get("bdc") or {}).get("locality") or geo.get("city") or ""
+    loc = htmlmod.escape(loc)
+    region = htmlmod.escape(region)
+    where = " &ndash; ".join(x for x in (loc, region) if x)
+    today = (' <span class="chip chip-today">aujourd&rsquo;hui</span>'
+             if rec["last"].date().isoformat() == today_iso else "")
+    last = rec["last"].strftime("%d/%m &agrave; %H:%M")
+    isp = geo.get("isp") or ""
+    tag = " &middot; Votre IP" if is_self(ip) else ""
+    return ("<div class='dernier'><span class='lbl'>Dernier visiteur en France</span>"
+            "<b>%s</b>%s &mdash; %s%s &middot; %s &mdash; %s</div>"
+            % (htmlmod.escape(ip), today, where, tag,
+               htmlmod.escape(isp), last))
+
+
 def render_html(visitors, html_path, now):
     now_paris = now.astimezone(dt.timezone(dt.timedelta(hours=2)))
     today_iso = now_paris.date().isoformat()
@@ -314,6 +343,8 @@ def render_html(visitors, html_path, now):
     today_count = sum(1 for ip, rec in na
                       if rec["last"].date().isoformat() == today_iso)
     latest = ordered[0][1]["last"].strftime("%d/%m/%Y &agrave; %H:%M") if ordered else "&ndash;"
+    top_fr = next(((ip, rec) for ip, rec in ordered
+                   if (rec.get("geo") or {}).get("countryCode") == "FR"), (None, None))
     section = _map_html(pts)
     section += _table(recent, today_iso)
     if older:
@@ -340,6 +371,8 @@ body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;backgro
 header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 h1{font-size:21px;margin:0 0 4px}
 .sub{color:var(--mut);font-size:13px}
+.dernier{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;background:rgba(125,180,255,.07);border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:10px;padding:11px 14px;font-size:13px;margin-top:18px}
+.dernier .lbl{color:var(--blue);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.05em;margin-right:4px}
 .stats{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0 6px}
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 16px;min-width:130px}
 .stat b{display:block;font-size:22px;line-height:1.1}
@@ -380,6 +413,7 @@ footer{color:var(--mut);font-size:12px;margin-top:22px}
 </div>
 <div class="sub">Dernier hit enregistr&eacute; : %s<br>Mise &agrave; jour automatique toutes les 5 min</div>
 </header>
+%s
 <div class="stats">
 <div class="stat"><b>%d</b><span>visiteurs Nouvelle-Aquitaine suivis</span></div>
 <div class="stat"><b>%d</b><span>actif(s) aujourd&rsquo;hui</span></div>
@@ -395,6 +429,7 @@ footer{color:var(--mut);font-size:12px;margin-top:22px}
 <footer>G&eacute;n&eacute;r&eacute; par src/scripts/veille_visiteurs.py &mdash; les listes pays/h&eacute;bergeurs se consultent dans les sections d&eacute;pliables ci-dessus.</footer>
 </div></body>
 </html>""" % (now_paris.strftime("%d/%m/%Y &agrave; %H:%M"), latest,
+             _dernier_fr(*top_fr, today_iso),
              len(na), today_count, len(autres_fr) + len(others), section)
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(html, encoding="utf-8")

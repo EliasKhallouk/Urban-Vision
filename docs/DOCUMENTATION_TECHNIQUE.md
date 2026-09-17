@@ -200,7 +200,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 17 fichiers, 221 tests pytest
+└── tests/                          # 17 fichiers, 223 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -318,7 +318,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 221 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 223 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -1181,13 +1181,19 @@ connexion. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
   `bdc_key()` — d'abord la variable d'environnement `BDC_API_KEY`, sinon le
   fichier `BDC_API_KEY_FILE` (défaut `/etc/urban-vision/bdc.key`). Cette passe
   affine **uniquement les IP françaises** déjà géolocalisées : `localityName`
-  (sous-localité), `postcode`, coordonnées et niveau de confiance (`geo.bdc`
-  dans l'état). Re-sollicitation au plus 1 fois/7 jours par IP ; sans clé, la
-  passe est ignorée sans erreur.
+   (sous-localité), `postcode`, coordonnées et niveau de confiance (`geo.bdc`
+   dans l'état). Les IP « hébergeur / cloud (probable bot) » (profil `p-bot`,
+   ISP/organisation dans `CLOUDS`) sont **exclues** de cette passe.
+   Re-sollicitation au plus 1 fois/7 jours par IP ; en cas
+   d'échec transitoire (rate-limit 403 du palier gratuit) l'IP est **ré-essayée
+   après 2 h**, avec 0,5 s de pause entre requêtes ; sans clé, la passe est
+   ignorée sans erreur.
 - **Sorties** (dans `reports/analytics/`, gitignoré) : `veille_state.json`
   (données brutes, tous pays) et `visiteurs_reels.html` (page auto-raffraîchie
-  toutes les 5 min). Le HTML ne liste en table principale que les visites
-  **françaises de Nouvelle-Aquitaine** (détection région : `countryCode == "FR"`
+  toutes les 5 min). Une **bannière en tête** affiche le dernier visiteur
+  **français** toutes régions confondues (`countryCode == "FR"`), même hors
+  Nouvelle-Aquitaine. Le HTML ne liste ensuite en table principale que les
+  visites **françaises de Nouvelle-Aquitaine** (détection région : `countryCode == "FR"`
   et `regionName` contenant « AQUITAINE ») — et place le reste (autres régions
   France, hors France ou non géolocalisé) dans des sections dépliables. Chaque
   ligne porte une couleur de fond + barre latérale associables : **violet** =
@@ -1271,7 +1277,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 221 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 223 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1514,7 +1520,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 221, isolés (suite `pytest` complète : 221 passed), flux synthétiques
+- Tests : 223, isolés (suite `pytest` complète : 223 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1544,7 +1550,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U5 | URL de geocoding | Code prod identique au dev (`13cf796`) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
-| U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP de l'utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** intégrée au HTML, tuiles **CARTO** (remplacées suite au blocage tile.openstreetmap.org 16/09) ; passe BigDataCloud sur IP FR/NA (clé `root:600` `/etc/urban-vision/bdc.key`, active depuis le 17/09), localité affinée + code postal affichés dans la colonne « Ville » |
+| U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** (tuiles **CARTO**, remplacées suite au blocage tile.openstreetmap.org 16/09) ; BigDataCloud actif depuis le 17/09 (clé `root:600`), localité + CP dans la colonne « Ville » ; **bannière « Dernier visiteur en France »** (toutes régions) ajoutée en tête le 17/09 ; ré-essai BigDataCloud 2 h après erreur transitoire (403) ; les IP « probable bot » (profil `p-bot`, orange) sont exclues de la passe BigDataCloud |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 

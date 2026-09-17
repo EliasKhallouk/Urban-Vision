@@ -137,6 +137,24 @@ class TestBdc:
         vv.lookup_bdc(v, datetime.now(timezone.utc), None)
         assert v["1.2.3.4"]["geo"].get("bdc") is None
 
+    def test_lookup_bdc_ignore_cloud(self, monkeypatch):
+        from datetime import datetime, timezone
+        import urllib.request
+        called = []
+
+        def boom(*a, **k):
+            called.append(a)
+            raise AssertionError("appel réseau interdit")
+
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        v = {"5.6.7.8": {"geo": {"countryCode": "FR", "isp": "OVH SAS"},
+                         "bdc_t": 0}}
+        before = v["5.6.7.8"]["bdc_t"]
+        vv.lookup_bdc(v, datetime.now(timezone.utc), "cle-tres-longue")
+        assert v["5.6.7.8"]["geo"].get("bdc") is None
+        assert v["5.6.7.8"]["bdc_t"] == before
+        assert called == []
+
     def test_bdc_key_depuis_fichier(self, tmp_path, monkeypatch):
         kf = tmp_path / "bdc.key"
         kf.write_text("  abc123\n")
@@ -192,6 +210,25 @@ class TestHtml:
         assert "Mérignac" in html
         assert "33700" in html
         assert "city-hint" in html
+
+    def test_dernier_visiteur_fr(self, tmp_path):
+        now = dt.datetime(2026, 9, 17, 8, 0, tzinfo=dt.timezone.utc)
+        base = self._base(now)
+        base["20.245.121.3"]["last"] = now + dt.timedelta(minutes=5)
+        base["159.117.245.66"] = {"first": now, "last": now + dt.timedelta(minutes=2),
+                                  "hits": 1, "days": {"2026-09-17"}, "paths": ["/"],
+                                  "geo": {"countryCode": "FR", "regionName": "Île-de-France",
+                                          "city": "Paris", "isp": "Parnet"},
+                                  "geo_t": 0}
+        target = tmp_path / "v.html"
+        vv.render_html(base, target, now + dt.timedelta(hours=2))
+        html = target.read_text()
+        banner = html.split("<div class='dernier'>")[1].split("</div>")[0]
+        assert "Dernier visiteur en France" in banner
+        assert "159.117.245.66" in banner
+        assert "Paris" in banner
+        assert "Île-de-France" in banner
+        assert "20.245.121.3" not in banner
 
     def test_html_responsive_compte_today(self, tmp_path):
         target = tmp_path / "v.html"
