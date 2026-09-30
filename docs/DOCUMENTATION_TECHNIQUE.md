@@ -159,9 +159,13 @@ Arborescence pertinente (hors `.git/`, `.venv/`, `data/*.db`, `.vscode` et
 
 ```
 Urban-Vision/
+├── .claude/skills/urban-vision-design/
+│   └── SKILL.md                    # charte graphique (skill Claude Code)
 ├── .gitignore
 ├── .streamlit/
 │   └── config.toml                 # thème + serveur 127.0.0.1:8501
+├── AGENTS.md                       # consignes de maintenance pour les agents de code
+├── CLAUDE.md                       # guide Claude Code (importe AGENTS.md)
 ├── apt-requirement.txt             # dépendances système (TeX + fonts)
 ├── assets/logo/
 │   ├── urban-vision-logo-bw.png
