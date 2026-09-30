@@ -38,6 +38,8 @@ Pipeline (doc § 2, § 8): TBM GTFS-RT feeds → collectors → one SQLite DB (W
 - `analyze.py` / `daily_line_stats` is a legacy chain that neither the dashboard nor the reports read.
 - `veille_visiteurs.py` is stdlib-only and runs from root cron on the VM over nginx logs (doc § 17.2); unrelated to the transit pipeline.
 
+pydeck gotcha: every string passed to `pdk.Layer(...)` is turned into a JavaScript expression (`"@@=..."`), so string constants such as `size_units` or `icon_atlas` must be wrapped in single quotes (`"'pixels'"`); `tests/test_app_helpers.py` checks the serialized layer.
+
 Modules are not a package: `dashboard/`, `reports/` and `src/scripts/` import each other by inserting their directories into `sys.path` (same in `tests/conftest.py`), so imports look like `import db`, `import app`, `from palette import ...`.
 
 ### Cross-cutting conventions

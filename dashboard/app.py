@@ -17,6 +17,7 @@ graphiques) et les loaders sont mis en cache 60 secondes.
 
 import base64
 import html
+import io
 import json
 import math
 import sqlite3
@@ -32,6 +33,7 @@ import pandas as pd
 import streamlit as st
 
 import pydeck as pdk
+from PIL import Image, ImageDraw
 
 import diagnostic as dg
 
@@ -1049,24 +1051,72 @@ def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
     ].sort_values("score_fiabilite", ascending=True).reset_index(drop=True)
 
 
-_MARKER_SVG = {
-    "circle": '<circle cx="12" cy="12" r="10"/>',
-    "square": '<rect x="3" y="3" width="18" height="18" rx="1.5"/>',
-    "triangle": '<polygon points="12,1.5 22.5,21.5 1.5,21.5"/>',
-    "diamond": '<polygon points="12,1 23,12 12,23 1,12"/>',
-}
+MARKER_SHAPES = ("circle", "square", "triangle", "diamond")
+MARKER_CELL = 48
 
 
-@lru_cache(maxsize=None)
-def marker_icon(marker: str, color: str) -> dict:
-    """Icône pydeck (SVG en data URI) : forme du mode, remplie de la couleur du palier."""
-    shape = _MARKER_SVG.get(marker, _MARKER_SVG["diamond"])
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
-        f'<g fill="{color}" stroke="#FFFFFF" stroke-width="1.5">{shape}</g></svg>'
+@lru_cache(maxsize=1)
+def marker_atlas() -> tuple[str, dict]:
+    """Atlas PNG des icônes de la carte (forme du mode × couleur de palier) et son index.
+
+    Une seule image pour toutes les icônes : chaque arrêt ne porte qu'une clé
+    courte (`icon_key`), au lieu d'une image par arrêt.
+    """
+    colors = (OLIVE_LEAF, SUNLIT_CLAY, COPPERWOOD)
+    scale, cell = 4, MARKER_CELL
+    atlas = Image.new("RGBA", (cell * len(MARKER_SHAPES), cell * len(colors)), (0, 0, 0, 0))
+    mapping = {}
+    n, m, w = cell * scale, 5 * scale, 3 * scale
+    for j, color in enumerate(colors):
+        for i, shape in enumerate(MARKER_SHAPES):
+            big = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(big)
+            if shape == "circle":
+                draw.ellipse([m, m, n - m, n - m], fill=color, outline="white", width=w)
+            elif shape == "square":
+                draw.rectangle([m + 2 * scale, m + 2 * scale, n - m - 2 * scale, n - m - 2 * scale],
+                               fill=color, outline="white", width=w)
+            elif shape == "triangle":
+                draw.polygon([(n / 2, m), (n - m, n - m), (m, n - m)], fill=color, outline="white", width=w)
+            else:
+                draw.polygon([(n / 2, m), (n - m, n / 2), (n / 2, n - m), (m, n / 2)],
+                             fill=color, outline="white", width=w)
+            atlas.paste(big.resize((cell, cell), Image.LANCZOS), (i * cell, j * cell))
+            mapping[f"{shape}|{color}"] = {"x": i * cell, "y": j * cell, "width": cell, "height": cell,
+                                           "anchorY": cell // 2}
+    buffer = io.BytesIO()
+    atlas.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"), mapping
+
+
+def icon_key(route_type, score: float) -> str:
+    """Clé d'icône de l'atlas : forme du mode et couleur du palier de score."""
+    return f"{mode_marker(route_type)}|{palette_hex(score, 'score')}"
+
+
+def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
+    """Couche pydeck des arrêts (icônes de l'atlas, taille 6 à 15 px selon les passages).
+
+    pydeck convertit toute chaîne d'argument en expression JavaScript : les
+    constantes texte (`size_units`, `icon_atlas`) sont donc passées entre
+    guillemets simples, sinon deck.gl reçoit une expression invalide.
+    """
+    uri, mapping = marker_atlas()
+    data = df.copy()
+    data["icon"] = [icon_key(rt, v) for rt, v in zip(data["route_type"], data["score_fiabilite"])]
+    data["size"] = 6 + (data["observations"].clip(50, 400) - 50) / 350 * 9
+    return pdk.Layer(
+        "IconLayer",
+        data=data,
+        id="arrets",
+        get_position=["lon", "lat"],
+        icon_atlas=f"'{uri}'",
+        icon_mapping=mapping,
+        get_icon="icon",
+        get_size="size",
+        size_units="'pixels'",
+        pickable=True,
     )
-    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    return {"url": uri, "width": 24, "height": 24, "anchorY": 12}
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1476,20 +1526,7 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
     if df.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
-    df = df.copy()
-    df["icon"] = [marker_icon(mode_marker(rt), palette_hex(v, "score"))
-                  for rt, v in zip(df["route_type"], df["score_fiabilite"])]
-    df["size"] = 7 + (df["observations"].clip(50, 400) - 50) / 350 * 11
-    layer = pdk.Layer(
-        "IconLayer",
-        data=df,
-        id="arrets",
-        get_position=["lon", "lat"],
-        get_icon="icon",
-        get_size="size",
-        size_units="pixels",
-        pickable=True,
-    )
+    layer = territorial_layer(df)
     tooltip = {
         "html": "<b>{stop_name}</b><br/>Direction : {direction}<br/>"
                 "Ligne(s) : {lignes}<br/>"

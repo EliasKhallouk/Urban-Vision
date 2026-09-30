@@ -64,28 +64,42 @@ class TestMedianFromHistograms:
 
 
 class TestCouleurs:
-    @staticmethod
-    def _svg(icon):
+    def test_atlas_12_icones_forme_par_palier(self):
         import base64
-        return base64.b64decode(icon["url"].split(",", 1)[1]).decode("utf-8")
+        import io
 
-    def test_icone_forme_du_mode_et_couleur_du_palier(self):
-        icon = app_mod.marker_icon("square", "#bc6c25")
-        assert icon["url"].startswith("data:image/svg+xml;base64,")
-        assert (icon["width"], icon["height"]) == (24, 24)
-        svg = self._svg(icon)
-        assert "<rect" in svg
-        assert 'fill="#bc6c25"' in svg
+        from PIL import Image
 
-    def test_icone_forme_inconnue_retombe_sur_losange(self):
-        svg = self._svg(app_mod.marker_icon("hexagon", "#606c38"))
-        assert 'points="12,1 23,12 12,23 1,12"' in svg
+        uri, mapping = app_mod.marker_atlas()
+        assert uri.startswith("data:image/png;base64,")
+        assert len(mapping) == 12
+        img = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
+        assert img.size == (4 * app_mod.MARKER_CELL, 3 * app_mod.MARKER_CELL)
+        cell = mapping["square|#bc6c25"]
+        center = img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))
+        assert center[:3] == (0xBC, 0x6C, 0x25)
 
-    def test_formes_distinctes_par_mode(self):
-        svgs = {m: self._svg(app_mod.marker_icon(m, "#606c38")) for m in ("circle", "square", "triangle")}
-        assert "<circle" in svgs["circle"]
-        assert "<rect" in svgs["square"]
-        assert "<polygon" in svgs["triangle"]
+    def test_cle_d_icone(self):
+        assert app_mod.icon_key(3, 90.0) == "square|#606c38"
+        assert app_mod.icon_key(0, 60.0) == "circle|#DDA15E"
+        assert app_mod.icon_key(11, 10.0) == "diamond|#bc6c25"
+        uri, mapping = app_mod.marker_atlas()
+        assert app_mod.icon_key(4, 30.0) in mapping
+
+    def test_couche_carte_constantes_non_interpretees_comme_expressions(self):
+        import json
+
+        import pydeck as pdk
+
+        df = pd.DataFrame({"stop_id": ["s1"], "lon": [-0.57], "lat": [44.84], "route_type": [3],
+                           "score_fiabilite": [90.0], "observations": [400]})
+        deck = json.loads(pdk.Deck(layers=[app_mod.territorial_layer(df)]).to_json())
+        layer = deck["layers"][0]
+        assert layer["sizeUnits"] == "pixels"
+        assert layer["iconAtlas"].startswith("data:image/png;base64,")
+        assert layer["getIcon"] == "@@=icon"
+        assert layer["data"][0]["icon"] == "square|#606c38"
+        assert layer["data"][0]["size"] == 15.0
 
     def test_score_tier_style(self):
         style = app_mod._score_tier_style(90.0)

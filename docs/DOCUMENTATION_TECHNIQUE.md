@@ -806,9 +806,16 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du score de
    fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min − 2 ×
    arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la plus
-   fréquentée), via des icônes SVG `marker_icon(forme, couleur)` ; taille (7 à
-   18 px) selon les passages. **Fiche arrêt** (§11.7) sous la carte, ouverte
-   par un clic sur un arrêt (`st.pydeck_chart(on_select=…,
+   fréquentée) ; taille (6 à 15 px) selon les passages. Couche construite par
+   `territorial_layer` : `pdk.IconLayer` sur un atlas PNG unique
+   (`marker_atlas`, 4 formes × 3 paliers, dessiné avec Pillow) ; chaque arrêt
+   ne porte qu'une clé `icon_key` (« forme|couleur »). **pydeck convertit toute
+   chaîne d'argument de couche en expression JavaScript** : les constantes texte
+   (`size_units`, `icon_atlas`) sont passées entre guillemets simples
+   (`"'pixels'"`), sinon deck.gl reçoit une expression invalide (une unité de
+   taille invalide faisait retomber les icônes en unités « monde » : icônes de
+   plusieurs milliers de pixels, carte recouverte et navigateur saturé).
+   **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt (`st.pydeck_chart(on_select=…,
    selection_mode="single-object")`), par la liste de recherche, par le bloc
    « À surveiller » ou par une ligne du tableau des arrêts
    (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
