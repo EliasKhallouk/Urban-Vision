@@ -211,7 +211,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 19 fichiers, 302 tests pytest
+└── tests/                          # 19 fichiers, 306 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -329,7 +329,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 302 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 306 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -1435,7 +1435,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 302 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 306 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -1693,7 +1693,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 302, isolés (suite `pytest` complète : 302 passed), flux synthétiques
+- Tests : 306, isolés (suite `pytest` complète : 306 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1765,6 +1765,13 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026) :
    + sauvegarde périodique + VACUUM, avec tests associés.
 4. Activer un lint/type-check minimal (`ruff`, `pyright`) et une CI GitHub
    Actions exécutant `pytest` — aucun des deux n'existe.
+5. **Décider du traitement des courses supprimées dans le score** : la plupart
+   n'ont aucune observation et n'y pèsent pas (§23, point 9). Les intégrer
+   modifierait le score des lignes et celui des rapports ; la fiche ligne les
+   affiche en attendant.
+6. **Mesurer sur `ek-hub` le coût de `refresh_segments`** après le premier
+   déploiement de `agg_daily_segment` (durées journalisées dans `collect.log`,
+   §9.1 et §9.3) ; si un cycle dépasse ~30 s, espacer ce rafraîchissement.
 
 ---
 

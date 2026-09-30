@@ -260,3 +260,45 @@ class TestGroupDailyStopToRoute:
         assert json.loads(a["histogram"]) == {"10": 2, "20": 1, "300": 1, "400": 1}
         b = agg[agg["route_id"] == "B"].iloc[0]
         assert b["obs"] == 5
+
+class TestSelectionDesFiches:
+    @pytest.fixture(autouse=True)
+    def _etat_vierge(self):
+        import streamlit as st
+
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        yield
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+
+    def test_clic_sur_la_carte_ouvre_la_fiche_arret(self):
+        import streamlit as st
+
+        st.session_state["map_arrets"] = {"selection": {"indices": {"arrets": [3]},
+                                                        "objects": {"arrets": [{"stop_id": "s9", "stop_name": "Gare"}]}}}
+        app_mod._on_map_select()
+        assert st.session_state["stop_id"] == "s9"
+
+    def test_clic_dans_le_vide_ne_change_rien(self):
+        import streamlit as st
+
+        st.session_state["stop_id"] = "s1"
+        st.session_state["map_arrets"] = {"selection": {"indices": {}, "objects": {}}}
+        app_mod._on_map_select()
+        assert st.session_state["stop_id"] == "s1"
+
+    def test_ligne_de_tableau_selectionnee(self):
+        import streamlit as st
+
+        st.session_state["_ids"] = ["A", "B", "C"]
+        st.session_state["tbl"] = {"selection": {"rows": [1], "columns": []}}
+        app_mod._on_table_select("tbl", "_ids", app_mod.open_line)
+        assert st.session_state["line_id"] == "B"
+        assert st.session_state["sidebar_nav"] == app_mod.PAGE_LINE
+
+    def test_ouvrir_un_arret_bascule_sur_le_territoire(self):
+        import streamlit as st
+
+        app_mod.open_stop("s4")
+        assert (st.session_state["stop_id"], st.session_state["sidebar_nav"]) == ("s4", app_mod.PAGE_TERRITORY)
