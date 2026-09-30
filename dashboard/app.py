@@ -1053,6 +1053,8 @@ def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
 
 MARKER_SHAPES = ("circle", "square", "triangle", "diamond")
 MARKER_CELL = 48
+STOP_SIZE_METERS = (120.0, 240.0)
+STOP_SIZE_PIXELS = (8, 28)
 
 
 @lru_cache(maxsize=1)
@@ -1095,7 +1097,11 @@ def icon_key(route_type, score: float) -> str:
 
 
 def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
-    """Couche pydeck des arrêts (icônes de l'atlas, taille 6 à 15 px selon les passages).
+    """Couche pydeck des arrêts (icônes de l'atlas).
+
+    La taille est exprimée en mètres (STOP_SIZE_METERS, selon les passages) :
+    les marqueurs grandissent avec le zoom, bornés entre STOP_SIZE_PIXELS pixels
+    pour rester lisibles en vue réseau sans masquer les rues en vue rapprochée.
 
     pydeck convertit toute chaîne d'argument en expression JavaScript : les
     constantes texte (`size_units`, `icon_atlas`) sont donc passées entre
@@ -1104,7 +1110,8 @@ def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
     uri, mapping = marker_atlas()
     data = df.copy()
     data["icon"] = [icon_key(rt, v) for rt, v in zip(data["route_type"], data["score_fiabilite"])]
-    data["size"] = 6 + (data["observations"].clip(50, 400) - 50) / 350 * 9
+    low, high = STOP_SIZE_METERS
+    data["size"] = low + (data["observations"].clip(50, 400) - 50) / 350 * (high - low)
     return pdk.Layer(
         "IconLayer",
         data=data,
@@ -1114,7 +1121,9 @@ def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
         icon_mapping=mapping,
         get_icon="icon",
         get_size="size",
-        size_units="'pixels'",
+        size_units="'meters'",
+        size_min_pixels=STOP_SIZE_PIXELS[0],
+        size_max_pixels=STOP_SIZE_PIXELS[1],
         pickable=True,
     )
 
@@ -1521,7 +1530,8 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
 
     Couleur = palier du score de fiabilité de l'arrêt (Olive Leaf ≥ 80/100,
     Sunlit Clay 50–80, Copperwood < 50) ; forme = mode de la ligne principale
-    (● tram, ■ bus, ▲ ferry) ; taille = nombre de passages analysés.
+    (● tram, ■ bus, ▲ ferry) ; taille = nombre de passages analysés, qui suit
+    le zoom.
     """
     if df.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
@@ -2105,7 +2115,7 @@ def render_page_territory(c: PageContext) -> None:
     st.markdown("#### Carte des arrêts")
     st.markdown('<div class="section-note">Couleur : score de fiabilité de l’arrêt, toutes lignes '
                 'confondues. Forme : mode de la ligne principale (● tram, ■ bus, ▲ ferry). Taille : '
-                'nombre de passages analysés.</div>', unsafe_allow_html=True)
+                'nombre de passages analysés ; les marqueurs grossissent quand on zoome.</div>', unsafe_allow_html=True)
     render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
     labels = stop_labels(territorial_network)
     options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],

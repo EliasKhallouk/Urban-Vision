@@ -95,11 +95,20 @@ class TestCouleurs:
                            "score_fiabilite": [90.0], "observations": [400]})
         deck = json.loads(pdk.Deck(layers=[app_mod.territorial_layer(df)]).to_json())
         layer = deck["layers"][0]
-        assert layer["sizeUnits"] == "pixels"
+        assert layer["sizeUnits"] == "meters"
+        assert (layer["sizeMinPixels"], layer["sizeMaxPixels"]) == app_mod.STOP_SIZE_PIXELS
         assert layer["iconAtlas"].startswith("data:image/png;base64,")
         assert layer["getIcon"] == "@@=icon"
         assert layer["data"][0]["icon"] == "square|#606c38"
-        assert layer["data"][0]["size"] == 15.0
+        assert layer["data"][0]["size"] == app_mod.STOP_SIZE_METERS[1]
+
+    def test_taille_selon_les_passages(self):
+        df = pd.DataFrame({"stop_id": ["a", "b", "c"], "lon": [-0.57] * 3, "lat": [44.84] * 3,
+                           "route_type": [3] * 3, "score_fiabilite": [90.0] * 3,
+                           "observations": [10, 225, 5000]})
+        sizes = [row["size"] for row in app_mod.territorial_layer(df).data]
+        low, high = app_mod.STOP_SIZE_METERS
+        assert sizes == [low, (low + high) / 2, high]
 
     def test_score_tier_style(self):
         style = app_mod._score_tier_style(90.0)

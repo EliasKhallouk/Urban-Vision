@@ -211,7 +211,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 19 fichiers, 306 tests pytest
+└── tests/                          # 19 fichiers, 307 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -329,7 +329,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 306 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 307 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -806,13 +806,17 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du score de
    fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min − 2 ×
    arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la plus
-   fréquentée) ; taille (6 à 15 px) selon les passages. Couche construite par
+   fréquentée) ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m selon les
+   passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
+   (`STOP_SIZE_PIXELS`, props deck.gl `sizeMinPixels` / `sizeMaxPixels`) : 8 px
+   en vue réseau, une quinzaine de pixels en vue de quartier, 28 px au plus en
+   vue de rue. Couche construite par
    `territorial_layer` : `pdk.IconLayer` sur un atlas PNG unique
    (`marker_atlas`, 4 formes × 3 paliers, dessiné avec Pillow) ; chaque arrêt
    ne porte qu'une clé `icon_key` (« forme|couleur »). **pydeck convertit toute
    chaîne d'argument de couche en expression JavaScript** : les constantes texte
    (`size_units`, `icon_atlas`) sont passées entre guillemets simples
-   (`"'pixels'"`), sinon deck.gl reçoit une expression invalide (une unité de
+   (`"'meters'"`), sinon deck.gl reçoit une expression invalide (une unité de
    taille invalide faisait retomber les icônes en unités « monde » : icônes de
    plusieurs milliers de pixels, carte recouverte et navigateur saturé).
    **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt (`st.pydeck_chart(on_select=…,
@@ -1442,7 +1446,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 306 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 307 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -1700,7 +1704,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 306, isolés (suite `pytest` complète : 306 passed), flux synthétiques
+- Tests : 307, isolés (suite `pytest` complète : 307 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
