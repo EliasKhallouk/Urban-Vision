@@ -48,7 +48,7 @@ Modules are not a package: `dashboard/`, `reports/` and `src/scripts/` import ea
 
 ## Tests
 
-Tests never touch `data/urban_vision.db`: the `conn` fixture in `tests/conftest.py` builds a temp SQLite DB with the real schema via `db.init_db`, and `tests/gtfs_factory.py` generates synthetic protobuf feeds. After changing tests, re-run the suite and update the test count in both `docs/DOCUMENTATION_TECHNIQUE.md` and `README.md` (currently 223).
+Tests never touch `data/urban_vision.db`: the `conn` fixture in `tests/conftest.py` builds a temp SQLite DB with the real schema via `db.init_db`, and `tests/gtfs_factory.py` generates synthetic protobuf feeds. After changing tests, re-run the suite and update the test count in both `docs/DOCUMENTATION_TECHNIQUE.md` and `README.md`.
 
 ## Production
 

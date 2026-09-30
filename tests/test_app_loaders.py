@@ -273,6 +273,60 @@ class TestLoadCommuneStats:
         assert app_mod.load_commune_stats(conn, cutoff, since, end).empty
 
 
+class TestLoadTerritorial:
+    def _seed(self, conn):
+        import db as dbio
+
+        _seed_routes(conn)
+        conn.execute(
+            "INSERT INTO routes (route_id, route_short_name, route_type) VALUES ('T','A',0)"
+        )
+        conn.executemany(
+            "INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon) VALUES (?, ?, ?, ?)",
+            [("s1", "Mairie", 44.84, -0.57), ("s2", "Gare", 44.83, -0.56)],
+        )
+        conn.executescript(dbio.STOP_DIRECTION_DDL)
+        conn.execute(
+            "INSERT INTO stop_direction (route_id, stop_id, direction_id, terminus) "
+            "VALUES ('T', 's1', 0, 'Aéroport')"
+        )
+        conn.executemany(
+            """INSERT INTO agg_daily_stop
+               (date_service, route_id, stop_id, obs, sum_delay, cnt_le300, cnt_gt300,
+                cnt_lt60, skipped, eligible, histogram)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                ("2026-09-11", "T", "s1", 300, 0, 285, 15, 0, 15, 300, '{}'),
+                ("2026-09-11", "A", "s1", 100, 0, 75, 25, 0, 5, 100, '{}'),
+                ("2026-09-11", "A", "s2", 80, 0, 80, 0, 0, 0, 80, '{}'),
+            ],
+        )
+        conn.commit()
+
+    def test_score_de_l_arret_integre_les_arrets_sautes(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        df = app_mod.load_territorial(conn, cutoff, _epoch_local(2026, 9, 1), _epoch_local(2026, 9, 12))
+        s1 = df[df["stop_id"] == "s1"].iloc[0]
+        assert s1["observations"] == 400
+        assert s1["pct_a_l_heure"] == 90.0
+        assert s1["pct_arrets_sautes"] == 5.0
+        assert s1["score_fiabilite"] == 80.0
+        assert s1["lignes"] == "1, A"
+
+    def test_ligne_principale_donne_le_mode_et_la_direction(self, conn):
+        self._seed(conn)
+        cutoff = _epoch_local(2026, 9, 12)
+        df = app_mod.load_territorial(conn, cutoff, _epoch_local(2026, 9, 1), _epoch_local(2026, 9, 12))
+        s1 = df[df["stop_id"] == "s1"].iloc[0]
+        assert s1["route_id"] == "T"
+        assert int(s1["route_type"]) == 0
+        assert s1["direction"] == "vers Aéroport"
+        s2 = df[df["stop_id"] == "s2"].iloc[0]
+        assert int(s2["route_type"]) == 3
+        assert s2["score_fiabilite"] == 100.0
+
+
 class TestLoadPerturbations:
     def _seed(self, conn):
         _seed_routes(conn)

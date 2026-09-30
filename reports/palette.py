@@ -10,7 +10,10 @@ Palette (5 couleurs) :
 - Olive Leaf    #606c38 : positif (bonne performance).
 - Sunlit Clay   #DDA15E : moyen (performance intermédiaire).
 - Copperwood    #bc6c25 : négatif (performance dégradée).
-- Teal          #2A6F6F : couleur mode transport (bus).
+- Teal          #2A6F6F : couleur d'appoint des graphiques matplotlib des rapports.
+
+Modes de transport : la forme du marqueur dit le mode (tram ● cercle, bus ■
+carré, ferry ▲ triangle), la couleur reste celle du palier de score.
 
 Seuils (cohérents avec les légendes des graphiques) :
 - "score"    : positif >= 80/100, moyen 50-80, négatif < 50.
@@ -77,6 +80,7 @@ _KPI_KIND = {
     "retard": "retard",
     "retard_median": "retard",
     "skip_rate": "pourcent",
+    "retard_5min": "pourcent",
 }
 _ABS_KEYS = {"retard", "retard_median"}
 
@@ -117,3 +121,54 @@ def kpi_hex(metrics: dict, key: str) -> str:
 def kpi_latex(metrics: dict, key: str) -> str:
     """Nom LaTeX d'un KPI évaluatif (préambule des rapports)."""
     return LATEX[kpi_tier(metrics, key)]
+
+
+MODE_MARKERS = {0: "circle", 3: "square", 4: "triangle"}
+DEFAULT_MARKER = "diamond"
+MARKER_GLYPHS = {"circle": "●", "square": "■", "triangle": "▲", "diamond": "◆"}
+
+
+def mode_marker(route_type) -> str:
+    """Forme de marqueur d'un mode GTFS (la couleur reste celle du palier de score)."""
+    try:
+        return MODE_MARKERS.get(int(route_type), DEFAULT_MARKER)
+    except (TypeError, ValueError):
+        return DEFAULT_MARKER
+
+
+def mode_glyph(route_type) -> str:
+    """Glyphe texte de la forme du mode, pour les libellés et légendes."""
+    return MARKER_GLYPHS[mode_marker(route_type)]
+
+
+RISK_MEDIAN_S = 60.0
+RISK_PCT_GT300 = 15.0
+
+CRITICAL = "critique"
+FREQUENT_SHORT = "frequents_courts"
+RARE_LONG = "rares_longs"
+LOW = "faible"
+
+RISK_ZONE_LABELS = {
+    CRITICAL: "Zone critique",
+    FREQUENT_SHORT: "Retards fréquents mais courts",
+    RARE_LONG: "Retards rares mais longs",
+    LOW: "Risque faible",
+}
+
+
+def risk_zone(median_s: float, pct_gt300: float) -> str:
+    """Zone de la carte de risque (retard médian × part des passages > 5 min).
+
+    Seuils : retard médian au-delà du palier positif « retard » (60 s) et part
+    des passages > 5 min dans le palier négatif « pourcent » (15 %).
+    """
+    installed = abs(float(median_s)) >= RISK_MEDIAN_S
+    heavy = float(pct_gt300) >= RISK_PCT_GT300
+    if installed and heavy:
+        return CRITICAL
+    if installed:
+        return FREQUENT_SHORT
+    if heavy:
+        return RARE_LONG
+    return LOW

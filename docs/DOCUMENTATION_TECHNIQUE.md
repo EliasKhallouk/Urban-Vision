@@ -204,7 +204,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 17 fichiers, 223 tests pytest
+└── tests/                          # 17 fichiers, 237 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -322,7 +322,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 223 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 237 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -353,7 +353,7 @@ configurable via fichiers :
 [theme]
 base = "light"
 primaryColor = "#283618"
-backgroundColor = "#FEFAE0"
+backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#283618"
 font = "sans serif"
@@ -418,9 +418,9 @@ Couleurs
 | Olive Leaf | `#606c38` | positif |
 | Sunlit Clay | `#DDA15E` | moyen |
 | Copperwood | `#bc6c25` | négatif |
-| Cornsilk | `#FEFAE0` | fond de page |
-| White | `#FFFFFF` | — |
-| Teal | `#2A6F6F` | couleur du mode bus |
+| Cornsilk | `#FEFAE0` | accent ponctuel (pastille de navigation active, texte sur cellules colorées) — jamais une couleur de score |
+| White | `#FFFFFF` | fond de page (dashboard et rapports) |
+| Teal | `#2A6F6F` | couleur d'appoint des graphiques matplotlib des rapports (non utilisée par le dashboard) |
 
 Seuils (même valeur partout)
 
@@ -430,9 +430,29 @@ Seuils (même valeur partout)
 | `retard` (en valeur **absolue**) | ≤ 60 s | 60–180 s | > 180 s |
 | `pourcent` | ≤ 5 % | 5–15 % | > 15 % |
 
-Modes de transport au dashboard (`app.py:133-138`) : `{0: Tramway, 2: Rail,
-3: Bus, 4: Ferry, 5: Câble, 7: Funiculaire, 11: Trolleybus}` ; couleurs
-`{0: Copperwood (tram), 3: Teal (bus), 4: Black Forest (ferry)}`.
+Modes de transport au dashboard (`MODE_LABELS`, `app.py`) : `{0: Tramway, 2: Rail,
+3: Bus, 4: Ferry, 5: Câble, 7: Funiculaire, 11: Trolleybus}`. Un mode ne se
+code **jamais par la couleur** (réservée aux paliers) mais par la forme du
+marqueur : `palette.MODE_MARKERS = {0: circle (●), 3: square (■), 4: triangle (▲)}`,
+losange (◆) pour tout autre mode ; `mode_marker(route_type)` renvoie le symbole
+Highcharts, `mode_glyph(route_type)` le glyphe texte des légendes et libellés.
+Les séries par mode sans score (courbes temporelles) sont en Black Forest avec
+un style de trait propre au mode (`MODE_DASH` de `highcharts.py`).
+
+Zones de la carte de risque (`palette.risk_zone(median_s, pct_gt300)`, utilisée
+par le dashboard) :
+
+| Zone | Retard médian (valeur absolue) | Passages > 5 min |
+|---|---|---|
+| Risque faible | < 60 s | < 15 % |
+| Retards fréquents mais courts | ≥ 60 s | < 15 % |
+| Retards rares mais longs | < 60 s | ≥ 15 % |
+| Zone critique | ≥ 60 s | ≥ 15 % |
+
+Les seuils (`RISK_MEDIAN_S`, `RISK_PCT_GT300`) reprennent la borne haute du
+palier positif `retard` et la borne basse du palier négatif `pourcent`. Les
+rapports PDF affichent les mêmes libellés de zone, placés aux coins du
+graphique, sans seuil tracé.
 
 ---
 
@@ -724,10 +744,13 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
 
-1. **Vue territoriale** (`app.py:1519`) — carte pydeck
-   (`pdk.ScatterplotLayer`, fond « light ») des arrêts par commune, filtre
-   « Territoire » en haut à droite, tableau des arrêts (retard médian, passages,
-   direction…). En périmètre « Réseau complet », un bloc **Comparaison des
+1. **Vue territoriale** — carte pydeck (`pdk.IconLayer`, fond « light ») des
+   arrêts (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du
+   score de fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min
+   − 2 × arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la
+   plus fréquentée), via des icônes SVG `marker_icon(forme, couleur)` ; taille
+   (7 à 18 px) selon les passages. Filtre « Territoire » en haut à droite,
+   tableau des arrêts (direction, lignes, score, retards > 5 min, passages). En périmètre « Réseau complet », un bloc **Comparaison des
    communes** (loader `load_commune_stats`, agrégé depuis `agg_daily_stop`) :
    classement par score (même formule que les lignes : ponctualité ≤ 5 min
    pénalisée par les arrêts sautés), graphique `commune_ranking_chart` et
@@ -739,7 +762,8 @@ Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
    distribution des retards (11 classes), tableaux détaillés.
 3. **Modes de transport** (`1655`) — comparaison d'indicateurs par mode
    (ponctualité, > 5 min, en avance, arrêts sautés), profil horaire par mode,
-   évolution quotidienne par mode.
+   évolution quotidienne par mode. Chaque mode est identifié par son glyphe
+   (● ■ ▲) ; les valeurs sont colorées par palier.
 4. **Fiabilité par période** (`1703`) — fiabilité selon le créneau (jour de
    semaine × tranche horaire) : Matin 06–10, Journée 10–16, Pointe du soir
    16–20, Soirée & nuit 20–06 (lundi–vendredi) et Week-end (samedi + dimanche).
@@ -796,6 +820,15 @@ applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
 `delay_distribution_chart`, `collection_minutely_chart` (Stock), et
 `hourly_distribution_chart`. Les couleurs par palier sont calculées par
 `palette.hex(value, kind)` — cohérentes avec les rapports.
+
+Modes : `scatter_chart` (une série de bulles par mode, `marker.symbol` =
+`mode_marker`, couleur de chaque bulle = palier du score, seuils de
+`risk_zone` tracés en `plotLines`, zone indiquée dans l'infobulle) ;
+`mode_comparison_chart` et `period_mode_chart` (colonnes colorées par palier,
+glyphe du mode en étiquette de donnée) ; `mode_daily_chart` et
+`mode_hourly_chart` (courbes Black Forest, trait `MODE_DASH` et marqueur propres
+au mode, marqueurs colorés par palier `pourcent`). Les noms de séries portent le
+glyphe du mode (`mode_series_name`).
 
 Accessibilité : HTML rendu avec `<html lang="fr">`, module Highcharts
 `accessibility.js` chargé pour les graphiques non-Stock (Stock l'intègre de
@@ -1281,7 +1314,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 223 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 237 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1524,7 +1557,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 223, isolés (suite `pytest` complète : 223 passed), flux synthétiques
+- Tests : 237, isolés (suite `pytest` complète : 237 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1558,13 +1591,15 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Les trois incohérences de l'audit ont été corrigées le 14/09/2026 :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
 | I1 | `DB_PATH` de `gtfs_static.py` et `analyze.py` pointait vers `src/data/` (`parents[1]`) | `parents[2]` (aligné sur `collect.py`) + 2 tests de chemin ajoutés (`tests/test_gtfs_static.py`, `tests/test_analyze.py`) |
 | I3 | `src/sql/001_add_departure_time.sql` et `db.py` appliquaient la même `ALTER` | migration versionnée supprimée — `db.py` est l'unique mécanisme (PRAGMA + ALTER à l'import) |
 | I4 | Aide CLI `--compile` : « pdflatex » | texte d'aide = `xelatex/lualatex` (`generate_monthly_report.py`) |
+| I5 | Carte territoriale : la note annonçait « le score de la ligne principale » alors que la couleur valait la ponctualité ≤ 5 min de l'arrêt, sans les arrêts sautés | score de l'arrêt = ponctualité − 2 × arrêts sautés (même formule que les lignes), note et légende textuelle réécrites (§11.3) |
+| I6 | Charte : fond de page Cornsilk (`.streamlit/config.toml`, `.stApp`) alors que la charte impose un fond blanc ; modes codés par couleur (tram en Copperwood, couleur du palier négatif) ; seuils KPI codés en dur dans « Analyse d'une ligne » | fond blanc ; modes codés par forme (§6.4) ; KPI par `palette.kpi_tier` |
 
 ### 26.4 Dette documentaire
 
@@ -1574,6 +1609,9 @@ Les trois incohérences de l'audit ont été corrigées le 14/09/2026 :
 - Fichiers d'unité systemd et config nginx non versionnés → leurs contenus
   exacts sont désormais la trace consolidée (sections 14 et 15).
 - Dépôt sans CI ni lint configuré (pas de `ruff`, pas de `pyproject.toml`).
+- Streamlit 1.60 signale deux API dépréciées utilisées par le dashboard :
+  `st.components.v1.html` (rendu Highcharts, à remplacer par `st.iframe`) et
+  `use_container_width` (à remplacer par `width`).
 - Les modules se chargent par `sys.path` inséré au runtime
   (`reports/`, `src/scripts/`, `dashboard/`) sans packaging — fragile mais
   fonctionnel ; un regroupement en paquets installerables simplifierait les

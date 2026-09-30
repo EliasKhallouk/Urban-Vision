@@ -64,14 +64,28 @@ class TestMedianFromHistograms:
 
 
 class TestCouleurs:
-    def test_hex_rgb(self):
-        assert app_mod._hex_rgb("#283618") == (40, 54, 24)
-        assert app_mod._hex_rgb("#bc6c25") == (188, 108, 37)
+    @staticmethod
+    def _svg(icon):
+        import base64
+        return base64.b64decode(icon["url"].split(",", 1)[1]).decode("utf-8")
 
-    def test_score_rgb_suit_les_paliers(self):
-        assert app_mod._score_rgb(90.0) == (96, 108, 56)
-        assert app_mod._score_rgb(60.0) == (221, 161, 94)
-        assert app_mod._score_rgb(20.0) == (188, 108, 37)
+    def test_icone_forme_du_mode_et_couleur_du_palier(self):
+        icon = app_mod.marker_icon("square", "#bc6c25")
+        assert icon["url"].startswith("data:image/svg+xml;base64,")
+        assert (icon["width"], icon["height"]) == (24, 24)
+        svg = self._svg(icon)
+        assert "<rect" in svg
+        assert 'fill="#bc6c25"' in svg
+
+    def test_icone_forme_inconnue_retombe_sur_losange(self):
+        svg = self._svg(app_mod.marker_icon("hexagon", "#606c38"))
+        assert 'points="12,1 23,12 12,23 1,12"' in svg
+
+    def test_formes_distinctes_par_mode(self):
+        svgs = {m: self._svg(app_mod.marker_icon(m, "#606c38")) for m in ("circle", "square", "triangle")}
+        assert "<circle" in svgs["circle"]
+        assert "<rect" in svgs["square"]
+        assert "<polygon" in svgs["triangle"]
 
     def test_score_tier_style(self):
         style = app_mod._score_tier_style(90.0)

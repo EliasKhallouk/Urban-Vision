@@ -1,10 +1,11 @@
 """Tableau de bord de fiabilite des passages TBM.
 
-Charte graphique « Urban Vision » (fond clair) : Black Forest #283618 (marque,
+Charte graphique « Urban Vision » (fond blanc) : Black Forest #283618 (marque,
 titres), Olive Leaf #606c38 (texte secondaire), Sunlit Clay #DDA15E (bordures),
-Cornsilk #FEFAE0 (fond de page). Couleur de performance à 3 paliers, partagée
+Cornsilk #FEFAE0 (accent ponctuel). Couleur de performance à 3 paliers, partagée
 avec les rapports via reports/palette.py : Olive Leaf = positif, Sunlit Clay =
-moyen, Copperwood = négatif (pas de dégradé continu). Les observations les plus recentes
+moyen, Copperwood = négatif (pas de dégradé continu). Les modes de transport se
+distinguent par la forme du marqueur (tram ●, bus ■, ferry ▲), jamais par la couleur. Les observations les plus recentes
 restent dans le flux GTFS-RT : elles sont ecartees afin de ne mesurer que des
 passages pour lesquels le retard est stabilise.
 
@@ -22,6 +23,7 @@ import sqlite3
 import sys
 from collections import Counter
 from datetime import datetime, time as dtime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -68,9 +70,10 @@ from palette import (  # noqa: E402
     SUNLIT_CLAY,
     CORNSILK,
     WHITE,
-    TEAL,
     hex as palette_hex,
     kpi_tier as palette_kpi_tier,
+    mode_glyph,
+    mode_marker,
 )
 
 SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
@@ -82,12 +85,6 @@ CAUTION_TEXT = (
     "partie de la période — sans lien de causalité établi arrêt par arrêt avec "
     "les statistiques présentées."
 )
-
-def _hex_rgb(color: str) -> tuple[int, int, int]:
-    """Tuple (r, g, b) d'une couleur hexadécimale #RRGGBB (attendu par pydeck)."""
-    h = color.lstrip("#")
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
 
 def _score_tier_style(value: float) -> str:
     """Style de cellule selon le palier « score » des rapports (positif/moyen/négatif)."""
@@ -145,11 +142,6 @@ def render_tier_legend(title: str = "", left_label: str = "à surveiller",
 
 
 MODE_LABELS = {0: "Tramway", 3: "Bus", 4: "Ferry", 2: "Rail", 5: "Câble", 7: "Funiculaire", 11: "Trolleybus"}
-# Chaque mode a une couleur propre et fixe, distincte des couleurs portant un sens
-# de performance. Découverte dynamique via load_mode_stats (groupée sur route_type
-# réellement présent).
-# Teal bus (#2A6F6F) · Copperwood tram (#bc6c25) · Black Forest ferry (#283618).
-MODE_COLORS = {0: COPPERWOOD, 3: TEAL, 4: BLACK_FOREST}
 CAUSE_LABELS = {
     1: "Inconnu", 2: "Autre", 3: "Problème technique", 4: "Grève", 5: "Demande",
     6: "Météo", 7: "Maintenance", 8: "Travaux", 9: "Activité de police",
@@ -460,7 +452,7 @@ def inject_style() -> None:
     st.markdown(
         f"""
         <style>
-        .stApp {{ background: #FEFAE0; color: #283618; }}
+        .stApp {{ background: #FFFFFF; color: #283618; }}
         [data-testid="stHeader"] {{ background: transparent; }}
         .block-container {{ max-width: 1500px; padding-top: 2.1rem; padding-bottom: 3rem; }}
 
@@ -685,7 +677,6 @@ def make_ranking(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame
     ranking["pct_arrets_sautes"] = np.where(ranking["eligible"] > 0, ranking["skipped"] / ranking["eligible"] * 100, 0)
     ranking["score_fiabilite"] = (ranking["pct_a_l_heure"] - ranking["pct_arrets_sautes"] * 2).clip(0, 100)
     ranking["mode"] = ranking["route_type"].map(MODE_LABELS).fillna("Autre")
-    ranking["mode_color"] = ranking["route_type"].map(MODE_COLORS).fillna(OLIVE_LEAF_70)
     return ranking.sort_values(["score_fiabilite", "observations"], ascending=[True, False])
 
 
@@ -714,7 +705,6 @@ def load_mode_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
     g["retard_median_s"] = [_median_from_hists(hists[rt]) for rt in g["route_type"]]
     g["pct_arrets_sautes"] = np.where(g["eligible"] > 0, g["skipped"] / g["eligible"] * 100, 0)
     g["mode"] = g["route_type"].map(MODE_LABELS).fillna("Autre")
-    g["mode_color"] = g["route_type"].map(MODE_COLORS).fillna(OLIVE_LEAF_70)
     return g.sort_values("observations", ascending=False)
 
 
@@ -770,7 +760,7 @@ def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end
     moitiés sont retenues. Triée par évolution du score croissante (déclin d'abord).
     """
     empty = pd.DataFrame(columns=[
-        "ligne", "route_id", "mode", "mode_color", "observations", "observations_prev",
+        "ligne", "route_id", "route_type", "mode", "observations", "observations_prev",
         "pct_a_l_heure", "pct_a_l_heure_prev", "pct_arrets_sautes", "score_fiabilite",
         "score_fiabilite_prev", "delta_score", "delta_pct_a_l_heure",
     ])
@@ -786,7 +776,7 @@ def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end
     prev_rank = make_ranking(*prev_half)[["route_id", "observations", "pct_a_l_heure",
                                           "pct_arrets_sautes", "score_fiabilite"]]
     prev_rank = prev_rank.rename(columns={c: f"{c}_prev" for c in prev_rank.columns if c != "route_id"})
-    recent_rank = make_ranking(*recent)[["route_id", "ligne", "mode", "mode_color",
+    recent_rank = make_ranking(*recent)[["route_id", "ligne", "route_type", "mode",
                                          "observations", "pct_a_l_heure", "pct_arrets_sautes",
                                          "score_fiabilite"]]
     out = recent_rank.merge(prev_rank, on="route_id", how="inner")
@@ -865,7 +855,7 @@ def load_period_mode(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
     """Retards > 5 min par créneau et par mode, depuis les agrégats horaires."""
     core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
     if core.empty:
-        return pd.DataFrame(columns=["période", "route_type", "pct_retard_5min", "mode", "mode_color"])
+        return pd.DataFrame(columns=["période", "route_type", "pct_retard_5min", "mode"])
     core = core.copy()
     core["période"] = _period_labels(core["date_service"], core["heure"])
     m = (core.groupby(["période", "route_type"], sort=False)
@@ -880,8 +870,8 @@ def load_period_mode(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
 def load_period_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
                       periode: str | None = None, commune: str | None = None) -> pd.DataFrame:
     """Classement des lignes pour un créneau, depuis les agrégats horaires."""
-    empty = pd.DataFrame(columns=["ligne", "mode", "observations", "pct_a_l_heure",
-                                  "pct_retard_5min", "retard_moyen_s", "mode_color"])
+    empty = pd.DataFrame(columns=["ligne", "route_type", "mode", "observations", "pct_a_l_heure",
+                                  "pct_retard_5min", "retard_moyen_s"])
     core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
     if core.empty:
         return empty
@@ -906,8 +896,8 @@ def load_period_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int |
     lines["ligne"] = lines["route_id"].map(ligne_map).fillna(lines["route_id"])
     out = _attach_mode(lines)
     return out.sort_values(["pct_a_l_heure", "observations"], ascending=[True, False])[
-        ["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min",
-         "retard_moyen_s", "mode_color"]]
+        ["ligne", "route_type", "mode", "observations", "pct_a_l_heure", "pct_retard_5min",
+         "retard_moyen_s"]]
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -951,7 +941,6 @@ def load_distribution(_conn, cutoff_ts: int, since_ts: int | None, route_id: str
 def _attach_mode(df: pd.DataFrame) -> pd.DataFrame:
     if not df.empty:
         df["mode"] = df["route_type"].map(MODE_LABELS).fillna("Autre")
-        df["mode_color"] = df["route_type"].map(MODE_COLORS).fillna(OLIVE_LEAF_70)
     return df
 
 
@@ -1111,9 +1100,24 @@ def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
     ].sort_values("score_fiabilite", ascending=True).reset_index(drop=True)
 
 
-def _score_rgb(value: float) -> tuple[int, int, int]:
-    """Couleur (r, g, b) d'un score par seuil — pas de dégradé continu."""
-    return _hex_rgb(palette_hex(value, "score"))
+_MARKER_SVG = {
+    "circle": '<circle cx="12" cy="12" r="10"/>',
+    "square": '<rect x="3" y="3" width="18" height="18" rx="1.5"/>',
+    "triangle": '<polygon points="12,1.5 22.5,21.5 1.5,21.5"/>',
+    "diamond": '<polygon points="12,1 23,12 12,23 1,12"/>',
+}
+
+
+@lru_cache(maxsize=None)
+def marker_icon(marker: str, color: str) -> dict:
+    """Icône pydeck (SVG en data URI) : forme du mode, remplie de la couleur du palier."""
+    shape = _MARKER_SVG.get(marker, _MARKER_SVG["diamond"])
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+        f'<g fill="{color}" stroke="#FFFFFF" stroke-width="1.5">{shape}</g></svg>'
+    )
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return {"url": uri, "width": 24, "height": 24, "anchorY": 12}
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1121,16 +1125,18 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
                      commune: str | None = None) -> pd.DataFrame:
     """Arrêts du périmètre avec leur ligne principale et le score de fiabilité.
 
-    Agriège depuis agg_daily_stop (jamais la table brute) : pour chaque arrêt,
-    la ligne la plus fréquentée devient la ligne « principale » affichée.
+    Agrège depuis agg_daily_stop (jamais la table brute). Le score de l'arrêt
+    porte sur toutes ses lignes (ponctualité ≤ 5 min − 2 × arrêts sautés, comme
+    le classement des lignes) ; la ligne la plus fréquentée devient la ligne
+    « principale », dont le mode donne la forme du marqueur.
     """
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
     if commune is None:
         rows = _conn.execute(
             """
             SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
-                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne,
-                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs
+                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
+                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs, d.skipped, d.eligible
             FROM agg_daily_stop d
             JOIN stops s ON s.stop_id = d.stop_id
             JOIN routes r ON r.route_id = d.route_id
@@ -1141,8 +1147,8 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         rows = _conn.execute(
             """
             SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
-                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne,
-                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs
+                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
+                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs, d.skipped, d.eligible
             FROM agg_daily_stop d
             JOIN stops s ON s.stop_id = d.stop_id
             JOIN routes r ON r.route_id = d.route_id
@@ -1152,13 +1158,13 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         ).fetchall()
     if not rows:
         return pd.DataFrame(columns=[
-            "stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne",
-            "retard_median_s", "pct_retard_5min", "pct_a_l_heure", "observations",
+            "stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne", "route_type",
+            "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "observations",
             "score_fiabilite", "lignes",
         ])
     df = pd.DataFrame(rows, columns=[
-        "stop_id", "stop_name", "stop_lat", "stop_lon", "route_id", "ligne",
-        "sum_delay", "cnt_le300", "cnt_gt300", "obs",
+        "stop_id", "stop_name", "stop_lat", "stop_lon", "route_id", "ligne", "route_type",
+        "sum_delay", "cnt_le300", "cnt_gt300", "obs", "skipped", "eligible",
     ])
     directions = load_stop_directions(_conn)
     out = []
@@ -1169,8 +1175,9 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         obs = int(sub["obs"].sum())
         pct_le300 = sub["cnt_le300"].sum() / max(obs, 1) * 100
         pct_gt300 = sub["cnt_gt300"].sum() / max(obs, 1) * 100
-        pct_lt60 = 0.0  # non fourni dans cette vue ; le score passe par la ligne principale
-        score = pct_le300  # ponctualité ≤ 5 min ≈ score territorial
+        eligible = int(sub["eligible"].sum())
+        pct_skip = sub["skipped"].sum() / eligible * 100 if eligible else 0.0
+        score = min(100.0, max(0.0, pct_le300 - 2 * pct_skip))
         lignes = ", ".join(sorted(set(sub["ligne"].astype(str))))
         out.append({
             "stop_id": top["stop_id"],
@@ -1180,8 +1187,10 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
             "lon": float(top["stop_lon"]),
             "route_id": top["route_id"],
             "ligne": top["ligne"],
+            "route_type": top["route_type"],
             "pct_a_l_heure": round(pct_le300, 1),
             "pct_retard_5min": round(pct_gt300, 1),
+            "pct_arrets_sautes": round(pct_skip, 2),
             "observations": obs,
             "score_fiabilite": round(score, 1),
             "lignes": lignes,
@@ -1336,35 +1345,35 @@ def _territorial_score(df: pd.DataFrame) -> float:
 
 
 def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
-    """Carte géographique interactive (pydeck) des arrêts colorés par score.
+    """Carte géographique interactive (pydeck) des arrêts.
 
-    Couleur par seuil (identique aux rapports) : le score de fiabilité de la ligne
-    principale reçoit Olive Leaf (positif ≥ 80/100), Sunlit Clay (moyen) ou
-    Copperwood (négatif).
+    Couleur = palier du score de fiabilité de l'arrêt (Olive Leaf ≥ 80/100,
+    Sunlit Clay 50–80, Copperwood < 50) ; forme = mode de la ligne principale
+    (● tram, ■ bus, ▲ ferry) ; taille = nombre de passages analysés.
     """
     if df.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
     df = df.copy()
-    df["color"] = df["score_fiabilite"].apply(lambda v: list(_score_rgb(v)))
-    df["radius"] = df["observations"].clip(50, 400)
+    df["icon"] = [marker_icon(mode_marker(rt), palette_hex(v, "score"))
+                  for rt, v in zip(df["route_type"], df["score_fiabilite"])]
+    df["size"] = 7 + (df["observations"].clip(50, 400) - 50) / 350 * 11
     layer = pdk.Layer(
-        "ScatterplotLayer",
+        "IconLayer",
         data=df,
+        id="arrets",
         get_position=["lon", "lat"],
-        get_fill_color="color",
-        get_radius="radius",
+        get_icon="icon",
+        get_size="size",
+        size_units="pixels",
         pickable=True,
-        opacity=0.7,
-        stroked=True,
-        get_line_color=[255, 255, 255],
-        line_width_min_pixels=1,
     )
     tooltip = {
         "html": "<b>{stop_name}</b><br/>Direction : {direction}<br/>"
                 "Ligne(s) : {lignes}<br/>"
                 "Score de fiabilité : {score_fiabilite}/100<br/>"
                 "Retards &gt; 5 min : {pct_retard_5min} %<br/>"
+                "Arrêts sautés : {pct_arrets_sautes} %<br/>"
                 "Passages : {observations}",
         "style": {"backgroundColor": "#FFFFFF", "color": BLACK_FOREST},
     }
@@ -1382,7 +1391,8 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
         f"Lecture non visuelle de la carte : {len(df)} arrêts affichés, "
         f"score de fiabilité de {df['score_fiabilite'].min():.0f} à "
         f"{df['score_fiabilite'].max():.0f}/100 "
-        "(vert = bon, orange = moyen, rouge/brun = à surveiller)."
+        "(Olive Leaf ≥ 80 = bon, Sunlit Clay 50–80 = moyen, Copperwood < 50 = à surveiller ; "
+        "● tram, ■ bus, ▲ ferry)."
     )
 
 
@@ -1495,7 +1505,7 @@ def main() -> None:
 
         if commune is not None:
             st.title(f"La fiabilité de {commune}, en un coup d’œil.")
-            st.markdown('<div class="hero-subtitle">Les arrêts situés sur la commune, agréés par ligne desservie et par mode.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="hero-subtitle">Les arrêts situés sur la commune, agrégés par ligne desservie et par mode.</div>', unsafe_allow_html=True)
         else:
             st.title("La fiabilité du réseau, en un coup d’œil.")
             st.markdown('<div class="hero-subtitle">Des indicateurs lisibles pour identifier les lignes, les modes et les créneaux qui demandent une attention.</div>', unsafe_allow_html=True)
@@ -1518,11 +1528,11 @@ def main() -> None:
 
         if page == "Vue territoriale":
             st.markdown('<div class="section-note">La carte est le point de départ : '
-                        'chaque point est un arrêt, coloré selon le score de fiabilité de la ligne '
-                        'principale qui le dessert, selon les seuils des rapports '
-                        '(négatif = Copperwood, moyen = Sunlit Clay, positif = Olive Leaf). '
-                        'La taille du point correspond au nombre de passages analysés de l’arrêt '
-                        '(de 50 à 400) : plus un arrêt est fréquenté, plus le point est grand. '
+                        'chaque marqueur est un arrêt. Sa couleur donne le score de fiabilité de '
+                        'l’arrêt, toutes lignes confondues, selon les seuils des rapports '
+                        '(négatif = Copperwood, moyen = Sunlit Clay, positif = Olive Leaf) ; sa forme '
+                        'indique le mode de la ligne principale (● tram, ■ bus, ▲ ferry) ; sa taille '
+                        'croît avec le nombre de passages analysés. '
                         'Survolez un arrêt pour le détail.</div>', unsafe_allow_html=True)
             territorial = load_territorial(conn, cutoff, since_ts, end_ts, commune=commune)
             territorial_network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
@@ -1658,14 +1668,14 @@ def main() -> None:
                 st.warning("Aucune donnée exploitable par mode.")
                 return
             st.markdown("### Comparaison par mode de transport")
-            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa couleur propre (teal bus, cuivre tram, forêt ferry), sans jugement de valeur.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa forme (● tram, ■ bus, ▲ ferry) ; la couleur indique toujours le palier de performance.</div>', unsafe_allow_html=True)
             card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
             for r in mode_stats.itertuples():
                 ponct_color = palette_hex(r.pct_a_l_heure, "score")
                 card_html += (
                     f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
-                    f'border-left:4px solid {r.mode_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
-                    f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{r.mode}</div>'
+                    f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
+                    f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
                     f'<div style="font-size:1.9rem;font-weight:700;color:{ponct_color};line-height:1.15">{r.pct_a_l_heure:.1f} %</div>'
                     f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">{int(r.observations):,} passages · '
                     f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {r.pct_retard_5min:.1f} % &gt; 5 min</div>'
@@ -1763,13 +1773,16 @@ def main() -> None:
             selected_route_id = route_labels[selected_label] if selected_label in route_labels else default_line
             line = ranking[ranking.route_id == selected_route_id].iloc[0]
             marker = " ⚠" if selected_route_id in disturbed else ""
-            st.markdown(f"### Ligne {html.escape(str(line['ligne']))}{marker} · <span style='color:{line['mode_color']}'>{line['mode']}</span>", unsafe_allow_html=True)
+            st.markdown(f"### Ligne {html.escape(str(line['ligne']))}{marker} · {mode_glyph(line['route_type'])} {line['mode']}", unsafe_allow_html=True)
             if selected_route_id in disturbed:
                 st.warning(CAUTION_TEXT)
             render_kpis([
-                ("Score de fiabilité", f"{line.score_fiabilite:.1f} / 100", None, "good" if line.score_fiabilite >= 80 else "bad"),
-                ("Retard médian", format_seconds(line.retard_median_s, signed=True), None, "good" if line.retard_median_s <= 60 else "bad"),
-                ("Passages > 5 min", f"{line.pct_retard_5min:.1f} %", None, "good" if line.pct_retard_5min <= 40 else "bad"),
+                ("Score de fiabilité", f"{line.score_fiabilite:.1f} / 100", None,
+                 palette_kpi_tier({"fiability": line.score_fiabilite}, "fiability")),
+                ("Retard médian", format_seconds(line.retard_median_s, signed=True), None,
+                 palette_kpi_tier({"retard_median": line.retard_median_s}, "retard_median")),
+                ("Passages > 5 min", f"{line.pct_retard_5min:.1f} %", None,
+                 palette_kpi_tier({"retard_5min": line.pct_retard_5min}, "retard_5min")),
                 ("En avance > 1 min", f"{line.pct_avance_1min:.1f} %", None, "neutral"),
             ])
             timeline = load_line_timeline(conn, cutoff, since_ts, selected_route_id, end_ts, commune=commune)
@@ -1978,9 +1991,9 @@ def main() -> None:
             st.markdown("### Ce que mesure ce tableau de bord")
             st.markdown("Les données viennent des flux GTFS-RT **TripUpdates** TBM. Une observation est considérée stabilisée après 20 minutes hors du flux temps réel ; cela évite d'interpréter comme final un retard qui peut encore évoluer.")
             c1, c2, c3 = st.columns(3)
-            c1.markdown("**Ponctualité**  \n+Un passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
-            c2.markdown("**Arrêts sautés**  \n+Les événements `SKIPPED` sont suivis à part : ils ne gonflent pas artificiellement le retard moyen, mais pénalisent le score de fiabilité.")
-            c3.markdown(f"**Seuil d'échantillon**  \n+Une ligne n'apparaît dans les classements et graphiques que si elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
+            c1.markdown("**Ponctualité**  \nUn passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
+            c2.markdown("**Arrêts sautés**  \nLes événements `SKIPPED` sont suivis à part : ils ne gonflent pas artificiellement le retard moyen, mais pénalisent le score de fiabilité.")
+            c3.markdown(f"**Seuil d'échantillon**  \nUne ligne n'apparaît dans les classements et graphiques que si elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
             st.markdown(
                 f"<div class='section-note'><b>Pourquoi un tram peut-il avoir des arrêts sautés ?</b> "
                 f"Un événement <code>SKIPPED</code> signifie que le véhicule ne dessert pas un arrêt alors "

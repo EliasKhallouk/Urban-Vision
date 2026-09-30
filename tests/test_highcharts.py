@@ -48,7 +48,7 @@ class TestScatterChart:
         return pd.DataFrame(
             {
                 "mode": ["Bus", "Bus", "Tramway"],
-                "mode_color": ["#2A6F6F", "#2A6F6F", "#bc6c25"],
+                "route_type": [3, 3, 0],
                 "retard_median_s": [100.0, 50.0, 90.0],
                 "pct_retard_5min": [10.0, 5.0, 8.0],
                 "observations": [100, 200, 300],
@@ -57,17 +57,32 @@ class TestScatterChart:
             }
         )
 
-    def test_serie_par_mode_avec_couleur_dediee(self):
+    def test_serie_par_mode_forme_dediee(self):
         config = hc.scatter_chart(self._df())
         assert len(config["series"]) == 2
-        bus = next(s for s in config["series"] if s["name"] == "Bus")
-        assert bus["color"] == "#2A6F6F"
+        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        assert bus["marker"]["symbol"] == "square"
         assert len(bus["data"]) == 2
         assert bus["data"][0]["score"] == 70.0
         assert bus["data"][0]["z"] == 100
-        tram = next(s for s in config["series"] if s["name"] == "Tramway")
+        tram = next(s for s in config["series"] if s["name"] == "● Tramway")
+        assert tram["marker"]["symbol"] == "circle"
         assert tram["data"][0]["name"] == "M1"
         _assert_json_serializable(config)
+
+    def test_couleur_du_point_par_palier_de_score(self):
+        config = hc.scatter_chart(self._df())
+        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        assert bus["data"][0]["color"] == palette_hex(70.0, "score")
+        assert bus["data"][1]["color"] == palette_hex(80.0, "score")
+
+    def test_zone_de_risque_et_seuils_traces(self):
+        config = hc.scatter_chart(self._df())
+        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        assert bus["data"][0]["zone"] == "Retards fréquents mais courts"
+        assert bus["data"][1]["zone"] == "Risque faible"
+        assert config["xAxis"]["plotLines"][0]["value"] == 60.0
+        assert config["yAxis"]["plotLines"][0]["value"] == 15.0
 
 
 class TestSerieTemporelles:
@@ -120,7 +135,6 @@ class TestModeCharts:
             {
                 "route_type": [3, 0],
                 "mode": ["Bus", "Tramway"],
-                "mode_color": ["#2A6F6F", "#bc6c25"],
                 "pct_a_l_heure": [90.0, 85.0],
                 "pct_retard_5min": [5.0, 8.0],
                 "pct_avance_1min": [1.0, 2.0],
@@ -132,14 +146,16 @@ class TestModeCharts:
             "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min", "Arrêts sautés"
         ]
         bus = config["series"][0]
-        assert bus["name"] == "Bus"
-        assert bus["data"] == [90.0, 5.0, 1.0, 0.5]
+        assert bus["name"] == "■ Bus"
+        assert [d["y"] for d in bus["data"]] == [90.0, 5.0, 1.0, 0.5]
+        assert bus["data"][0]["color"] == palette_hex(90.0, "score")
+        assert bus["data"][1]["color"] == palette_hex(5.0, "pourcent")
+        assert bus["dataLabels"]["format"] == "■"
 
     def _mode_daily_df(self):
         return pd.DataFrame(
             {
                 "mode": ["Bus", "Bus", "Tramway"],
-                "mode_color": ["#2A6F6F", "#2A6F6F", "#bc6c25"],
                 "route_type": [3, 3, 0],
                 "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-01"]),
                 "pct_retard_5min": [6.0, 7.0, 2.0],
@@ -149,23 +165,47 @@ class TestModeCharts:
     def test_mode_daily_chart(self):
         config = hc.mode_daily_chart(self._mode_daily_df())
         names = [s["name"] for s in config["series"]]
-        assert names == ["Bus", "Tramway"]
-        bus = config["series"][0]
-        assert bus["color"] == "#2A6F6F"
+        assert names == ["■ Bus", "● Tramway"]
+        bus, tram = config["series"]
+        assert bus["color"] == BLACK_FOREST
+        assert bus["marker"]["symbol"] == "square"
+        assert tram["marker"]["symbol"] == "circle"
+        assert bus["dashStyle"] != tram["dashStyle"]
         assert len(bus["data"]) == 2
+        assert bus["data"][0]["color"] == palette_hex(6.0, "pourcent")
 
     def test_mode_hourly_chart_marque_les_trous(self):
         df = pd.DataFrame(
             {
                 "mode": ["Bus"],
-                "mode_color": ["#2A6F6F"],
                 "route_type": [3],
                 "heure": [8],
                 "pct_retard_5min": [10.0],
             }
         )
         config = hc.mode_hourly_chart(df)
-        assert len(config["series"][0]["data"]) == 24
+        data = config["series"][0]["data"]
+        assert len(data) == 24
+        assert data[8] == {"y": 10.0, "color": palette_hex(10.0, "pourcent")}
+        assert data[0] == {"y": None}
+
+    def test_period_mode_chart_glyphe_et_palier(self):
+        df = pd.DataFrame(
+            {
+                "période": ["Matin", "Matin", "Journée"],
+                "route_type": [3, 0, 3],
+                "mode": ["Bus", "Tramway", "Bus"],
+                "pct_retard_5min": [20.0, 3.0, 8.0],
+            }
+        )
+        config = hc.period_mode_chart(df)
+        assert config["xAxis"]["categories"] == ["Matin", "Journée"]
+        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        assert bus["data"][0] == {"y": 20.0, "color": palette_hex(20.0, "pourcent")}
+        assert bus["dataLabels"]["format"] == "■"
+        tram = next(s for s in config["series"] if s["name"] == "● Tramway")
+        assert tram["data"][1] == {"y": None}
+        _assert_json_serializable(config)
 
 
 class TestDistribution:

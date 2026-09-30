@@ -6,8 +6,12 @@ via reports/palette.py (source unique de vérité) :
 - Olive Leaf (#606c38) : palier positif (bonne performance).
 - Sunlit Clay (#DDA15E) : palier moyen (performance intermédiaire).
 - Copperwood (#bc6c25) : palier négatif (performance dégradée).
-- Cornsilk (#FEFAE0) : fond de page.
+- Blanc : fond des graphiques et de la page.
 - Olive Leaf (#606c38) : texte secondaire (opacité 70 %).
+
+Modes de transport : la forme du marqueur (tram ● cercle, bus ■ carré, ferry ▲
+triangle) et le style de trait les distinguent ; la couleur reste réservée aux
+paliers de performance.
 """
 
 import json
@@ -22,18 +26,58 @@ import pandas as pd
 _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
-from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, CORNSILK, WHITE, TEAL, hex as palette_hex  # noqa: E402
+from palette import (  # noqa: E402
+    BLACK_FOREST,
+    COPPERWOOD,
+    OLIVE_LEAF,
+    RISK_MEDIAN_S,
+    RISK_PCT_GT300,
+    RISK_ZONE_LABELS,
+    SUNLIT_CLAY,
+    WHITE,
+    hex as palette_hex,
+    mode_glyph,
+    mode_marker,
+    risk_zone,
+)
 
 # Variantes dérivées (opacités de la charte) pour les bordures et textes secondaires.
 SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
 SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
 OLIVE_LEAF_70 = "rgba(96, 108, 56, 0.70)"
 
-# Chaque mode a une couleur propre et fixe. Le ferry est pointillé (MODE_DASH)
-# pour se distinguer même en cas de couleurs proches.
-# Teal bus (#2A6F6F) · Copperwood tram (#bc6c25) · Black Forest ferry (#283618).
-MODE_COLORS = {0: COPPERWOOD, 3: TEAL, 4: BLACK_FOREST}
-MODE_DASH = {0: "Solid", 3: "Solid", 4: "Dot"}
+MODE_DASH = {0: "Solid", 3: "ShortDash", 4: "Dot"}
+
+
+def _route_type(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def mode_series_name(route_type, mode: str) -> str:
+    return f"{mode_glyph(route_type)} {mode}"
+
+
+def _glyph_labels(route_type) -> dict:
+    return {
+        "enabled": True,
+        "format": mode_glyph(route_type),
+        "style": {"color": BLACK_FOREST, "fontSize": "11px", "textOutline": "none", "fontWeight": "400"},
+    }
+
+
+def _mode_line_series(route_type, mode: str, data: list) -> dict:
+    return {
+        "name": mode_series_name(route_type, mode),
+        "data": data,
+        "color": BLACK_FOREST,
+        "dashStyle": MODE_DASH.get(_route_type(route_type), "LongDash"),
+        "lineWidth": 2,
+        "marker": {"enabled": True, "symbol": mode_marker(route_type), "radius": 4,
+                   "lineColor": BLACK_FOREST, "lineWidth": 1},
+    }
 
 LIGHT_THEME = {
     "chart": {
@@ -145,29 +189,50 @@ def commune_ranking_chart(df: pd.DataFrame) -> dict:
 
 
 def scatter_chart(df: pd.DataFrame) -> dict:
-    """Carte de risque : retard médian (x) vs retards > 5 min (y), coloré par moyen de transport."""
-    series_data: dict[str, dict] = {}
-    for _, r in df.iterrows():
-        mode = r.get("mode", "Autre")
-        if mode not in series_data:
-            series_data[mode] = {"color": r.get("mode_color", BLACK_FOREST), "data": []}
-        series_data[mode]["data"].append({
-            "x": round(r["retard_median_s"], 1),
-            "y": round(r["pct_retard_5min"], 1),
-            "z": max(r["observations"], 1),
-            "name": r["ligne"],
-            "score": round(r["score_fiabilite"], 1),
+    """Carte de risque : retard médian (x) × retards > 5 min (y).
+
+    Couleur = palier du score de fiabilité, forme = mode. Les deux seuils de
+    `palette.risk_zone` sont tracés et chaque point porte sa zone.
+    """
+    series = []
+    work = df.assign(_rt=[_route_type(v) for v in df["route_type"]]) if "route_type" in df.columns \
+        else df.assign(_rt=-1)
+    for rt, sub in work.groupby("_rt", sort=False):
+        data = []
+        for _, r in sub.iterrows():
+            score = round(float(r["score_fiabilite"]), 1)
+            data.append({
+                "x": round(r["retard_median_s"], 1),
+                "y": round(r["pct_retard_5min"], 1),
+                "z": max(r["observations"], 1),
+                "name": r["ligne"],
+                "score": score,
+                "zone": RISK_ZONE_LABELS[risk_zone(r["retard_median_s"], r["pct_retard_5min"])],
+                "color": palette_hex(score, "score"),
+            })
+        series.append({
+            "type": "bubble",
+            "name": mode_series_name(rt, sub["mode"].iloc[0] if "mode" in sub.columns else "Autre"),
+            "data": data,
+            "color": BLACK_FOREST,
+            "marker": {"symbol": mode_marker(rt), "lineColor": WHITE, "lineWidth": 1},
+            "tooltip": {"pointFormat": "<b>{point.name}</b> ({point.series.name})<br/>{point.zone}<br/>"
+                                       "Retard médian : {point.x:.0f} s<br/>&gt; 5 min : {point.y:.1f} %<br/>"
+                                       "Score : {point.score}/100<br/>Passages : {point.z:,}"},
         })
-    series = [{"type": "bubble", "name": name, "data": d["data"], "color": d["color"],
-               "tooltip": {"pointFormat": "<b>{point.name}</b> ({point.series.name})<br/>Retard médian : {point.x:.0f} s<br/>&gt; 5 min : {point.y:.1f} %<br/>Score : {point.score}/100<br/>Passages : {point.z:,}"}}
-              for name, d in series_data.items() if d["data"]]
+    threshold_line = {"color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1, "zIndex": 3}
     return {
         "chart": {"type": "bubble", "height": 390},
         "title": {"text": None},
-        "xAxis": {"title": {"text": "Retard médian (secondes)"}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}},
+        "xAxis": {"title": {"text": "Retard médian (secondes)"},
+                  "plotLines": [dict(threshold_line, value=RISK_MEDIAN_S,
+                                     label={"text": f"{RISK_MEDIAN_S:.0f} s", "style": {"color": OLIVE_LEAF_70}})]},
+        "yAxis": {"title": {"text": "Retards > 5 min (%)"},
+                  "plotLines": [dict(threshold_line, value=RISK_PCT_GT300,
+                                     label={"text": f"{RISK_PCT_GT300:.0f} %", "align": "right",
+                                            "style": {"color": OLIVE_LEAF_70}})]},
         "series": series,
-        "plotOptions": {"bubble": {"minSize": 10, "maxSize": 60, "opacity": 0.8}},
+        "plotOptions": {"bubble": {"minSize": 10, "maxSize": 60, "opacity": 0.85}},
         "legend": {"enabled": True, "verticalAlign": "bottom", "align": "center"},
     }
 
@@ -212,11 +277,13 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
                ("pct_retard_5min", "Retards > 5 min", False),
                ("pct_avance_1min", "En avance > 1 min", False),
                ("pct_arrets_sautes", "Arrêts sautés", False)]
+    kinds = {"pct_a_l_heure": "score", "pct_retard_5min": "pourcent",
+             "pct_avance_1min": "pourcent", "pct_arrets_sautes": "pourcent"}
     series = []
     for _, r in mode_stats.iterrows():
-        color = r.get("mode_color", MODE_COLORS.get(int(r["route_type"]), BLACK_FOREST))
-        data = [round(r[m], 1) for m, _, _ in metrics]
-        series.append({"name": r["mode"], "color": color, "data": data})
+        data = [{"y": round(r[m], 1), "color": palette_hex(round(r[m], 1), kinds[m])} for m, _, _ in metrics]
+        series.append({"name": mode_series_name(r["route_type"], r["mode"]), "color": BLACK_FOREST,
+                       "data": data, "dataLabels": _glyph_labels(r["route_type"])})
     return {
         "chart": {"type": "column", "height": 330},
         "title": {"text": None},
@@ -231,10 +298,10 @@ def mode_daily_chart(df: pd.DataFrame) -> dict:
     series = []
     for mode, sub in df.groupby("mode"):
         sub = sub.sort_values("date_service")
-        data = [[int(pd.Timestamp(ts).timestamp() * 1000), round(v, 1)] for ts, v in zip(sub["date_service"], sub["pct_retard_5min"])]
-        dash = MODE_DASH.get(sub["route_type"].iloc[0], "Solid")
-        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0], "dashStyle": dash, "lineWidth": 2,
-                       "marker": {"enabled": False, "states": {"hover": {"enabled": True}}}})
+        data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(v, 1),
+                 "color": palette_hex(round(v, 1), "pourcent")}
+                for ts, v in zip(sub["date_service"], sub["pct_retard_5min"])]
+        series.append(_mode_line_series(sub["route_type"].iloc[0], mode, data))
     return {
         "chart": {"type": "line", "height": 300},
         "title": {"text": None},
@@ -248,16 +315,15 @@ def mode_hourly_chart(df: pd.DataFrame) -> dict:
     series = []
     for mode, sub in df.groupby("mode"):
         hm = {int(r["heure"]): round(r["pct_retard_5min"], 1) for _, r in sub.iterrows()}
-        data = [{"y": hm.get(h, 0), "color": sub["mode_color"].iloc[0] if h in hm else SUNLIT_CLAY} for h in range(24)]
-        dash = MODE_DASH.get(sub["route_type"].iloc[0], "Solid")
-        series.append({"name": mode, "data": data, "color": sub["mode_color"].iloc[0], "dashStyle": dash})
+        data = [{"y": hm[h], "color": palette_hex(hm[h], "pourcent")} if h in hm else {"y": None}
+                for h in range(24)]
+        series.append(_mode_line_series(sub["route_type"].iloc[0], mode, data))
     return {
-        "chart": {"type": "column", "height": 330},
+        "chart": {"type": "line", "height": 330},
         "title": {"text": None},
         "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": series,
-        "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.1, "pointPadding": 0.05}},
     }
 
 
@@ -281,9 +347,13 @@ def period_mode_chart(df: pd.DataFrame) -> dict:
     series = []
     for mode, sub in df.groupby("mode", sort=False):
         pa = sub.set_index("période").reindex(categories)
-        data = [round(float(r["pct_retard_5min"]), 1) if pd.notna(r["pct_retard_5min"]) else 0
+        route_type = sub["route_type"].iloc[0]
+        data = [{"y": round(float(r["pct_retard_5min"]), 1),
+                 "color": palette_hex(round(float(r["pct_retard_5min"]), 1), "pourcent")}
+                if pd.notna(r["pct_retard_5min"]) else {"y": None}
                 for _, r in pa.iterrows()]
-        series.append({"name": mode, "data": data, "color": pa["mode_color"].iloc[0]})
+        series.append({"name": mode_series_name(route_type, mode), "data": data, "color": BLACK_FOREST,
+                       "dataLabels": _glyph_labels(route_type)})
     return {
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},

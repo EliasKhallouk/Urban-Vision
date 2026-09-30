@@ -3,7 +3,12 @@
 import pytest
 
 from palette import (
+    CRITICAL,
     COPPERWOOD,
+    FREQUENT_SHORT,
+    LOW,
+    RARE_LONG,
+    RISK_ZONE_LABELS,
     HEX,
     LATEX,
     MEDIUM,
@@ -16,6 +21,9 @@ from palette import (
     kpi_latex,
     kpi_tier,
     latex as palette_latex,
+    mode_glyph,
+    mode_marker,
+    risk_zone,
     tier,
 )
 
@@ -83,3 +91,43 @@ class TestKpi:
     def test_kpi_hex_et_latex_deleguent(self):
         assert kpi_hex({"fiability": 90.0}, "fiability") == OLIVE_LEAF
         assert kpi_latex({"skip_rate": 30.0}, "skip_rate") == "alert"
+    def test_kpi_part_des_retards_de_plus_de_5_min(self):
+        assert kpi_tier({"retard_5min": 4.0}, "retard_5min") == POSITIVE
+        assert kpi_tier({"retard_5min": 10.0}, "retard_5min") == MEDIUM
+        assert kpi_tier({"retard_5min": 40.0}, "retard_5min") == NEGATIVE
+
+
+class TestModes:
+    def test_forme_par_mode(self):
+        assert mode_marker(0) == "circle"
+        assert mode_marker(3) == "square"
+        assert mode_marker(4) == "triangle"
+
+    def test_mode_inconnu_ou_absent(self):
+        assert mode_marker(7) == "diamond"
+        assert mode_marker(None) == "diamond"
+        assert mode_marker("3") == "square"
+
+    def test_glyphes(self):
+        assert [mode_glyph(rt) for rt in (0, 3, 4, 11)] == ["●", "■", "▲", "◆"]
+
+
+class TestZonesDeRisque:
+    def test_quatre_zones(self):
+        assert risk_zone(30.0, 5.0) == LOW
+        assert risk_zone(120.0, 5.0) == FREQUENT_SHORT
+        assert risk_zone(30.0, 25.0) == RARE_LONG
+        assert risk_zone(120.0, 25.0) == CRITICAL
+
+    def test_seuils_inclus(self):
+        assert risk_zone(60.0, 0.0) == FREQUENT_SHORT
+        assert risk_zone(0.0, 15.0) == RARE_LONG
+
+    def test_retard_median_en_valeur_absolue(self):
+        assert risk_zone(-90.0, 0.0) == FREQUENT_SHORT
+
+    def test_libelles_des_rapports(self):
+        assert set(RISK_ZONE_LABELS.values()) == {
+            "Zone critique", "Retards fréquents mais courts",
+            "Retards rares mais longs", "Risque faible",
+        }
