@@ -62,6 +62,7 @@ from highcharts import (
     collection_minutely_chart,
     hourly_distribution_chart,
     line_profile_chart,
+    slot_profile_chart,
     skip_profile_chart,
     stop_lines_chart,
     risk_by_label_chart,
@@ -109,6 +110,13 @@ CAUTION_TEXT = (
     "partie de la période — sans lien de causalité établi arrêt par arrêt avec "
     "les statistiques présentées."
 )
+
+def fmt_int(value) -> str:
+    """Entier avec séparateur de milliers à la française (espace)."""
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{float(value):,.0f}".replace(",", " ")
+
 
 def _score_tier_style(value: float) -> str:
     """Style de cellule selon le palier « score » des rapports (positif/moyen/négatif)."""
@@ -456,8 +464,16 @@ def inject_style() -> None:
         .hints {{ border: 1px dashed rgba(221, 161, 94, .7); border-radius: 8px; padding: .7rem 1rem; color: #283618; margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
         .hint-note {{ color: rgba(96, 108, 56, .70); font-size: .8rem; }}
+        .fiche-title, .carte-anchor {{ scroll-margin-top: 1.2rem; }}
+        .sibling-label {{ color: rgba(96, 108, 56, .70); font-size: .82rem; font-weight: 600; margin-bottom: -.3rem; }}
         .fiche-title {{ color: #283618; font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; margin-top: 1.4rem; padding-top: 1rem; border-top: 2px solid #283618; }}
         .fiche-sub {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin: .2rem 0 .9rem; }}
+        .wh-wrap {{ overflow-x: auto; margin: .2rem 0 .3rem; }}
+        .wh-grid {{ border-collapse: separate; border-spacing: 2px; font-size: 11px; }}
+        .wh-grid th {{ color: rgba(96, 108, 56, .70); font-weight: 600; padding: 0 3px; text-align: center; white-space: nowrap; }}
+        .wh-grid td {{ min-width: 26px; height: 22px; text-align: center; border-radius: 3px; font-weight: 600; cursor: default; }}
+        .wh-grid td.wh-empty {{ background: #FFFFFF; border: 1px dashed rgba(221, 161, 94, .35); }}
+        .wh-grid td.wh-total {{ box-shadow: inset 0 0 0 1px rgba(40, 54, 24, .45); }}
         .watch-title {{ color: #283618; font-size: 1.05rem; font-weight: 700; margin-top: .3rem; line-height: 1.25; }}
         .zone-badge {{ display: inline-block; background: #FEFAE0; border: 1px solid #283618; border-radius: 999px; padding: .3rem .9rem; font-weight: 700; color: #283618; }}
         .stTabs [data-baseweb="tab-list"] {{ gap: 1.3rem; border-bottom: 1px solid rgba(221, 161, 94, .35); }}
@@ -1096,8 +1112,118 @@ def icon_key(route_type, score: float) -> str:
     return f"{mode_marker(route_type)}|{palette_hex(score, 'score')}"
 
 
+GROUP_RADIUS_M = 150.0
+
+
+def group_stops(df: pd.DataFrame) -> pd.DataFrame:
+    """Regroupe les quais d'un même arrêt : même nom, même mode, à moins de GROUP_RADIUS_M.
+
+    Les deux sens d'un arrêt ont presque la même position : sur la carte, l'un
+    masquerait l'autre. Une ligne par groupe, portée par le sens le moins fiable
+    (couleur du marqueur, fiche ouverte au clic) : position moyenne, passages
+    cumulés, part des passages > 5 min de l'ensemble, lignes réunies, `n_sens`,
+    `members` (stop_id du groupe) et `detail` (score de chaque sens, infobulle).
+    """
+    if df.empty:
+        return df.assign(n_sens=pd.Series(dtype=int), members=pd.Series(dtype=object),
+                         detail=pd.Series(dtype=str))
+    d = df.reset_index(drop=True)
+    lat, lon = d["lat"].to_numpy(dtype=float), d["lon"].to_numpy(dtype=float)
+    coslat = math.cos(math.radians(float(lat.mean())))
+    parent = np.arange(len(d))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    modes = [mode_marker(rt) for rt in d["route_type"]]
+    for idx in d.groupby([d["stop_name"], pd.Series(modes)]).indices.values():
+        if len(idx) < 2:
+            continue
+        for a_pos, a in enumerate(idx):
+            for b in idx[a_pos + 1:]:
+                dist = math.hypot((lat[a] - lat[b]) * 111_320, (lon[a] - lon[b]) * 111_320 * coslat)
+                if dist <= GROUP_RADIUS_M:
+                    parent[find(a)] = find(b)
+    d["_group"] = [find(i) for i in range(len(d))]
+    d["_late"] = d["observations"] * d["pct_retard_5min"] / 100
+    d["_detail"] = [f"{html.escape(str(direction) or 'sens unique')} : {score:.0f}/100 · {pct:.0f} % &gt; 5 min"
+                    for direction, score, pct in zip(d["direction"], d["score_fiabilite"], d["pct_retard_5min"])]
+    d = d.sort_values(["_group", "score_fiabilite"], kind="stable")
+    grouped = d.groupby("_group", sort=False)
+    out = grouped.head(1).set_index("_group")
+    agg = grouped.agg(lat=("lat", "mean"), lon=("lon", "mean"), observations=("observations", "sum"),
+                      _late=("_late", "sum"), n_sens=("stop_id", "size"), members=("stop_id", list),
+                      detail=("_detail", "<br/>".join), lignes=("lignes", lambda v: ", ".join(
+                          sorted({x for item in v for x in str(item).split(", ") if x}))))
+    out = out.drop(columns=["lat", "lon", "observations", "lignes", "_late", "_detail"]).join(agg)
+    out["pct_retard_5min"] = (out["_late"] / out["observations"].where(out["observations"] > 0) * 100).round(1).fillna(0.0)
+    return out.drop(columns="_late").reset_index(drop=True)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def grouped_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                        commune: str | None = None) -> pd.DataFrame:
+    """Arrêts du périmètre regroupés par quai (`group_stops`), pour la carte et « À surveiller »."""
+    return group_stops(load_territorial(_conn, cutoff_ts, since_ts, end_ts, commune=commune))
+
+
+def week_hour_grid_html(table: pd.DataFrame, peak: dict | None = None) -> str:
+    """Grille jour de la semaine × heure : part des passages > 5 min, couleur du palier « pourcent ».
+
+    Dernière colonne : toute la journée ; dernière ligne : tous les jours. Case
+    vide : moins de MIN_CELL_PASSAGES passages. La case du moment qui ressort
+    (`peak`) est encadrée. Le détail de chaque case est dans son infobulle.
+    """
+    if table is None or table.empty:
+        return ""
+    cells = {(int(r.weekday), int(r.heure)): r for r in table.itertuples()}
+    hours = list(range(int(table["heure"].min()), int(table["heure"].max()) + 1))
+    peak_cell = (peak["weekday"], peak["hour"]) if peak and "weekday" in peak else None
+
+    def td(obs: float, cnt: float, title: str, css: str = "", outline: bool = False) -> str:
+        if obs < dg.MIN_CELL_PASSAGES:
+            return f'<td class="wh-empty {css}" title="{html.escape(title)}"></td>'
+        pct = cnt / obs * 100
+        color = palette_hex(pct, "pourcent")
+        fg = CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST
+        ring = ";outline:2px solid #283618;outline-offset:1px" if outline else ""
+        return (f'<td class="{css}" style="background:{color};color:{fg}{ring}" '
+                f'title="{html.escape(title)}">{pct:.0f}</td>')
+
+    header = "<tr><th></th>" + "".join(f"<th>{h} h</th>" for h in hours) + "<th>Jour</th></tr>"
+    body = []
+    for d in range(7):
+        tds, day_obs, day_cnt = [], 0.0, 0.0
+        for h in hours:
+            r = cells.get((d, h))
+            if r is None:
+                tds.append('<td class="wh-empty"></td>')
+                continue
+            day_obs += r.obs
+            day_cnt += r.cnt_gt300
+            title = (f"{dg.slot_label(d, h)} : {r.pct_gt300:.0f} % de passages à plus de 5 min · "
+                     f"{int(r.obs)} passages · dégradé {int(r.bad_days)} fois sur {int(r.days)}")
+            tds.append(td(r.obs, r.cnt_gt300, title, outline=peak_cell == (d, h)))
+        day_title = f"{dg.WEEKDAYS[d]}, toute la journée : {int(day_obs)} passages"
+        tds.append(td(day_obs, day_cnt, day_title, "wh-total"))
+        body.append(f"<tr><th>{dg.WEEKDAYS[d][:3]}.</th>{''.join(tds)}</tr>")
+    by_hour = table.groupby("heure").agg(obs=("obs", "sum"), cnt=("cnt_gt300", "sum"))
+    tds = [td(float(by_hour.loc[h, "obs"]), float(by_hour.loc[h, "cnt"]), f"Tous les jours, {h} h : "
+              f"{int(by_hour.loc[h, 'obs'])} passages", "wh-total") if h in by_hour.index
+           else '<td class="wh-empty wh-total"></td>' for h in hours]
+    tds.append(td(float(table["obs"].sum()), float(table["cnt_gt300"].sum()), "Toute la semaine", "wh-total"))
+    body.append(f"<tr><th>Tous</th>{''.join(tds)}</tr>")
+    return f'<div class="wh-wrap"><table class="wh-grid">{header}{"".join(body)}</table></div>'
+
+
 def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
     """Couche pydeck des arrêts (icônes de l'atlas).
+
+    Les arrêts les moins fiables sont dessinés en dernier, donc au-dessus des
+    autres quand des marqueurs se chevauchent.
 
     La taille est exprimée en mètres (STOP_SIZE_METERS, selon les passages) :
     les marqueurs grandissent avec le zoom, bornés entre STOP_SIZE_PIXELS pixels
@@ -1108,7 +1234,7 @@ def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
     guillemets simples, sinon deck.gl reçoit une expression invalide.
     """
     uri, mapping = marker_atlas()
-    data = df.copy()
+    data = df.sort_values("score_fiabilite", ascending=False).reset_index(drop=True)
     data["icon"] = [icon_key(rt, v) for rt, v in zip(data["route_type"], data["score_fiabilite"])]
     low, high = STOP_SIZE_METERS
     data["size"] = low + (data["observations"].clip(50, 400) - 50) / 350 * (high - low)
@@ -1409,13 +1535,32 @@ def segments_available(_conn) -> bool:
         return False
 
 
+MIN_SERVED_SHARE = 0.05
+
+
+def keep_served_stops(df: pd.DataFrame, share: float = MIN_SERVED_SHARE) -> pd.DataFrame:
+    """Écarte d'un profil les arrêts rarement desservis dans leur direction.
+
+    Une variante de course marginale (quelques passages sur la période) ajoute
+    des arrêts qui s'intercalent dans l'ordre de la ligne et fausseraient le
+    profil et le terminus : un arrêt est gardé s'il compte au moins `share` des
+    arrêts attendus (colonne eligible) de l'arrêt le plus desservi de sa direction.
+    """
+    if df.empty:
+        return df
+    top = df.groupby("direction_id")["eligible"].transform("max")
+    return df[df["eligible"] >= share * top]
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
                         route_id: str) -> pd.DataFrame:
     """Profil d'une ligne arrêt par arrêt et par direction (agg_daily_segment).
 
-    Colonnes : direction_id, stop_id, stop_name, commune, order (rang moyen de
-    l'arrêt), delay_s (retard moyen à l'arrêt), carried_s (retard déjà présent
+    Les arrêts rarement desservis dans une direction sont écartés
+    (`keep_served_stops`). Colonnes : direction_id, stop_id, stop_name, commune,
+    order (rang moyen de l'arrêt), delay_s (retard moyen à l'arrêt), carried_s
+    (retard déjà présent
     en arrivant), gain_s (retard pris sur le tronçon), prev_stop_id,
     prev_stop_name, pairs, obs, eligible, skipped, cnt_gain_gt120, terminus.
     """
@@ -1448,7 +1593,7 @@ def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int
     df = df.merge(prev[["direction_id", "stop_id", "prev_stop_id"]], on=["direction_id", "stop_id"], how="left")
     names = dict(zip(df["stop_id"], df["stop_name"]))
     df["prev_stop_name"] = df["prev_stop_id"].map(names)
-    df = df[df["eligible"] > 0].copy()
+    df = keep_served_stops(df[df["eligible"] > 0]).copy()
     df["order"] = df["sum_seq"] / df["eligible"]
     df["delay_s"] = df["sum_delay"] / df["obs"].where(df["obs"] > 0)
     df["carried_s"] = df["sum_prev_delay"] / df["pairs"].where(df["pairs"] > 0)
@@ -1511,6 +1656,20 @@ def load_line_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
     return df.sort_values("impact", ascending=False).reset_index(drop=True)
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_route_hourly_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                            route_id: str) -> pd.DataFrame:
+    """Agrégats horaires d'une ligne, arrêt par arrêt (agg_hourly_stop, index route_id + date_service)."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    return pd.read_sql_query(
+        """
+        SELECT date_service, stop_id, heure, obs, sum_delay, cnt_gt300
+        FROM agg_hourly_stop
+        WHERE route_id = ? AND date_service >= ? AND date_service < ?
+        """, _conn, params=(route_id, since_day, end_day),
+    )
+
+
 def _territorial_score(df: pd.DataFrame) -> float:
     """Score de fiabilité moyen (pondéré par les passages) du périmètre territorial.
 
@@ -1538,12 +1697,9 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
         return
     layer = territorial_layer(df)
     tooltip = {
-        "html": "<b>{stop_name}</b><br/>Direction : {direction}<br/>"
+        "html": "<b>{stop_name}</b><br/>{detail}<br/>"
                 "Ligne(s) : {lignes}<br/>"
-                "Score de fiabilité : {score_fiabilite}/100<br/>"
-                "Retards &gt; 5 min : {pct_retard_5min} %<br/>"
-                "Arrêts sautés : {pct_arrets_sautes} %<br/>"
-                "Passages : {observations}",
+                "Passages analysés : {observations}<br/><i>Cliquez pour ouvrir la fiche</i>",
         "style": {"backgroundColor": "#FFFFFF", "color": BLACK_FOREST},
     }
     if commune is not None:
@@ -1558,7 +1714,8 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
         on_select=_on_map_select, selection_mode="single-object",
     )
     st.caption(
-        "Cliquez sur un arrêt pour ouvrir sa fiche diagnostic. "
+        "Cliquez sur un arrêt pour ouvrir sa fiche diagnostic. Les deux sens d'un même arrêt forment un seul "
+        "marqueur, à la couleur du sens le moins fiable ; l'infobulle et la fiche donnent chaque sens. "
         f"Lecture non visuelle de la carte : {len(df)} arrêts affichés, "
         f"score de fiabilité de {df['score_fiabilite'].min():.0f} à "
         f"{df['score_fiabilite'].max():.0f}/100 "
@@ -1627,18 +1784,60 @@ ZONE_EXPLANATIONS = {
 }
 
 
+SCROLL_TARGETS = {"fiche-arret": ".fiche-arret", "fiche-ligne": ".fiche-ligne", "carte": ".carte-anchor"}
+
+
+def request_scroll(target: str) -> None:
+    """Demande de faire défiler la page jusqu'à `target` au prochain affichage."""
+    st.session_state["_scroll_to"] = target
+    st.session_state["_scroll_nonce"] = st.session_state.get("_scroll_nonce", 0) + 1
+
+
+def scroll_if_requested(target: str) -> None:
+    """Fait défiler la page jusqu'à `target` si une action vient de le demander (une seule fois)."""
+    if st.session_state.get("_scroll_to") != target:
+        return
+    st.session_state.pop("_scroll_to", None)
+    nonce = st.session_state.get("_scroll_nonce", 0)
+    st.html(
+        f"<script>/* {nonce} */(function(){{const go=()=>{{const el=document.querySelector('{SCROLL_TARGETS[target]}');"
+        "if(el){el.scrollIntoView({behavior:'smooth',block:'start'});}};"
+        "setTimeout(go,150);setTimeout(go,900);})();</script>",
+        unsafe_allow_javascript=True,
+    )
+
+
 def select_stop(stop_id: str | None) -> None:
     st.session_state["stop_id"] = stop_id
 
 
-def open_stop(stop_id: str) -> None:
+def show_stop(stop_id: str) -> None:
+    """Ouvre la fiche d'un arrêt sur la page courante et y amène l'utilisateur."""
     select_stop(stop_id)
+    request_scroll("fiche-arret")
+
+
+def open_stop(stop_id: str) -> None:
+    show_stop(stop_id)
     st.session_state["sidebar_nav"] = PAGE_TERRITORY
 
 
-def open_line(route_id: str) -> None:
+def show_line(route_id: str) -> None:
+    """Ouvre la fiche d'une ligne sur la page « Lignes » et y amène l'utilisateur."""
     st.session_state["line_id"] = route_id
+    st.session_state.pop("_from_stop", None)
+    request_scroll("fiche-ligne")
+
+
+def open_line(route_id: str) -> None:
+    show_line(route_id)
     st.session_state["sidebar_nav"] = PAGE_LINE
+
+
+def line_from_stop(route_id: str, stop_id: str, stop_name: str) -> None:
+    """Depuis une fiche arrêt : ouvre la fiche de la ligne en gardant le chemin du retour."""
+    open_line(route_id)
+    st.session_state["_from_stop"] = (stop_id, stop_name)
 
 
 def _on_map_select() -> None:
@@ -1646,7 +1845,15 @@ def _on_map_select() -> None:
     objects = (state.get("selection") or {}).get("objects") or {}
     picked = objects.get("arrets") or []
     if picked:
-        select_stop(picked[0].get("stop_id"))
+        show_stop(picked[0].get("stop_id"))
+
+
+def _on_line_pick() -> None:
+    show_line(st.session_state.get("line_pick"))
+
+
+def _on_stop_search() -> None:
+    show_stop(st.session_state.get("stop_search"))
 
 
 def _on_table_select(table_key: str, ids_key: str, opener) -> None:
@@ -1755,8 +1962,102 @@ def _render_zone(median_s: float | None, pct_gt300: float, rank_text: str | None
         st.markdown(rank_text)
 
 
+def _slot_selectors(table: pd.DataFrame, peak: dict, key: str) -> tuple[int, int] | None:
+    """Choix d'un jour et d'une heure ; par défaut, le moment qui ressort (ou la case la plus dégradée)."""
+    cells = table[table["obs"] >= dg.MIN_CELL_PASSAGES] if not table.empty else table
+    if cells.empty:
+        return None
+    days = sorted(int(x) for x in cells["weekday"].unique())
+    hours = sorted(int(x) for x in cells["heure"].unique())
+    if peak.get("weekday") in days and peak.get("hour") in hours:
+        day0, hour0 = peak["weekday"], peak["hour"]
+    else:
+        worst = cells.loc[cells["pct_gt300"].idxmax()]
+        day0, hour0 = int(worst["weekday"]), int(worst["heure"])
+    left, right, _ = st.columns([1, 1, 2])
+    with left:
+        day = st.selectbox("Jour", days, index=days.index(day0), format_func=lambda d: dg.WEEKDAYS[d],
+                           key=f"{key}_day")
+    with right:
+        hour = st.selectbox("Heure", hours, index=hours.index(hour0), key=f"{key}_hour",
+                            format_func=lambda h: f"{h} h – {'0' if h == 23 else h + 1} h")
+    return int(day), int(hour)
+
+
+def _render_week_grid(table: pd.DataFrame, peak: dict) -> None:
+    render_tier_legend("Passages à plus de 5 min", "bon", "à surveiller", invert=True)
+    st.markdown(week_hour_grid_html(table, peak), unsafe_allow_html=True)
+    st.caption("Chaque case : % de passages à plus de 5 min pour ce jour et cette heure, sur toute la période. "
+               "Case vide : moins de 3 passages. Case encadrée : moment qui ressort. Survolez une case pour "
+               "le détail.")
+
+
+def _commune_ids(profile: pd.DataFrame | None, commune: str | None) -> set:
+    if not commune or profile is None or profile.empty:
+        return set()
+    return set(profile.loc[profile["commune"] == commune, "stop_id"])
+
+
+def _render_stop_when(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
+                      name: str, lines: pd.DataFrame, daily: pd.DataFrame, hourly_all: pd.DataFrame,
+                      seg_ok: bool, commune: str | None) -> None:
+    st.markdown("#### À quel moment de la semaine ?")
+    names = dict(zip(lines["route_id"], lines["ligne"].astype(str)))
+    labels = {"__toutes__": "Toutes les lignes",
+              **{rid: f"{mode_glyph(rt)} {l}" for rid, rt, l in zip(lines["route_id"], lines["route_type"], lines["ligne"])}}
+    chosen = st.segmented_control("Ligne", list(labels), format_func=lambda r: labels.get(r, r),
+                                  default="__toutes__", key=f"when_line_{stop_id}") or "__toutes__"
+    hourly = hourly_all if chosen == "__toutes__" else hourly_all[hourly_all["route_id"] == chosen]
+    table = dg.week_hour_table(hourly)
+    if table.empty:
+        st.info("Aucune donnée horaire pour cet arrêt sur la période.")
+        return
+    peak = dg.find_peak(hourly)
+    peak_route = chosen if chosen != "__toutes__" else None
+    if "weekday" in peak and peak_route is None:
+        in_slot = dg.slot_lines(hourly_all, peak["weekday"], peak["hour"])
+        peak_route = in_slot["route_id"].iloc[0] if not in_slot.empty else None
+    _render_week_grid(table, peak)
+    sentence = dg.peak_sentence(peak, names.get(peak_route) if chosen == "__toutes__" else None)
+    if sentence:
+        _verdict(html.escape(sentence))
+
+    route = peak_route or (chosen if chosen != "__toutes__" else str(lines["route_id"].iloc[0]))
+    st.markdown(f"#### Ligne {html.escape(names.get(route, route))} à ce moment-là : le retard vient-il "
+                "d'avant, et jusqu'où se prolonge-t-il ?")
+    if not seg_ok:
+        st.info("L'analyse le long de la ligne est en cours de constitution par le collecteur.")
+    else:
+        seg = load_route_segments(conn, cutoff, since_ts, end_ts, route)
+        here = seg[seg["stop_id"] == stop_id] if not seg.empty else seg
+        if here.empty:
+            st.info("Pas de profil de ligne disponible pour cet arrêt sur la période.")
+        else:
+            profile_dir = seg[seg["direction_id"] == here.loc[here["obs"].idxmax(), "direction_id"]]
+            route_table = dg.week_hour_table(hourly_all[hourly_all["route_id"] == route])
+            choice = _slot_selectors(route_table, peak if peak_route == route else {}, f"slot_{stop_id}_{route}")
+            if choice:
+                wd, hr = choice
+                sp = dg.slot_profile(load_route_hourly_stops(conn, cutoff, since_ts, end_ts, route), profile_dir, wd, hr)
+                i = int(sp.index[sp["stop_id"] == stop_id][0])
+                window = sp.iloc[max(0, i - 10):i + 12]
+                hc_render(slot_profile_chart(window, dg.slot_label(wd, hr), highlight_stop_id=stop_id,
+                                             commune_stop_ids=_commune_ids(profile_dir, commune),
+                                             commune_label=commune), height=340)
+                sentence = dg.propagation_sentence(dg.propagation(sp, stop_id), names.get(route, route), name)
+                if sentence:
+                    st.markdown(sentence)
+                st.caption("Courbe pleine : retard moyen des passages de chaque arrêt à ce moment-là (tous les "
+                           "jours choisis de la période, sur l'heure choisie) ; tirets : le reste du temps. "
+                           "10 arrêts avant, 11 après.")
+    with st.expander("Jour par jour sur la période"):
+        render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
+        hc_render(daily_status_chart(daily, RISK_PCT_GT300), height=240)
+
+
 def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
-                      territorial_network: pd.DataFrame, reference_score: float) -> None:
+                      territorial_network: pd.DataFrame, groups: pd.DataFrame, reference_score: float,
+                      commune: str | None = None) -> None:
     """Fiche diagnostic d'un arrêt : d'où vient le problème, quand, de quel type, et quelles pistes."""
     daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
     if daily.empty:
@@ -1794,18 +2095,26 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     hotspot = dg.upstream_hotspot(profile_dir, stop_id) if profile_dir is not None else None
 
     rec = dg.recurrence(daily[["date_service", "obs", "cnt_gt300"]])
-    periods = dg.period_table(load_stop_hourly(conn, cutoff, since_ts, end_ts, stop_id))
+    hourly_all = load_stop_hourly(conn, cutoff, since_ts, end_ts, stop_id)
+    periods = dg.period_table(hourly_all)
     weekdays = dg.weekday_table(daily)
     conc = dg.concentration(periods, "période") or dg.concentration(weekdays, "jour")
+    peak = dg.find_peak(hourly_all)
+    peak_line = None
+    if peak.get("verdict") == "récurrent":
+        in_slot = dg.slot_lines(hourly_all, peak["weekday"], peak["hour"])
+        if not in_slot.empty:
+            peak_line = dict(zip(lines["route_id"], lines["ligne"].astype(str))).get(in_slot["route_id"].iloc[0])
     zone = risk_zone(median, pct_gt300) if median is not None else None
     trend = dg.half_trend(daily)
     peers = territorial_network.loc[territorial_network["observations"] >= MIN_OBSERVATIONS, "score_fiabilite"]
     rank = dg.percentile_rank(score, peers)
     alerts = _alerts_overlapping(load_perturbation_history(conn, since_ts, end_ts, cutoff),
                                  set(lines["route_id"]), rec["bad_dates"])
-    summary = dg.stop_summary(responsible, resp_dir, cause, carried, gained, prev_name, hotspot, rec, conc, zone)
+    summary = dg.stop_summary(responsible, resp_dir, cause, carried, gained, prev_name, hotspot, rec, conc, zone,
+                              peak, peak_line)
     hints = dg.stop_hints(cause, hotspot, prev_name, name, responsible, rec, pct_skip,
-                          bool(not alerts.empty and alerts["jour_degrade"].any()), carried)
+                          bool(not alerts.empty and alerts["jour_degrade"].any()), carried, peak)
 
     st.query_params["arret"] = stop_id
     if "ligne" in st.query_params:
@@ -1814,12 +2123,29 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                              for rt, l in zip(lines["route_type"], lines["ligne"]))
     direction = info["direction"].iloc[0] if not info.empty else ""
     st.markdown(
-        f'<div class="fiche-title">{html.escape(name)}'
+        f'<div class="fiche-title fiche-arret">{html.escape(name)}'
         f'{" — " + html.escape(direction) if direction else ""}</div>'
         f'<div class="fiche-sub">Lignes : {glyph_lines} · lien direct : cette page (paramètre '
         f'<code>?arret={html.escape(stop_id)}</code>)</div>',
         unsafe_allow_html=True,
     )
+    scroll_if_requested("fiche-arret")
+    group = groups[groups["members"].map(lambda m: stop_id in m)] if not groups.empty else groups
+    siblings = []
+    if not group.empty:
+        others = territorial_network[territorial_network["stop_id"].isin(group.iloc[0]["members"])
+                                     & (territorial_network["stop_id"] != stop_id)].sort_values("score_fiabilite")
+        siblings = [(r.stop_id, r.direction or r.stop_name, r.lignes, r.score_fiabilite)
+                    for r in others.itertuples()][:3]
+    if siblings:
+        st.markdown('<div class="sibling-label">Autres quais de cet arrêt (autre sens ou autres lignes) :</div>',
+                    unsafe_allow_html=True)
+    cols = st.columns(len(siblings) + 1 if siblings else 2)
+    for col, (sid, label, lignes, sc) in zip(cols, siblings):
+        col.button(f"{label} ({lignes}) · {sc:.0f}/100", key=f"sibling_{sid}", on_click=show_stop, args=(sid,),
+                   width="stretch")
+    cols[-1 if siblings else 0].button("↑ Revenir à la carte", key="back_to_map", on_click=request_scroll,
+                                       args=("carte",))
     delta = trend["delta"] if trend else None
     render_kpis([
         ("Score de fiabilité", f"{score:.0f} / 100", f"réseau : {reference_score:.0f} / 100",
@@ -1836,6 +2162,10 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
          "neutral"),
     ])
     _render_brief(summary, hints)
+    if responsible is not None:
+        st.button(f"Ouvrir la fiche de la ligne {responsible['ligne']} → où se forme son retard, à quel moment",
+                  type="primary", on_click=line_from_stop, args=(responsible["route_id"], stop_id, name),
+                  key="open_line_from_stop")
 
     view = st.segmented_control("Détail", STOP_VIEWS, default=STOP_VIEWS[0], key="stop_view",
                                 label_visibility="collapsed") or STOP_VIEWS[0]
@@ -1858,30 +2188,14 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                 i = int(p.index[p["stop_id"] == stop_id][0])
                 window = p.iloc[max(0, i - 8):i + 3]
                 hot = {hotspot["stop_id"]} if dg.is_dominant_hotspot(hotspot, carried) else set()
-                hc_render(line_profile_chart(window, highlight_stop_id=stop_id, hotspot_stop_ids=hot), height=360)
+                hc_render(line_profile_chart(window, highlight_stop_id=stop_id, hotspot_stop_ids=hot,
+                                             commune_stop_ids=_commune_ids(profile_dir, commune),
+                                             commune_label=commune), height=360)
                 st.caption("Colonnes : retard pris sur chaque tronçon (en Copperwood, le tronçon amont qui en "
                            "prend le plus, s'il pèse au moins un quart du retard importé) ; courbe : retard "
                            "moyen à l'arrêt. 8 arrêts en amont, 2 en aval.")
-            if responsible is not None:
-                st.button(f"Voir toute la ligne {responsible['ligne']} →", on_click=open_line,
-                          args=(responsible["route_id"],), key="open_line_from_stop")
     elif view == "Quand ?":
-        left, right = st.columns(2, gap="large")
-        with left:
-            st.markdown("#### Selon le créneau")
-            if periods.empty:
-                st.info("Aucune donnée horaire.")
-            else:
-                hc_render(risk_by_label_chart(periods, "période"), height=260)
-        with right:
-            st.markdown("#### Selon le jour de la semaine")
-            if weekdays.empty:
-                st.info("Aucune donnée quotidienne.")
-            else:
-                hc_render(risk_by_label_chart(weekdays, "jour"), height=260)
-        st.markdown("#### Jour par jour")
-        render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
-        hc_render(daily_status_chart(daily, RISK_PCT_GT300), height=240)
+        _render_stop_when(conn, cutoff, since_ts, end_ts, stop_id, name, lines, daily, hourly_all, seg_ok, commune)
     elif view == "Quel type ?":
         rank_text = None
         if rank is not None:
@@ -1895,8 +2209,41 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         _render_alerts(alerts)
 
 
+def _render_line_when(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
+                      core: pd.DataFrame, hourly: pd.DataFrame, peak: dict, per_dir: dict, main_dir,
+                      commune: str | None) -> None:
+    st.markdown("#### À quel moment de la semaine ?")
+    table = dg.week_hour_table(hourly)
+    if table.empty:
+        st.info("Aucune donnée horaire pour cette ligne sur la période.")
+        return
+    _render_week_grid(table, peak)
+    sentence = dg.peak_sentence(peak)
+    if sentence:
+        _verdict(html.escape(sentence))
+    if per_dir:
+        st.markdown("#### À ce moment-là, où le retard s'aggrave-t-il le long de la ligne ?")
+        dirs = list(per_dir)
+        chosen = st.radio("Direction", dirs, index=dirs.index(main_dir), horizontal=True,
+                          format_func=lambda d: per_dir[d]["terminus"], key="line_when_dir")
+        choice = _slot_selectors(table, peak, f"slot_line_{route_id}")
+        if choice:
+            wd, hr = choice
+            profile = per_dir[chosen]["profile"]
+            sp = dg.slot_profile(load_route_hourly_stops(conn, cutoff, since_ts, end_ts, route_id), profile, wd, hr)
+            hc_render(slot_profile_chart(sp, dg.slot_label(wd, hr), commune_stop_ids=_commune_ids(profile, commune),
+                                         commune_label=commune), height=340)
+            st.markdown(dg.slot_hotspot_sentence(dg.slot_hotspot(sp)))
+            st.caption("Courbe pleine : retard moyen des passages de chaque arrêt à ce moment-là ; tirets : le "
+                       "reste du temps. L'écart entre les deux courbes montre où ce moment-là se dégrade.")
+    if not core.empty:
+        with st.expander("Jour par jour sur la période"):
+            render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
+            hc_render(daily_status_chart(core, RISK_PCT_GT300), height=240)
+
+
 def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
-                      ranking_net: pd.DataFrame, disturbed: set) -> None:
+                      ranking_net: pd.DataFrame, disturbed: set, commune: str | None = None) -> None:
     """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
     row = ranking_net[ranking_net["route_id"] == route_id]
     if row.empty:
@@ -1909,10 +2256,12 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     mode_median = float(same_mode["score_fiabilite"].median()) if not same_mode.empty else None
     core = _load_daily_core(conn, cutoff, since_ts, end_ts, route_id=route_id)
     trend = dg.half_trend(core) if not core.empty else None
-    periods = dg.period_table(_load_hourly_core(conn, cutoff, since_ts, end_ts, route_id=route_id))
+    hourly = _load_hourly_core(conn, cutoff, since_ts, end_ts, route_id=route_id)
+    periods = dg.period_table(hourly)
     weekdays = dg.weekday_table(core)
     rec = dg.recurrence(core[["date_service", "obs", "cnt_gt300"]] if not core.empty else core)
     conc = dg.concentration(periods, "période") or dg.concentration(weekdays, "jour")
+    peak = dg.find_peak(hourly)
     canc = load_line_cancellations(conn, cutoff, since_ts, end_ts, route_id)
     cancelled = int(canc["cancelled"].sum()) if not canc.empty else 0
     trips = int(canc["trips"].sum()) if not canc.empty else 0
@@ -1932,9 +2281,10 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
               .agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum")).reset_index()
               .rename(columns={"direction": "terminus"})) if not stops.empty else pd.DataFrame()
     imbalance = dg.direction_imbalance(by_dir)
+    commune_info = dg.commune_share(seg, commune) if not seg.empty else None
     ligne = str(line["ligne"])
-    summary = dg.line_summary(ligne, breakdown, cancelled, origin, imbalance, skips, rec, conc)
-    hints = dg.line_hints(origin, skips, cancelled)
+    summary = dg.line_summary(ligne, breakdown, cancelled, origin, imbalance, skips, rec, conc, peak, commune_info)
+    hints = dg.line_hints(origin, skips, cancelled, peak)
 
     st.query_params["ligne"] = route_id
     if "arret" in st.query_params:
@@ -1945,13 +2295,17 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     marker = " ⚠" if route_id in disturbed else ""
     per_day = f"{int(line['observations']) / max(days, 1):,.0f}".replace(",", " ")
     st.markdown(
-        f'<div class="fiche-title">{mode_glyph(line["route_type"])} Ligne {html.escape(ligne)}{marker} · '
+        f'<div class="fiche-title fiche-ligne">{mode_glyph(line["route_type"])} Ligne {html.escape(ligne)}{marker} · '
         f'{html.escape(str(line["mode"]))}</div>'
         f'<div class="fiche-sub">{html.escape(termini) + " · " if termini else ""}'
         f'{n_communes} commune(s) desservie(s) · {per_day} passages par jour · lien direct : paramètre '
         f'<code>?ligne={html.escape(route_id)}</code></div>',
         unsafe_allow_html=True,
     )
+    scroll_if_requested("fiche-ligne")
+    back = st.session_state.get("_from_stop")
+    if back:
+        st.button(f"← Revenir à l'arrêt {back[1]}", key="back_to_stop", on_click=open_stop, args=(back[0],))
     if route_id in disturbed:
         st.warning(CAUTION_TEXT)
     delta = trend["delta"] if trend else None
@@ -1976,6 +2330,8 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
 
     view = st.segmented_control("Détail", LINE_VIEWS, default=LINE_VIEWS[0], key="line_view",
                                 label_visibility="collapsed") or LINE_VIEWS[0]
+    commune_note = (f" Fond Cornsilk : arrêts situés à {commune} "
+                    f"({commune_info['n_stops']} arrêt(s) de la ligne)." if commune_info and commune_info["n_stops"] else "")
     if view in ("Retards : où ?", "Service non rendu") and not per_dir:
         st.info("L'analyse tronçon par tronçon est en cours de constitution par le collecteur."
                 if not seg_ok else "Pas de données de tronçon pour cette ligne sur la période.")
@@ -1985,13 +2341,16 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         chosen = st.radio("Direction", dirs, index=dirs.index(default), horizontal=True,
                           format_func=lambda d: per_dir[d]["terminus"], key=f"line_dir_{view}")
         d = per_dir[chosen]
+        ids = _commune_ids(d["profile"], commune)
         if view == "Retards : où ?":
             hot = {h["stop_id"] for h in d["origin"]["hotspots"]}
-            hc_render(line_profile_chart(d["profile"], hotspot_stop_ids=hot), height=360)
+            hc_render(line_profile_chart(d["profile"], hotspot_stop_ids=hot, commune_stop_ids=ids,
+                                         commune_label=commune), height=360)
             labels = {"départ": "retard déjà présent dès le départ", "localisé": "retard formé sur quelques tronçons",
                       "diffus": "retard réparti sur tout le parcours", "aucun": "pas de retard notable"}
-            st.caption(f"{d['terminus'].capitalize()} : {labels[d['origin']['verdict']]}. En Copperwood, les "
-                       "3 tronçons qui prennent le plus de retard.")
+            st.caption(f"Tous les arrêts de la ligne, sur tout le réseau. {d['terminus'].capitalize()} : "
+                       f"{labels[d['origin']['verdict']]}. En Copperwood, les 3 tronçons qui prennent le plus "
+                       f"de retard.{commune_note}")
             if d["origin"]["hotspots"]:
                 top = pd.DataFrame(d["origin"]["hotspots"])
                 top["Tronçon"] = top["from"] + " → " + top["to"]
@@ -2004,29 +2363,13 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                 hc_render(cancellations_chart(canc[canc["cancelled"] > 0]), height=240)
             st.markdown("#### Arrêts sautés le long de la ligne")
             render_tier_legend("Arrêts sautés", "bon", "à surveiller", invert=True)
-            hc_render(skip_profile_chart(d["profile"]), height=300)
+            hc_render(skip_profile_chart(d["profile"], commune_stop_ids=ids, commune_label=commune), height=300)
             labels = {"extrémités": "surtout aux extrémités (prises ou fins de service en cours de ligne)",
                       "bloc": "en bloc sur une section (déviation probable)",
                       "dispersé": "dispersés le long de la ligne", "aucun": "rares"}
-            st.caption(f"{d['terminus'].capitalize()} : arrêts sautés {labels[d['skips']['verdict']]}.")
+            st.caption(f"{d['terminus'].capitalize()} : arrêts sautés {labels[d['skips']['verdict']]}.{commune_note}")
     elif view == "Quand ?":
-        left, right = st.columns(2, gap="large")
-        with left:
-            st.markdown("#### Selon le créneau")
-            if periods.empty:
-                st.info("Aucune donnée horaire.")
-            else:
-                hc_render(risk_by_label_chart(periods, "période"), height=260)
-        with right:
-            st.markdown("#### Selon le jour de la semaine")
-            if weekdays.empty:
-                st.info("Aucune donnée quotidienne.")
-            else:
-                hc_render(risk_by_label_chart(weekdays, "jour"), height=260)
-        if not core.empty:
-            st.markdown("#### Jour par jour")
-            render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
-            hc_render(daily_status_chart(core, RISK_PCT_GT300), height=240)
+        _render_line_when(conn, cutoff, since_ts, end_ts, route_id, core, hourly, peak, per_dir, main_dir, commune)
     else:
         _render_zone(line["retard_median_s"], float(line["pct_retard_5min"]), None)
         st.markdown("#### Perturbations signalées")
@@ -2045,7 +2388,8 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         table = top[["stop_name", "direction", "commune", "cnt_gt300", "skipped", "score_fiabilite"]].copy()
         table.columns = ["Arrêt", "Direction", "Commune", "Passages > 5 min", "Arrêts sautés", "Score / 100"]
         st.dataframe(
-            table.style.map(_score_tier_style, subset=["Score / 100"]).format({"Score / 100": "{:.0f}"}),
+            table.style.map(_score_tier_style, subset=["Score / 100"]).format(
+                {"Score / 100": "{:.0f}", "Passages > 5 min": fmt_int, "Arrêts sautés": fmt_int}),
             hide_index=True, width="stretch", key="line_stops_table", on_select=lambda: _on_table_select(
                 "line_stops_table", "_line_stop_ids", open_stop), selection_mode="single-row",
         )
@@ -2088,7 +2432,7 @@ def _render_watchlist(items: list[dict]) -> None:
                 f'<div class="kpi-sublabel">{html.escape(item["reason"])}</div></div>',
                 unsafe_allow_html=True,
             )
-            opener = open_line if item["kind"] == "ligne" else select_stop
+            opener = open_line if item["kind"] == "ligne" else show_stop
             st.button("Ouvrir la fiche", key=f"watch_{i}", on_click=opener, args=(item["id"],))
 
 
@@ -2109,9 +2453,12 @@ def render_page_territory(c: PageContext) -> None:
         _verdict(f'Le réseau obtient un score de fiabilité de <b>{reference:.0f}/100</b> '
                  f'({_tier_word(reference)}). Les points ci-dessous méritent une attention en priorité ; '
                  f'cliquez sur un arrêt de la carte pour comprendre d’où vient son problème.')
+    groups = grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
     prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
-    _render_watchlist(dg.watchlist(prog, c.visible_ranking, territorial, MIN_OBSERVATIONS))
+    _render_watchlist(dg.watchlist(prog, c.visible_ranking, groups, MIN_OBSERVATIONS))
 
+    st.markdown('<div class="carte-anchor"></div>', unsafe_allow_html=True)
+    scroll_if_requested("carte")
     st.markdown("#### Carte des arrêts")
     st.markdown('<div class="section-note">Couleur : score de fiabilité de l’arrêt, toutes lignes '
                 'confondues. Forme : mode de la ligne principale (● tram, ■ bus, ▲ ferry). Taille : '
@@ -2123,13 +2470,15 @@ def render_page_territory(c: PageContext) -> None:
     current = st.session_state.get("stop_id")
     if current and current not in options:
         options = [current] + options
-    search_kwargs = {} if "stop_id" in st.session_state else {"index": None}
-    st.selectbox("Chercher un arrêt", options, key="stop_id", placeholder="Nom de l'arrêt…",
-                 format_func=lambda sid: labels.get(sid, sid), **search_kwargs)
-    _territorial_map(territorial, c.commune)
+    st.session_state["stop_search"] = current
+    st.selectbox("Chercher un arrêt", options, key="stop_search", placeholder="Nom de l'arrêt…",
+                 format_func=lambda sid: labels.get(sid, sid), on_change=_on_stop_search)
+    _territorial_map(groups, c.commune)
     if st.session_state.get("stop_id"):
         render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
-                          territorial_network, reference)
+                          territorial_network,
+                          grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None),
+                          reference, c.commune)
 
     if c.commune is None:
         with st.expander("Comparer les communes"):
@@ -2156,7 +2505,7 @@ def render_page_territory(c: PageContext) -> None:
                         table.style.map(_score_tier_style, subset=["Score / 100"]).format({
                             "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %",
                             "Retards > 5 min": "{:.1f} %", "Retard moyen": lambda x: format_seconds(x),
-                            "Arrêts sautés": "{:.2f} %", "Lignes": "{:.0f}", "Passages": "{:,}"}),
+                            "Arrêts sautés": "{:.2f} %", "Lignes": "{:.0f}", "Passages": fmt_int}),
                         width="stretch", hide_index=True, height=460)
     if not territorial.empty:
         with st.expander("Tous les arrêts du périmètre (du moins fiable au plus fiable)"):
@@ -2169,14 +2518,10 @@ def render_page_territory(c: PageContext) -> None:
                              "Retards > 5 min", "Passages"]
             st.dataframe(
                 tdisp.style.map(_score_tier_style, subset=["Score / 100"]).format(
-                    {"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": "{:,}"}),
+                    {"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": fmt_int}),
                 width="stretch", hide_index=True, height=320, key="territory_table",
-                on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", select_stop),
+                on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", show_stop),
                 selection_mode="single-row")
-
-
-def select_line(route_id: str) -> None:
-    st.session_state["line_id"] = route_id
 
 
 def render_page_lines(c: PageContext) -> None:
@@ -2209,9 +2554,9 @@ def render_page_lines(c: PageContext) -> None:
         st.dataframe(
             display.style.map(_score_tier_style, subset=["Score / 100"]).format({
                 "Score / 100": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %",
-                "Passages": "{:,}"}),
+                "Passages": fmt_int}),
             width="stretch", hide_index=True, height=390, key="lines_table",
-            on_select=lambda: _on_table_select("lines_table", "_lines_table_ids", select_line),
+            on_select=lambda: _on_table_select("lines_table", "_lines_table_ids", show_line),
             selection_mode="single-row")
     if c.disturbed:
         st.caption(f"⚠ {len(c.disturbed & set(c.ranking['route_id']))} ligne(s) du périmètre font l'objet "
@@ -2227,18 +2572,17 @@ def render_page_lines(c: PageContext) -> None:
     line_labels = {r.route_id: f"{mode_glyph(r.route_type)} Ligne {r.ligne} · score {r.score_fiabilite:.0f}/100"
                    for r in options_df.itertuples()}
     line_options = list(line_labels)
+    if st.session_state.get("line_id") is None and line_options:
+        st.session_state["line_id"] = str(c.ranking.iloc[0]["route_id"])
     current_line = st.session_state.get("line_id")
     if current_line and current_line not in line_options:
         line_options = [current_line] + line_options
-    if current_line is None and line_options:
-        st.session_state["line_id"] = str(c.ranking.iloc[0]["route_id"])
-        if st.session_state["line_id"] not in line_options:
-            line_options = [st.session_state["line_id"]] + line_options
-    st.selectbox("Ligne analysée", line_options, key="line_id",
-                 format_func=lambda rid: line_labels.get(rid, rid))
+    st.session_state["line_pick"] = current_line
+    st.selectbox("Ligne analysée", line_options, key="line_pick",
+                 format_func=lambda rid: line_labels.get(rid, rid), on_change=_on_line_pick)
     if st.session_state.get("line_id"):
         render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["line_id"],
-                          c.ranking_net, c.disturbed)
+                          c.ranking_net, c.disturbed, c.commune)
 
 
 def _period_verdict(period: pd.DataFrame) -> str | None:
@@ -2293,7 +2637,7 @@ def render_page_when(c: PageContext) -> None:
                 display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min",
                                    "Retard moyen"]
                 st.dataframe(display.style.map(_score_tier_style, subset=["Ponctualité ≤ 5 min"]).format({
-                    "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
+                    "Passages": fmt_int, "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
                     "Retard moyen": lambda x: format_seconds(x)}), width="stretch", hide_index=True, height=320)
         return
 
@@ -2348,7 +2692,7 @@ def render_page_when(c: PageContext) -> None:
         st.dataframe(table.style.map(_delta_style, subset=["Évolution"]).format({
             "Score précédent": "{:.1f}", "Score récent": "{:.1f}", "Évolution": lambda x: f"{x:+.1f} pts",
             "Ponctualité récente": "{:.1f} %", "Arrêts sautés récents": "{:.2f} %",
-            "Passages récents": "{:,}"}), width="stretch", hide_index=True, height=330)
+            "Passages récents": fmt_int}), width="stretch", hide_index=True, height=330)
         st.caption(f"Score de fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil : "
                    f"{MIN_OBSERVATIONS} passages dans chacune des deux moitiés.")
 
@@ -2363,9 +2707,12 @@ def render_page_network(c: PageContext) -> None:
                  f'fréquence (part des passages à plus de 5 min).')
         st.markdown("#### Carte de risque des lignes")
         hc_render(scatter_chart(c.visible_ranking), height=390)
-        st.caption(f"Traits pointillés : seuils de {RISK_MEDIAN_S:.0f} s et {RISK_PCT_GT300:.0f} %. En haut à "
-                   "droite, retards fréquents et longs (zone critique) ; en bas à droite, retards fréquents "
-                   "mais courts ; en haut à gauche, retards rares mais longs. Couleur : score ; forme : mode.")
+        st.caption(f"Chaque bulle est une ligne. Couleur : son score de fiabilité ; forme : son mode (● tram, "
+                   "■ bus, ▲ ferry) ; taille : son nombre de passages analysés sur la période (échelle sous le "
+                   "graphique), c'est-à-dire son poids dans le réseau. Traits pointillés : seuils de "
+                   f"{RISK_MEDIAN_S:.0f} s et {RISK_PCT_GT300:.0f} %. En haut à droite, retards fréquents et longs "
+                   "(zone critique) ; en bas à droite, retards fréquents mais courts ; en haut à gauche, retards "
+                   "rares mais longs.")
         daily = load_network_daily(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
         left, right = st.columns(2, gap="large")
         with left:
@@ -2399,7 +2746,7 @@ def render_page_network(c: PageContext) -> None:
             st.dataframe(display.style.map(_score_tier_style, subset=["Score / 100"]).format({
                 "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}",
                 "Retard médian (s)": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %",
-                "Passages": "{:,}"}), width="stretch", hide_index=True, height=330)
+                "Passages": fmt_int}), width="stretch", hide_index=True, height=330)
         return
 
     mode_stats = load_mode_stats(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
@@ -2418,7 +2765,7 @@ def render_page_network(c: PageContext) -> None:
             f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
             f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
             f'<div style="font-size:1.9rem;font-weight:700;color:{BLACK_FOREST};line-height:1.15">{r.pct_a_l_heure:.1f} %</div>'
-            f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">à l’heure · {int(r.observations):,} passages · '
+            f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">à l’heure · {fmt_int(r.observations)} passages · '
             f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {r.pct_retard_5min:.1f} % &gt; 5 min</div>'
             f'</div>'
         )
@@ -2448,7 +2795,7 @@ def render_page_network(c: PageContext) -> None:
         table.columns = ["Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min",
                          "Retard moyen (s)", "Retard médian (s)", "Arrêts sautés"]
         st.dataframe(table.style.format({
-            "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
+            "Passages": fmt_int, "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
             "En avance > 1 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}",
             "Arrêts sautés": "{:.2f} %"}), width="stretch", hide_index=True, height=220)
 
@@ -2552,8 +2899,8 @@ def _render_method(c: PageContext) -> None:
         "strict : le véhicule ne circule pas du tout.</div>",
         unsafe_allow_html=True,
     )
-    st.caption(f"Fenêtre analysée : {c.total:,} passages programmés stabilisés ; dernier point retenu le "
-               f"{format_date(c.cutoff)}.".replace(",", " "))
+    st.caption(f"Fenêtre analysée : {fmt_int(c.total)} passages programmés stabilisés ; dernier point retenu "
+               f"le {format_date(c.cutoff)}.")
 
 
 def _render_open_data(c: PageContext) -> None:

@@ -603,3 +603,17 @@ class TestAidesFiche:
         assert counts["0 à +1"] == 2
         assert counts["+5 à +10"] == 1
         assert counts["< −10 min"] == 1
+
+
+class TestLoadRouteHourlyStops:
+    def test_agregats_horaires_de_la_ligne_par_arret(self, conn):
+        conn.executemany(
+            "INSERT INTO agg_hourly_stop (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, "
+            "cnt_gt300) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [("2026-09-11", "A", "s1", 13, 4, 800, 2, 2), ("2026-09-11", "B", "s1", 13, 3, 30, 3, 0),
+             ("2026-08-01", "A", "s1", 13, 9, 0, 9, 0)],
+        )
+        conn.commit()
+        df = app_mod.load_route_hourly_stops(conn, _epoch_local(2026, 9, 12), _epoch_local(2026, 9, 1),
+                                             _epoch_local(2026, 9, 12), "A")
+        assert df[["stop_id", "heure", "obs", "sum_delay", "cnt_gt300"]].values.tolist() == [["s1", 13, 4, 800, 2]]

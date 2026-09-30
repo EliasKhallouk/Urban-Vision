@@ -330,7 +330,17 @@ class TestASurveiller:
         assert [(i["kind"], i["id"]) for i in items] == [("ligne", "A"), ("arrêt", "s1"), ("ligne", "C")]
         assert items[0]["reason"] == "score en baisse de 12.0 points (80.0 → 68.0)"
         assert items[1]["title"] == "Gare — vers Parc"
-        assert items[1]["reason"] == "200 passages à plus de 5 min, score 50.0/100"
+        assert items[1]["reason"] == "le plus de passages en retard du territoire : 200 à plus de 5 min ; score 50.0/100"
+        assert items[2]["reason"].startswith("le plus de passages en retard des lignes : 500 à plus de 5 min")
+
+    def test_arret_regroupe_sur_deux_sens(self):
+        stops = pd.DataFrame({"stop_id": ["s1"], "stop_name": ["Blancherie"], "direction": ["vers Blancherie"],
+                              "n_sens": [2], "observations": [2950], "pct_retard_5min": [16.8],
+                              "score_fiabilite": [67.9]})
+        item = dg.watchlist(None, None, stops, 50)[0]
+        assert item["title"] == "Blancherie (2 sens)"
+        assert item["reason"] == ("le plus de passages en retard du territoire : 496 à plus de 5 min ; "
+                                  "le moins fiable : vers Blancherie, 67.9/100")
 
     def test_baisse_ponderee_par_les_passages(self):
         prog = pd.DataFrame({"route_id": ["A", "B"], "ligne": ["Arena", "24"],
@@ -344,3 +354,151 @@ class TestASurveiller:
 
     def test_rien_a_signaler(self):
         assert dg.watchlist(None, None, None, 50) == []
+
+
+def _fridays_hourly(bad_fridays=4, n_weeks=5, route="A"):
+    """Arrêt observé du lundi au vendredi sur n semaines, 8 passages par heure de 7 h à 19 h.
+
+    Les `bad_fridays` premiers vendredis, 6 passages sur 8 ont plus de 5 min entre 13 h et 14 h.
+    """
+    rows = []
+    start = pd.Timestamp("2026-08-03")
+    for w in range(n_weeks):
+        for d in range(5):
+            date = start + pd.Timedelta(days=7 * w + d)
+            for h in range(7, 20):
+                late = 6 if (d == 4 and h == 13 and w < bad_fridays) else 0
+                rows.append({"date_service": date, "route_id": route, "heure": h, "obs": 8, "cnt_gt300": late,
+                             "sum_delay": 8 * (400 if late else 60)})
+    return pd.DataFrame(rows)
+
+
+class TestMomentDeLaSemaine:
+    def test_grille_jour_heure(self):
+        t = dg.week_hour_table(_fridays_hourly())
+        cell = t[(t["weekday"] == 4) & (t["heure"] == 13)].iloc[0]
+        assert (cell["obs"], cell["cnt_gt300"], cell["days"], cell["bad_days"]) == (40, 24, 5, 4)
+        assert cell["pct_gt300"] == 60.0
+        assert len(t) == 5 * 13
+
+    def test_pic_recurrent_du_vendredi(self):
+        peak = dg.find_peak(_fridays_hourly())
+        assert (peak["verdict"], peak["weekday"], peak["hour"]) == ("récurrent", 4, 13)
+        assert (peak["bad_days"], peak["days"]) == (4, 5)
+        text = dg.peak_sentence(peak, "11")
+        assert text.startswith("Pic récurrent le vendredi entre 13 h et 14 h : 60 % de passages à plus de 5 min")
+        assert "4 vendredis dégradés sur 5" in text
+        assert text.endswith("Ligne la plus touchée à ce moment-là : 11.")
+
+    def test_pic_ponctuel(self):
+        peak = dg.find_peak(_fridays_hourly(bad_fridays=1))
+        assert peak["verdict"] == "ponctuel"
+        assert "seulement 1 vendredi dégradé sur 5 : plutôt un incident ponctuel" in dg.peak_sentence(peak)
+
+    def test_periode_trop_courte(self):
+        peak = dg.find_peak(_fridays_hourly(bad_fridays=0, n_weeks=2))
+        assert peak["verdict"] == "période courte"
+        assert "au moins trois semaines" in dg.peak_sentence(peak)
+
+    def test_a_confirmer_sur_deux_occurrences(self):
+        peak = dg.find_peak(_fridays_hourly(bad_fridays=2, n_weeks=2))
+        assert peak["verdict"] == "à confirmer"
+
+    def test_rien_ne_ressort(self):
+        assert dg.find_peak(_fridays_hourly(bad_fridays=0))["verdict"] == "aucun"
+
+    def test_ligne_la_plus_touchee_au_moment(self):
+        h = pd.concat([_fridays_hourly(route="A"), _fridays_hourly(bad_fridays=0, route="B")])
+        lines = dg.slot_lines(h, 4, 13)
+        assert list(lines["route_id"]) == ["A", "B"]
+        assert lines.loc[0, "cnt_gt300"] == 24
+
+    def test_pic_dans_la_fiche_et_les_pistes(self):
+        peak = dg.find_peak(_fridays_hourly())
+        rec = {"days": 25, "bad_days": 4, "bad_dates": [], "verdict": "ponctuel"}
+        text = " ".join(dg.stop_summary(None, None, {"verdict": "local"}, 10.0, 90.0, "X", None, rec,
+                                        {"label": "Journée", "pct": 9.0, "rest_pct": 1.0}, None, peak, "11"))
+        assert "Pic récurrent le vendredi" in text
+        assert "Il se concentre" not in text
+        hints = dg.stop_hints({"verdict": "local"}, None, "X", "Y", None, rec, 0.0, False, None, peak)
+        assert any(h.startswith("Retards qui reviennent chaque vendredi entre 13 h et 14 h") for h in hints)
+
+
+def _slot_route_hourly():
+    """Ligne a→e, vendredi 13 h : +5 min en plus à partir de c, jusqu'à d ; e revient à la normale."""
+    rows = []
+    for date in pd.date_range("2026-08-03", periods=28):
+        for stop, extra in zip("abcde", (0, 0, 300, 280, 0)):
+            for h in (12, 13):
+                friday13 = date.dayofweek == 4 and h == 13
+                rows.append({"date_service": date, "stop_id": stop, "heure": h, "obs": 4,
+                             "sum_delay": 4 * (60 + (extra if friday13 else 0))})
+    return pd.DataFrame(rows)
+
+
+class TestRepercussion:
+    def _profile(self):
+        return pd.DataFrame({"stop_id": list("abcde"), "stop_name": list("ABCDE"), "order": [1, 2, 3, 4, 5],
+                             "commune": ["X", "X", "Y", "Y", "Z"]})
+
+    def test_profil_du_creneau(self):
+        sp = dg.slot_profile(_slot_route_hourly(), self._profile(), 4, 13)
+        assert list(sp["stop_id"]) == list("abcde")
+        c = sp[sp["stop_id"] == "c"].iloc[0]
+        assert (c["slot_delay"], c["usual_delay"], c["excess"]) == (360.0, 60.0, 300.0)
+
+    def test_surcroit_ne_ici_et_prolonge(self):
+        sp = dg.slot_profile(_slot_route_hourly(), self._profile(), 4, 13)
+        prop = dg.propagation(sp, "c")
+        assert (prop["verdict"], prop["n_up"], prop["n_down"], prop["until"]) == ("prolongé", 0, 1, "D")
+        text = dg.propagation_sentence(prop, "11", "C")
+        assert text == ("À ce moment-là, la ligne 11 passe à C avec +6 min 00 s de retard, contre +1 min 00 s "
+                        "d'habitude. Ce surcroît naît sur le tronçon qui mène à l'arrêt et se prolonge sur les "
+                        "1 arrêt(s) suivant(s), jusqu'à D.")
+
+    def test_surcroit_venu_d_avant_et_resorbe(self):
+        sp = dg.slot_profile(_slot_route_hourly(), self._profile(), 4, 13)
+        prop = dg.propagation(sp, "d")
+        assert (prop["verdict"], prop["origin"], prop["n_up"]) == ("résorbé", "C", 1)
+        assert "déjà là dès C (1 arrêt(s) avant) et se résorbe dès l'arrêt suivant" in dg.propagation_sentence(prop, "11", "D")
+
+    def test_pas_de_surcroit(self):
+        sp = dg.slot_profile(_slot_route_hourly(), self._profile(), 0, 12)
+        assert dg.propagation(sp, "c")["verdict"] == "aucun"
+        assert dg.propagation(sp, "zz")["verdict"] == "inconnu"
+
+    def test_troncon_qui_s_aggrave_au_creneau(self):
+        sp = dg.slot_profile(_slot_route_hourly(), self._profile(), 4, 13)
+        hs = dg.slot_hotspot(sp)
+        assert (hs["from"], hs["to"], hs["commune"], hs["gain_s"]) == ("B", "C", "Y", 300.0)
+        assert dg.slot_hotspot_sentence(hs) == ("À ce moment-là, le retard s'aggrave surtout entre B et C (Y) : "
+                                                "+5 min 00 s de plus que d'habitude sur ce tronçon.")
+        assert dg.slot_hotspot(dg.slot_profile(_slot_route_hourly(), self._profile(), 0, 12)) is None
+
+    def test_libelles(self):
+        assert dg.slot_label(4, 13) == "Vendredi 13 h–14 h"
+        assert dg.slot_label(6, 23) == "Dimanche 23 h–0 h"
+        assert dg.hour_range(23) == "entre 23 h et minuit"
+
+
+class TestCommune:
+    def _seg(self):
+        return pd.DataFrame({
+            "stop_id": list("abcd"), "stop_name": list("ABCD"), "prev_stop_name": [None, "A", "B", "C"],
+            "commune": ["Bordeaux", "Pessac", "Pessac", "Talence"],
+            "gain_s": [0.0, 30.0, 10.0, 20.0], "sum_gain": [0, 3000, 1000, -500],
+        })
+
+    def test_part_du_retard_prise_dans_la_commune(self):
+        info = dg.commune_share(self._seg(), "Pessac")
+        assert (info["n_stops"], info["share"]) == (2, 1.0)
+        assert (info["hotspot"]["from"], info["hotspot"]["to"]) == ("A", "B")
+        assert dg.commune_sentence(info) == ("Sur Pessac (2 arrêt(s) de la ligne), la ligne prend 100 % de son "
+                                             "retard ; tronçon le plus pénalisant de la commune : A → B (+30 s en moyenne).")
+
+    def test_commune_non_desservie_ou_absente(self):
+        assert dg.commune_share(self._seg(), None) is None
+        info = dg.commune_share(self._seg(), "Mérignac")
+        assert dg.commune_sentence(info) == "La ligne ne dessert pas Mérignac sur la période."
+        low = dg.commune_share(self._seg(), "Talence")
+        assert dg.commune_sentence(low).endswith(": l'essentiel se forme ailleurs sur le parcours.")

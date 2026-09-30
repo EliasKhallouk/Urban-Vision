@@ -325,3 +325,104 @@ class TestSelectionDesFiches:
 
         app_mod.open_stop("s4")
         assert (st.session_state["stop_id"], st.session_state["sidebar_nav"]) == ("s4", app_mod.PAGE_TERRITORY)
+
+
+class TestRegroupementDesSens:
+    def _stops(self):
+        return pd.DataFrame({
+            "stop_id": ["s1", "s2", "s3", "s4", "s5"],
+            "stop_name": ["Blancherie", "Blancherie", "Blancherie", "Gare", "Gare"],
+            "direction": ["vers Beaudésert", "vers Blancherie", "vers Parc", "vers A", "vers B"],
+            "lat": [44.8400, 44.8402, 44.8400, 44.8500, 44.9000],
+            "lon": [-0.5300, -0.5301, -0.5300, -0.5500, -0.5500],
+            "route_type": [3, 3, 0, 3, 3],
+            "score_fiabilite": [78.3, 67.9, 90.0, 60.0, 95.0],
+            "pct_retard_5min": [13.7, 22.6, 5.0, 30.0, 2.0],
+            "observations": [1908, 1042, 500, 100, 100],
+            "lignes": ["27", "27, 28", "A", "5", "5"],
+        })
+
+    def test_deux_sens_proches_regroupes_au_pire_score(self):
+        g = app_mod.group_stops(self._stops())
+        blanch = g[(g["stop_name"] == "Blancherie") & (g["n_sens"] == 2)].iloc[0]
+        assert blanch["stop_id"] == "s2"
+        assert blanch["score_fiabilite"] == 67.9
+        assert blanch["direction"] == "vers Blancherie"
+        assert blanch["observations"] == 2950
+        assert sorted(blanch["members"]) == ["s1", "s2"]
+        assert blanch["lignes"] == "27, 28"
+        assert blanch["pct_retard_5min"] == round((1908 * 13.7 + 1042 * 22.6) / 2950, 1)
+        assert blanch["detail"].split("<br/>")[0] == "vers Blancherie : 68/100 · 23 % &gt; 5 min"
+
+    def test_mode_different_ou_arret_eloigne_non_regroupes(self):
+        g = app_mod.group_stops(self._stops())
+        assert len(g) == 4
+        tram = g[g["stop_id"] == "s3"].iloc[0]
+        assert tram["n_sens"] == 1
+        assert set(g.loc[g["stop_name"] == "Gare", "stop_id"]) == {"s4", "s5"}
+
+    def test_pire_arret_dessine_en_dernier(self):
+        layer = app_mod.territorial_layer(app_mod.group_stops(self._stops()))
+        scores = [row["score_fiabilite"] for row in layer.data]
+        assert scores == sorted(scores, reverse=True)
+
+
+class TestGrilleJourHeure:
+    def _table(self):
+        import diagnostic as dg
+
+        rows = []
+        for w in range(3):
+            for h in (8, 9):
+                rows.append({"date_service": pd.Timestamp("2026-08-07") + pd.Timedelta(days=7 * w),
+                             "heure": h, "obs": 10, "cnt_gt300": 6 if h == 9 else 0})
+        return dg.week_hour_table(pd.DataFrame(rows))
+
+    def test_cases_colorees_encadrement_et_marges(self):
+        html = app_mod.week_hour_grid_html(self._table(), {"weekday": 4, "hour": 9})
+        assert html.count("<tr>") == 9
+        assert 'style="background:#bc6c25;color:#FEFAE0;outline:2px solid #283618' in html
+        assert "Vendredi 9 h–10 h : 60 % de passages à plus de 5 min · 30 passages · dégradé 3 fois sur 3" in html
+        assert '<th>Ven.</th>' in html and "<th>Tous</th>" in html
+        assert ">30</td>" in html
+
+    def test_grille_vide(self):
+        assert app_mod.week_hour_grid_html(pd.DataFrame()) == ""
+
+
+class TestNavigation:
+    @pytest.fixture(autouse=True)
+    def _etat_vierge(self):
+        import streamlit as st
+
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        yield
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+
+    def test_clic_sur_la_carte_demande_le_defilement_vers_la_fiche(self):
+        import streamlit as st
+
+        st.session_state["map_arrets"] = {"selection": {"objects": {"arrets": [{"stop_id": "s9"}]}}}
+        app_mod._on_map_select()
+        assert st.session_state["_scroll_to"] == "fiche-arret"
+
+    def test_fiche_ligne_depuis_un_arret_garde_le_retour(self):
+        import streamlit as st
+
+        app_mod.line_from_stop("11", "s9", "Mérignac Centre")
+        assert (st.session_state["line_id"], st.session_state["sidebar_nav"]) == ("11", app_mod.PAGE_LINE)
+        assert st.session_state["_from_stop"] == ("s9", "Mérignac Centre")
+        assert st.session_state["_scroll_to"] == "fiche-ligne"
+        app_mod.show_line("12")
+        assert "_from_stop" not in st.session_state
+
+
+class TestArretsRarementDesservis:
+    def test_variante_marginale_ecartee_par_direction(self):
+        df = pd.DataFrame({"direction_id": [0, 0, 0, 1, 1], "stop_id": list("abcde"),
+                           "eligible": [1400, 1380, 2, 30, 3]})
+        kept = app_mod.keep_served_stops(df)
+        assert list(kept["stop_id"]) == ["a", "b", "d", "e"]
+        assert app_mod.keep_served_stops(df.head(0)).empty

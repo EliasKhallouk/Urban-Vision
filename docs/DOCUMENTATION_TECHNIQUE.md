@@ -211,7 +211,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 19 fichiers, 307 tests pytest
+└── tests/                          # 19 fichiers, 341 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -329,7 +329,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 307 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 341 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -577,7 +577,8 @@ observés qui l'encadrent.
 - `idx_observations_departure_time` (`departure_time, schedule_relationship, departure_delay, route_id`)
 - + index sur `agg_daily(date_service)`, `agg_hourly(date_service)`,
   `agg_daily_stop(date_service)` et `(stop_id)`, `agg_hourly_stop(date_service)` et `(stop_id)`,
-  `agg_daily_segment(route_id, date_service)` et `(stop_id)`
+  `agg_daily_segment(route_id, date_service)` et `(stop_id)`,
+  `agg_hourly_stop(route_id, date_service)` (profil d'une ligne par créneau)
 - `idx_stop_municipalities_commune` (sur `commune_name`, défini dans `assign_stop_municipalities.py`)
 
 Le dashboard applique aussi en opportunité quelques index à la première
@@ -801,9 +802,17 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    réseau), bloc **À surveiller** (`diagnostic.watchlist` : la ligne dont la
    baisse de score pèse le plus, baisse × passages, pour une baisse d'au moins
    5 points ; l'arrêt et la ligne qui cumulent le plus de passages > 5 min
-   parmi ceux sous 80/100 ; bouton « Ouvrir la fiche »), liste « Chercher un
-   arrêt », carte pydeck (`pdk.IconLayer`, fond « light ») des arrêts
-   (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du score de
+   parmi ceux sous 80/100, les quais d'un même arrêt étant comptés ensemble ;
+   le texte donne ce critère ; bouton « Ouvrir la fiche »), liste « Chercher
+   un arrêt », carte pydeck (`pdk.IconLayer`, fond « light ») des arrêts
+   (`load_territorial`, depuis `agg_daily_stop`), **regroupés par quai**
+   (`group_stops`, via le loader en cache `grouped_territorial`) : les arrêts
+   de même nom et de même mode distants de moins de 150 m (`GROUP_RADIUS_M` :
+   les deux sens d'un arrêt, parfois d'autres lignes au même arrêt) forment
+   un seul marqueur, à la position moyenne, qui porte le sens **le moins
+   fiable** (couleur, fiche ouverte au clic) ; l'infobulle donne le score de
+   chaque sens ; les marqueurs les moins fiables sont dessinés au-dessus des
+   autres. Couleur = palier du score de
    fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min − 2 ×
    arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la plus
    fréquentée) ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m selon les
@@ -819,19 +828,27 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    (`"'meters'"`), sinon deck.gl reçoit une expression invalide (une unité de
    taille invalide faisait retomber les icônes en unités « monde » : icônes de
    plusieurs milliers de pixels, carte recouverte et navigateur saturé).
-   **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt (`st.pydeck_chart(on_select=…,
-   selection_mode="single-object")`), par la liste de recherche, par le bloc
-   « À surveiller » ou par une ligne du tableau des arrêts
-   (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
-   `st.session_state["stop_id"]`. Blocs repliables : **Comparer les
+   **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt
+   (`st.pydeck_chart(on_select=…, selection_mode="single-object")`), par la
+   liste de recherche, par le bloc « À surveiller » ou par une ligne du tableau
+   des arrêts (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
+   `st.session_state["stop_id"]` (la liste de recherche a sa propre clé
+   `stop_search`, resynchronisée à chaque affichage : un widget dont les
+   options changent avec la période serait sinon remis à zéro) et font
+   défiler la page jusqu'à la fiche (`request_scroll` / `scroll_if_requested` :
+   script `scrollIntoView` injecté une fois par `st.html(...,
+   unsafe_allow_javascript=True)`, cibles fixes `.fiche-arret`,
+   `.fiche-ligne`, `.carte-anchor`). Blocs repliables : **Comparer les
    communes** (périmètre « Réseau complet » ; `load_commune_stats`, graphique
    `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
 2. **Lignes** — verdict (ligne à examiner en premier), les 15 lignes les moins
    fiables (`ranking_chart`), tableau de toutes les lignes du périmètre (une
    sélection ouvre la fiche), liste « Ligne analysée » (toutes les lignes du
-   réseau d'au moins `MIN_OBSERVATIONS` passages ; clé
-   `st.session_state["line_id"]`) et **fiche ligne** (§11.7), calculée sur
-   toute la ligne quel que soit le filtre « Territoire ».
+   réseau d'au moins `MIN_OBSERVATIONS` passages ; ligne affichée dans
+   `st.session_state["line_id"]`, widget `line_pick`) et **fiche ligne**
+   (§11.7), calculée sur toute la ligne quel que soit le filtre « Territoire ».
+   Toute ouverture de fiche ligne fait défiler la page jusqu'à ses
+   indicateurs.
 3. **Quand ?** — deux vues :
    - *Selon le créneau* : verdict (créneau qui se détache, règle de
      concentration de §11.7), ponctualité par créneau
@@ -883,7 +900,6 @@ applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
 `network_hourly_chart`, `commune_ranking_chart`, `mode_comparison_chart`,
 `mode_daily_chart`, `mode_hourly_chart`, `period_punctuality_chart`,
 `period_mode_chart`, `engagement_trend_chart`, `engagement_progression_chart`,
-`timeline_chart`, `hourly_risk_chart`,
 `delay_distribution_chart`, `collection_minutely_chart` (Stock), et
 `hourly_distribution_chart`. Les couleurs par palier sont calculées par
 `palette.hex(value, kind)` — cohérentes avec les rapports.
@@ -894,8 +910,18 @@ Modes : `scatter_chart` (une série de bulles par mode, `marker.symbol` =
 `mode_comparison_chart` et `period_mode_chart` (colonnes colorées par palier,
 glyphe du mode en étiquette de donnée) ; `mode_daily_chart` et
 `mode_hourly_chart` (courbes Black Forest, trait `MODE_DASH` et marqueur propres
-au mode, marqueurs colorés par palier `pourcent`). Les noms de séries portent le
-glyphe du mode (`mode_series_name`).
+au mode, marqueurs colorés par palier `pourcent`).
+
+Légendes : quand la légende dessine déjà la forme du mode (bulles, courbes),
+le nom de série est le mode seul ; pour les colonnes, dont le symbole de
+légende serait toujours un rectangle, le nom porte le glyphe
+(`mode_series_name`) et le symbole est masqué (`GLYPH_LEGEND`). La carte de
+risque affiche une échelle de taille des bulles (`bubbleLegend` : nombre de
+passages analysés de la ligne). Les graphiques à une seule série n'ont pas de
+légende, et la couleur par défaut du thème (`LIGHT_THEME["colors"]`) est Black
+Forest. Formats de nombres des infobulles : `{point.z:,.0f}` (un format
+`{…:,}` sans `f` est traité par Highcharts comme un format de date et
+n'affiche rien d'utile).
 
 Accessibilité : HTML rendu avec `<html lang="fr">`, module Highcharts
 `accessibility.js` chargé pour les graphiques non-Stock (Stock l'intègre de
@@ -905,7 +931,10 @@ série), `accessibility.enabled` forcé et description générée
 
 Fiches (§11.7) : `line_profile_chart` (retard pris par tronçon en colonnes,
 tronçons dominants en Copperwood, retard moyen à l'arrêt en courbe, arrêt
-consulté surligné par une bande Cornsilk), `skip_profile_chart` (taux
+consulté marqué d'un trait vertical, arrêts de la commune sélectionnée sur
+fond Cornsilk bordé via `commune_bands`), `slot_profile_chart` (retard moyen à
+chaque arrêt sur un créneau jour × heure, comparé au reste du temps en
+tirets), `skip_profile_chart` (taux
 d'arrêts sautés arrêt par arrêt, palier `pourcent`), `stop_lines_chart`
 (passages > 5 min et arrêts sautés par ligne, en nombre), `risk_by_label_chart`
 (retards > 5 min par créneau ou par jour de la semaine), `daily_status_chart`
@@ -963,8 +992,12 @@ Objectif : dire **d'où vient** un problème de fiabilité, pas seulement qu'il
 existe. La logique est dans `dashboard/diagnostic.py` (fonctions pures, testées
 par `tests/test_diagnostic.py`) ; `app.py` charge les données
 (`load_stop_daily`, `load_stop_hourly`, `load_route_segments`,
-`load_line_cancellations`, `load_line_stops`, `segments_available`, tous en
-cache 60 s) et met en page (`render_stop_panel`, `render_line_panel`). Les
+`load_route_hourly_stops`, `load_line_cancellations`, `load_line_stops`,
+`segments_available`, tous en cache 60 s) et met en page (`render_stop_panel`,
+`render_line_panel`). Les profils de ligne écartent les arrêts desservis par
+moins de 5 % des passages de leur direction (`keep_served_stops`) : une
+variante de course marginale ajouterait sinon des arrêts intercalés et un faux
+terminus. Les
 sous-vues passent par `st.segmented_control` : seule la sous-vue affichée est
 calculée.
 
@@ -972,15 +1005,19 @@ calculée.
 ou `?ligne=<route_id>`) ; `apply_query_params` rouvre la fiche au premier
 affichage d'un lien partagé.
 
-**Fiche arrêt** — en-tête (nom, direction, lignes avec leur glyphe de mode), 5
+**Fiche arrêt** — en-tête (nom, direction, lignes avec leur glyphe de mode),
+boutons vers les **autres quais du même arrêt** (autre sens ou autres lignes
+regroupés sur la carte, avec leur score) et « ↑ Revenir à la carte », 5
 indicateurs (score comparé au réseau, évolution entre les deux moitiés de la
 période, passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
-« En bref », bloc « Pistes », puis 4 sous-vues :
+« En bref », bloc « Pistes », bouton principal « Ouvrir la fiche de la ligne
+… » (ligne responsable ; la fiche ligne garde un bouton « ← Revenir à l'arrêt
+… »), puis 4 sous-vues :
 
 | Sous-vue | Contenu |
 |---|---|
-| Où ? | passages problématiques par ligne ; profil de la ligne responsable autour de l'arrêt (8 arrêts en amont, 2 en aval) ; bouton vers la fiche ligne |
-| Quand ? | retards > 5 min par créneau et par jour de la semaine ; bande jour par jour |
+| Où ? | passages problématiques par ligne ; profil de la ligne responsable autour de l'arrêt (8 arrêts en amont, 2 en aval) |
+| Quand ? | filtre par ligne ; **grille jour de la semaine × heure** (`week_hour_grid_html` : % de passages > 5 min par case, couleur du palier `pourcent`, totaux par jour et par heure, case du moment qui ressort encadrée, détail en infobulle) ; phrase sur le moment qui ressort (`find_peak`) et la ligne la plus touchée à ce moment (`slot_lines`) ; **répercussion** : pour une ligne et un créneau (par défaut celui qui ressort ; listes Jour / Heure), retard moyen à chaque arrêt de la direction comparé au reste du temps (`slot_profile`, 10 arrêts avant, 11 après) et phrase disant d'où vient le surcroît et jusqu'où il se prolonge (`propagation`) ; bande jour par jour (repliable) |
 | Quel type ? | zone de risque (`palette.risk_zone`) et rang de l'arrêt parmi ceux du réseau (≥ `MIN_OBSERVATIONS` passages) ; répartition des écarts (repliable) |
 | Contexte | alertes TBM des lignes de l'arrêt, avec mention de celles qui recoupent un jour dégradé |
 
@@ -988,11 +1025,16 @@ période, passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
 jour), 5 indicateurs (score comparé au réseau et à la médiane du mode, évolution,
 points perdus par les retards, points perdus par les arrêts sautés, courses
 supprimées), « En bref », « Pistes », puis 4 sous-vues : **Retards : où ?**
-(profil par direction, 3 tronçons qui prennent le plus de retard avec leur
-commune), **Service non rendu** (courses supprimées par jour, arrêts sautés le
-long de la ligne), **Quand ?**, **Contexte**. En bas, les 10 arrêts les plus
-touchés (passages > 5 min + arrêts sautés) ; une sélection ouvre la fiche
-arrêt.
+(profil de **tous les arrêts de la ligne sur le réseau**, par direction ; 3
+tronçons qui prennent le plus de retard avec leur commune), **Service non
+rendu** (courses supprimées par jour, arrêts sautés le long de la ligne),
+**Quand ?** (grille jour × heure, moment qui ressort, puis profil du créneau
+le long de la ligne et tronçon où le retard s'aggrave à ce moment-là :
+`slot_hotspot`), **Contexte**. Quand une commune est sélectionnée, ses arrêts
+sont sur fond Cornsilk dans les profils et « En bref » donne la part du retard
+de la ligne prise sur la commune et son tronçon le plus pénalisant
+(`commune_share`). En bas, les 10 arrêts les plus touchés (passages > 5 min +
+arrêts sautés) ; une sélection ouvre la fiche arrêt.
 
 Règles (`diagnostic.py`, constantes en tête de module) :
 
@@ -1007,6 +1049,10 @@ Règles (`diagnostic.py`, constantes en tête de module) :
 | Origine du retard d'une ligne | par direction : « départ » si le retard au premier arrêt atteint 50 % du maximum atteint, « localisé » si les 3 tronçons qui prennent le plus de retard en concentrent ≥ 50 %, sinon « diffus » ; aucun verdict si le maximum reste < 60 s |
 | Arrêts sautés | « extrémités » (≥ 60 % des sauts sur les 15 % premiers ou derniers arrêts), « bloc » (≥ 60 % sur une suite d'arrêts consécutifs à taux double de la moyenne), sinon « dispersé » ; rien sous 0,5 % |
 | Déséquilibre de direction | une direction porte ≥ 65 % des passages > 5 min de la ligne |
+| Moment de la semaine (`find_peak`) | case jour × heure d'au moins 10 passages et 3 par occurrence en moyenne, part > 5 min dans le palier négatif et au moins 1,5 fois celle du reste de la semaine ; parmi ces cases, celle qui cumule le plus de passages > 5 min ; « récurrent » si l'heure a été dégradée (≥ 3 passages, ≥ 15 % > 5 min) au moins une fois sur deux sur au moins 3 occurrences, « ponctuel » sinon, « à confirmer » sous 3 occurrences ; « période courte » si aucune case n'a 3 occurrences. Un pic récurrent remplace, dans « En bref », la phrase de concentration par créneau |
+| Répercussion d'un créneau (`propagation`) | retard moyen de chaque arrêt de la direction sur le créneau (au moins 2 passages), comparé au reste du temps ; autour de l'arrêt, on suit les arrêts voisins tant que leur surcroît reste ≥ 50 % de celui de l'arrêt et ≥ 60 s ; aucun verdict sous 60 s de surcroît à l'arrêt |
+| Aggravation sur un créneau (`slot_hotspot`) | tronçon où le surcroît de retard augmente le plus d'un arrêt au suivant, s'il augmente d'au moins 30 s |
+| Part de la commune (`commune_share`) | somme des retards positifs pris sur les tronçons qui mènent aux arrêts de la commune, rapportée à celle de toute la ligne |
 
 Les phrases présentent des **indices** et des **pistes** (« à confirmer sur le
 terrain ») avec leur interlocuteur naturel (commune ou Bordeaux Métropole pour
@@ -1446,7 +1492,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 307 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 341 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -1632,8 +1678,18 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
    arrêts ne sont pas comptés comme sautés et ne pèsent donc pas dans le score
    de fiabilité. La fiche ligne les affiche à part (`load_line_cancellations`).
 10. **Profil de ligne approché** : l'ordre des arrêts est le rang moyen
-    (`sum_seq / eligible`) ; sur une ligne à branches ou à variantes, les arrêts
-    des différentes branches s'intercalent dans le profil.
+    (`sum_seq / eligible`) ; sur une ligne à branches, les arrêts des
+    différentes branches s'intercalent dans le profil (les variantes
+    marginales, sous 5 % des passages, sont écartées).
+11. **Profil d'un créneau approché** : `agg_hourly_stop` range chaque passage
+    dans l'heure de départ **à cet arrêt** ; un véhicule vu à 18 h 50 à un
+    arrêt peut être compté à 19 h aux arrêts suivants. Le profil d'un créneau
+    montre donc le retard des passages de chaque arrêt sur cette heure, pas le
+    suivi véhicule par véhicule.
+12. **Regroupement des quais sur la carte** : même nom et même mode à moins
+    de 150 m ; dans les pôles (Quinconces, Palais de Justice), des quais de
+    lignes différentes sont réunis dans un même marqueur (« 6 quais ») ; la
+    fiche et l'infobulle les détaillent un à un.
 
 ---
 
@@ -1704,7 +1760,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 307, isolés (suite `pytest` complète : 307 passed), flux synthétiques
+- Tests : 341, isolés (suite `pytest` complète : 341 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1738,7 +1794,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 le 01/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -1747,6 +1803,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026) :
 | I4 | Aide CLI `--compile` : « pdflatex » | texte d'aide = `xelatex/lualatex` (`generate_monthly_report.py`) |
 | I5 | Carte territoriale : la note annonçait « le score de la ligne principale » alors que la couleur valait la ponctualité ≤ 5 min de l'arrêt, sans les arrêts sautés | score de l'arrêt = ponctualité − 2 × arrêts sautés (même formule que les lignes), note et légende textuelle réécrites (§11.3) |
 | I6 | Charte : fond de page Cornsilk (`.streamlit/config.toml`, `.stApp`) alors que la charte impose un fond blanc ; modes codés par couleur (tram en Copperwood, couleur du palier négatif) ; seuils KPI codés en dur dans « Analyse d'une ligne » | fond blanc ; modes codés par forme (§6.4) ; KPI par `palette.kpi_tier` |
+| I7 | Infobulles Highcharts : format `{point.z:,}` / `{point.passages:,}` (sans `f`, donc traité comme un format de date) — le nombre de passages ne s'affichait pas | `{…:,.0f}` partout, test de non-régression dans `tests/test_highcharts.py` |
 
 ### 26.4 Dette documentaire
 

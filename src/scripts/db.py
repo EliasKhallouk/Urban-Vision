@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_route ON agg_hourly_stop(route_id, date_service);
 CREATE TABLE IF NOT EXISTS agg_daily_segment (
     date_service TEXT NOT NULL,
     route_id TEXT NOT NULL,
@@ -228,6 +229,7 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_route ON agg_hourly_stop(route_id, date_service);
 CREATE TABLE IF NOT EXISTS agg_daily_segment (
     date_service TEXT NOT NULL,
     route_id TEXT NOT NULL,

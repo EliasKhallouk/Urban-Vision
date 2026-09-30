@@ -455,9 +455,27 @@ def _concentration_sentence(conc: dict | None) -> str | None:
             f"{format_pct(conc['rest_pct'])} le reste du temps).")
 
 
+def _timing_sentences(rec: dict, conc: dict | None, peak: dict | None, peak_line: str | None) -> list[str]:
+    out = [x for x in (_recurrence_sentence(rec),) if x]
+    if peak and peak.get("verdict") == "récurrent":
+        out.append(peak_sentence(peak, peak_line))
+    elif conc:
+        out.append(_concentration_sentence(conc))
+    return out
+
+
+def _peak_hint(peak: dict | None, where: str) -> list[str]:
+    if not peak or peak.get("verdict") != "récurrent":
+        return []
+    day = WEEKDAYS[peak["weekday"]].lower()
+    return [f"Retards qui reviennent chaque {day} {hour_range(peak['hour'])} : chercher une cause régulière "
+            f"{where} à ce moment-là (marché, sortie d'école, livraisons, stationnement, horaire trop serré)."]
+
+
 def stop_summary(responsible: dict | None, direction: str | None, cause: dict,
                  carried_s: float | None, gained_s: float | None, prev_stop: str | None,
-                 hotspot: dict | None, rec: dict, conc: dict | None, zone: str | None) -> list[str]:
+                 hotspot: dict | None, rec: dict, conc: dict | None, zone: str | None,
+                 peak: dict | None = None, peak_line: str | None = None) -> list[str]:
     """Phrases « En bref » de la fiche arrêt, dans l'ordre de lecture."""
     out = []
     if responsible is not None:
@@ -482,9 +500,7 @@ def stop_summary(responsible: dict | None, direction: str | None, cause: dict,
         origin = f" depuis {prev_stop}" if prev_stop else ""
         out.append(f"Le retard vient en partie de l'amont ({format_seconds(carried_s, signed=True)}) "
                    f"et en partie du tronçon{origin} ({format_seconds(gained_s, signed=True)}).")
-    for sentence in (_recurrence_sentence(rec), _concentration_sentence(conc)):
-        if sentence:
-            out.append(sentence)
+    out.extend(_timing_sentences(rec, conc, peak, peak_line))
     if zone:
         out.append(f"Type de retard : {RISK_ZONE_LABELS[zone].lower()}.")
     return out
@@ -492,7 +508,7 @@ def stop_summary(responsible: dict | None, direction: str | None, cause: dict,
 
 def stop_hints(cause: dict, hotspot: dict | None, prev_stop: str | None, stop_name: str,
                responsible: dict | None, rec: dict, pct_skipped: float, has_alerts: bool,
-               carried_s: float | None = None) -> list[str]:
+               carried_s: float | None = None, peak: dict | None = None) -> list[str]:
     """Pistes d'action de la fiche arrêt (indices, pas de conclusion)."""
     hints = []
     if cause["verdict"] in ("local", "mixte") and prev_stop:
@@ -510,11 +526,14 @@ def stop_hints(cause: dict, hotspot: dict | None, prev_stop: str | None, stop_na
                      "(travaux, événements).")
     if tier(pct_skipped, "pourcent") != POSITIVE:
         hints.append("Arrêts sautés fréquents : à signaler à l'exploitant.")
+    where = "autour de l'arrêt" if cause["verdict"] in ("local", "mixte") else "sur le parcours en amont"
+    hints.extend(_peak_hint(peak, where))
     return hints
 
 
 def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
-                 imbalance: dict | None, skips: dict, rec: dict, conc: dict | None) -> list[str]:
+                 imbalance: dict | None, skips: dict, rec: dict, conc: dict | None,
+                 peak: dict | None = None, commune_info: dict | None = None) -> list[str]:
     """Phrases « En bref » de la fiche ligne, dans l'ordre de lecture."""
     out = []
     if breakdown["dominant"] == "aucun":
@@ -534,6 +553,9 @@ def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
         out.append(f"Les retards se forment surtout sur quelques tronçons : {spots}.")
     elif verdict == "diffus":
         out.append("Le retard se forme un peu partout sur le parcours, sans point noir dominant.")
+    sentence = commune_sentence(commune_info)
+    if sentence:
+        out.append(sentence)
     if imbalance:
         out.append(f"Le sens {imbalance['terminus']} concentre {format_pct(imbalance['share'] * 100)} "
                    "des passages à plus de 5 min.")
@@ -545,13 +567,11 @@ def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
                    "(déviation probable).")
     elif skips["verdict"] == "dispersé":
         out.append("Les arrêts sautés sont dispersés le long de la ligne.")
-    for sentence in (_recurrence_sentence(rec), _concentration_sentence(conc)):
-        if sentence:
-            out.append(sentence)
+    out.extend(_timing_sentences(rec, conc, peak, None))
     return out
 
 
-def line_hints(origin: dict, skips: dict, cancelled: int) -> list[str]:
+def line_hints(origin: dict, skips: dict, cancelled: int, peak: dict | None = None) -> list[str]:
     """Pistes d'action de la fiche ligne, avec l'interlocuteur naturel."""
     hints = []
     verdict = origin["verdict"]
@@ -572,6 +592,7 @@ def line_hints(origin: dict, skips: dict, cancelled: int) -> list[str]:
     if skips["verdict"] == "bloc":
         hints.append(f"Arrêts sautés entre {skips['block'][0]} et {skips['block'][1]} : "
                      "à recouper avec les alertes travaux et déviations.")
+    hints.extend(_peak_hint(peak, "sur le parcours"))
     return hints
 
 
@@ -587,7 +608,8 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
        entre les deux moitiés de la période, celle dont la baisse pèse le plus
        (baisse × passages récents) ;
     2. l'arrêt qui cumule le plus de passages > 5 min parmi ceux sous
-       WATCH_SCORE_BELOW ;
+       WATCH_SCORE_BELOW (avec `n_sens`, un arrêt regroupé sur plusieurs sens est
+       cité une fois, avec son sens le moins fiable) ;
     3. la ligne qui cumule le plus de passages > 5 min parmi celles sous
        WATCH_SCORE_BELOW, si elle n'est pas déjà citée.
     """
@@ -607,11 +629,18 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
         if not s.empty:
             s = s.assign(late=s["observations"] * s["pct_retard_5min"] / 100).sort_values("late", ascending=False)
             top = s.iloc[0]
-            direction = f" — {top['direction']}" if top.get("direction") else ""
+            n_dirs = int(top["n_sens"]) if "n_sens" in top and pd.notna(top["n_sens"]) else 1
+            direction = top.get("direction") or ""
+            score = float(top["score_fiabilite"])
+            if n_dirs > 1:
+                title = f"{top['stop_name']} ({n_dirs} {'sens' if n_dirs == 2 else 'quais'})"
+                tail = f" ; le moins fiable : {direction}, {score:.1f}/100" if direction else f" ; score {score:.1f}/100"
+            else:
+                title = f"{top['stop_name']} — {direction}" if direction else str(top["stop_name"])
+                tail = f" ; score {score:.1f}/100"
             items.append({
-                "kind": "arrêt", "id": top["stop_id"], "title": f"{top['stop_name']}{direction}",
-                "reason": (f"{float(top['late']):.0f} passages à plus de 5 min, "
-                           f"score {float(top['score_fiabilite']):.1f}/100"),
+                "kind": "arrêt", "id": top["stop_id"], "title": title,
+                "reason": f"le plus de passages en retard du territoire : {float(top['late']):.0f} à plus de 5 min{tail}",
             })
     if lines is not None and not lines.empty:
         cited = {i["id"] for i in items if i["kind"] == "ligne"}
@@ -622,7 +651,276 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
             top = l.iloc[0]
             items.append({
                 "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
-                "reason": (f"{float(top['late']):.0f} passages à plus de 5 min, "
+                "reason": (f"le plus de passages en retard des lignes : {float(top['late']):.0f} à plus de 5 min ; "
                            f"score {float(top['score_fiabilite']):.1f}/100"),
             })
     return items[:limit]
+
+
+MIN_CELL_PASSAGES = 3
+MIN_SLOT_PASSAGES = 10
+MIN_SLOT_DAYS = 3
+SLOT_RECURRENT_SHARE = 0.5
+MIN_PROFILE_PASSAGES = 2
+NOTABLE_EXCESS_S = 60.0
+PROPAGATION_SHARE = 0.5
+SLOT_HOTSPOT_MIN_S = 30.0
+
+
+def hour_range(hour: int) -> str:
+    end = "minuit" if hour == 23 else f"{hour + 1} h"
+    return f"entre {hour} h et {end}"
+
+
+def slot_label(weekday: int, hour: int) -> str:
+    end = "0 h" if hour == 23 else f"{hour + 1} h"
+    return f"{WEEKDAYS[weekday]} {hour} h–{end}"
+
+
+def week_hour_table(hourly: pd.DataFrame) -> pd.DataFrame:
+    """Passages et retards > 5 min par jour de la semaine × heure.
+
+    `days` : nombre de dates observées pour ce jour et cette heure ; `bad_days` :
+    dates où cette heure a été dégradée (au moins MIN_CELL_PASSAGES passages et
+    part > 5 min dans le palier négatif « pourcent »). Colonnes attendues :
+    date_service, heure, obs, cnt_gt300.
+    """
+    cols = ["weekday", "heure", "obs", "cnt_gt300", "pct_gt300", "days", "bad_days"]
+    if hourly is None or hourly.empty:
+        return pd.DataFrame(columns=cols)
+    h = hourly.assign(_date=pd.to_datetime(hourly["date_service"]).dt.normalize())
+    per_day = (h.groupby(["_date", "heure"]).agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+               .reset_index())
+    per_day = per_day[per_day["obs"] > 0]
+    if per_day.empty:
+        return pd.DataFrame(columns=cols)
+    per_day["weekday"] = per_day["_date"].dt.dayofweek
+    per_day["_bad"] = [o >= MIN_CELL_PASSAGES and tier(c / o * 100, "pourcent") == NEGATIVE
+                       for o, c in zip(per_day["obs"], per_day["cnt_gt300"])]
+    t = (per_day.groupby(["weekday", "heure"])
+         .agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum"), days=("_date", "nunique"),
+              bad_days=("_bad", "sum"))
+         .reset_index())
+    t["pct_gt300"] = t["cnt_gt300"] / t["obs"] * 100
+    t["heure"] = t["heure"].astype(int)
+    t["bad_days"] = t["bad_days"].astype(int)
+    return t[cols]
+
+
+def find_peak(hourly: pd.DataFrame) -> dict:
+    """Moment de la semaine (jour × heure) où les retards > 5 min se concentrent.
+
+    Candidat : au moins MIN_SLOT_PASSAGES passages et MIN_CELL_PASSAGES par
+    occurrence en moyenne (les heures creuses à un ou deux passages sont
+    écartées), part > 5 min dans le palier négatif et au moins
+    CONCENTRATION_RATIO fois celle du reste de la semaine. Parmi les candidats,
+    celui qui cumule le plus de passages > 5 min l'emporte (le moment qui touche
+    le plus d'usagers). Verdict : « récurrent » (dégradé au moins
+    SLOT_RECURRENT_SHARE des fois, sur au moins MIN_SLOT_DAYS occurrences),
+    « ponctuel », « à confirmer » (moins de MIN_SLOT_DAYS occurrences), « période
+    courte » (aucun moment observé MIN_SLOT_DAYS fois) ou « aucun ».
+    """
+    t = week_hour_table(hourly)
+    if t.empty:
+        return {"verdict": "aucun"}
+    total_obs, total_cnt = float(t["obs"].sum()), float(t["cnt_gt300"].sum())
+    rest_obs = total_obs - t["obs"]
+    t = t.assign(rest_pct=((total_cnt - t["cnt_gt300"]) / rest_obs.where(rest_obs > 0) * 100).fillna(0.0))
+    negative = [tier(v, "pourcent") == NEGATIVE for v in t["pct_gt300"]]
+    cand = t[(t["obs"] >= MIN_SLOT_PASSAGES) & (t["obs"] >= MIN_CELL_PASSAGES * t["days"])
+             & pd.Series(negative, index=t.index)
+             & (t["pct_gt300"] >= CONCENTRATION_RATIO * t["rest_pct"])]
+    if cand.empty:
+        return {"verdict": "période courte" if int(t["days"].max()) < MIN_SLOT_DAYS else "aucun"}
+    recurrent = cand[(cand["days"] >= MIN_SLOT_DAYS) & (cand["bad_days"] / cand["days"] >= SLOT_RECURRENT_SHARE)]
+    if not recurrent.empty:
+        row = recurrent.sort_values(["cnt_gt300", "bad_days"], ascending=False).iloc[0]
+        verdict = "récurrent"
+    else:
+        row = cand.sort_values(["cnt_gt300", "pct_gt300"], ascending=False).iloc[0]
+        verdict = "à confirmer" if int(row["days"]) < MIN_SLOT_DAYS else "ponctuel"
+    return {"verdict": verdict, "weekday": int(row["weekday"]), "hour": int(row["heure"]),
+            "pct": float(row["pct_gt300"]), "rest_pct": float(row["rest_pct"]), "obs": int(row["obs"]),
+            "days": int(row["days"]), "bad_days": int(row["bad_days"])}
+
+
+def slot_lines(hourly: pd.DataFrame, weekday: int, hour: int) -> pd.DataFrame:
+    """Lignes présentes à un moment (jour × heure), de la plus touchée à la moins touchée.
+
+    Colonnes attendues : date_service, route_id, heure, obs, cnt_gt300.
+    """
+    cols = ["route_id", "obs", "cnt_gt300", "pct_gt300"]
+    if hourly is None or hourly.empty:
+        return pd.DataFrame(columns=cols)
+    dow = pd.to_datetime(hourly["date_service"]).dt.dayofweek
+    cell = hourly[(dow == weekday) & (hourly["heure"].astype(int) == hour)]
+    g = cell.groupby("route_id").agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum")).reset_index()
+    g = g[g["obs"] > 0]
+    g["pct_gt300"] = g["cnt_gt300"] / g["obs"] * 100
+    return g.sort_values(["cnt_gt300", "pct_gt300"], ascending=False).reset_index(drop=True)[cols]
+
+
+def slot_profile(route_hourly: pd.DataFrame, profile: pd.DataFrame, weekday: int, hour: int) -> pd.DataFrame:
+    """Retard moyen de chaque arrêt d'une direction sur un créneau, et d'habitude.
+
+    `route_hourly` : agrégats horaires de la ligne par arrêt (date_service,
+    stop_id, heure, obs, sum_delay) ; `profile` : arrêts ordonnés de la direction
+    (stop_id, stop_name, order, commune). « D'habitude » = tous les autres jours
+    et heures de la période. `excess` = retard sur le créneau − retard habituel.
+    """
+    base = profile[["stop_id", "stop_name", "order", "commune"]].copy()
+    if route_hourly is None or route_hourly.empty:
+        return base.assign(slot_delay=float("nan"), usual_delay=float("nan"), excess=float("nan"), slot_obs=0)
+    dow = pd.to_datetime(route_hourly["date_service"]).dt.dayofweek
+    in_slot = (dow == weekday) & (route_hourly["heure"].astype(int) == hour)
+
+    def _agg(part: pd.DataFrame, prefix: str) -> pd.DataFrame:
+        return (part.groupby("stop_id").agg(**{f"{prefix}_obs": ("obs", "sum"),
+                                               f"{prefix}_sum": ("sum_delay", "sum")}).reset_index())
+
+    p = base.merge(_agg(route_hourly[in_slot], "slot"), on="stop_id", how="left")
+    p = p.merge(_agg(route_hourly[~in_slot], "usual"), on="stop_id", how="left")
+    p[["slot_obs", "usual_obs"]] = p[["slot_obs", "usual_obs"]].fillna(0)
+    p["slot_delay"] = p["slot_sum"] / p["slot_obs"].where(p["slot_obs"] >= MIN_PROFILE_PASSAGES)
+    p["usual_delay"] = p["usual_sum"] / p["usual_obs"].where(p["usual_obs"] >= MIN_PROFILE_PASSAGES)
+    p["excess"] = p["slot_delay"] - p["usual_delay"]
+    return p.sort_values("order").reset_index(drop=True)[
+        ["stop_id", "stop_name", "order", "commune", "slot_obs", "slot_delay", "usual_delay", "excess"]]
+
+
+def propagation(sp: pd.DataFrame, stop_id: str) -> dict:
+    """Où le surcroît de retard d'un créneau apparaît-il, et jusqu'où se prolonge-t-il ?
+
+    Autour de l'arrêt donné, on suit les arrêts voisins (ordre de la ligne) tant
+    que leur surcroît reste au moins égal à PROPAGATION_SHARE de celui de
+    l'arrêt (et à NOTABLE_EXCESS_S). Verdict « aucun » si le surcroît à l'arrêt
+    est inférieur à NOTABLE_EXCESS_S, sinon « prolongé » ou « résorbé ».
+    """
+    p = sp.dropna(subset=["excess"]).sort_values("order").reset_index(drop=True)
+    if p.empty or stop_id not in set(p["stop_id"]):
+        return {"verdict": "inconnu"}
+    i = int(p.index[p["stop_id"] == stop_id][0])
+    e0 = float(p.loc[i, "excess"])
+    out = {"slot_delay": float(p.loc[i, "slot_delay"]), "usual_delay": float(p.loc[i, "usual_delay"]),
+           "excess": e0}
+    if e0 < NOTABLE_EXCESS_S:
+        return dict(out, verdict="aucun")
+    threshold = max(NOTABLE_EXCESS_S, PROPAGATION_SHARE * e0)
+    j = i
+    while j > 0 and p.loc[j - 1, "excess"] >= threshold:
+        j -= 1
+    k = i
+    while k < len(p) - 1 and p.loc[k + 1, "excess"] >= threshold:
+        k += 1
+    return dict(out, verdict="prolongé" if k > i else "résorbé", origin=p.loc[j, "stop_name"], n_up=i - j,
+                until=p.loc[k, "stop_name"], n_down=k - i, is_last=i == len(p) - 1)
+
+
+def slot_hotspot(sp: pd.DataFrame) -> dict | None:
+    """Tronçon où le surcroît de retard du créneau augmente le plus (au moins SLOT_HOTSPOT_MIN_S)."""
+    p = sp.dropna(subset=["excess"]).sort_values("order").reset_index(drop=True)
+    if len(p) < 2:
+        return None
+    rise = p["excess"].diff()
+    idx = rise.idxmax()
+    if pd.isna(rise.loc[idx]) or float(rise.loc[idx]) < SLOT_HOTSPOT_MIN_S:
+        return None
+    return {"from": p.loc[idx - 1, "stop_name"], "to": p.loc[idx, "stop_name"], "stop_id": p.loc[idx, "stop_id"],
+            "commune": p.loc[idx, "commune"], "gain_s": float(rise.loc[idx])}
+
+
+def commune_share(profile: pd.DataFrame, commune: str | None) -> dict | None:
+    """Part du retard pris par une ligne sur les arrêts d'une commune (toutes directions).
+
+    Retard pris = somme des retards positifs pris sur les tronçons qui mènent
+    aux arrêts (colonne sum_gain de agg_daily_segment).
+    """
+    if not commune or profile is None or profile.empty:
+        return None
+    gains = profile["sum_gain"].clip(lower=0)
+    total = float(gains.sum())
+    inside = profile[profile["commune"] == commune]
+    if inside.empty:
+        return {"commune": commune, "n_stops": 0, "share": 0.0, "hotspot": None}
+    share = float(gains[inside.index].sum()) / total if total > 0 else 0.0
+    spots = inside[(inside["gain_s"] > 0) & inside["prev_stop_name"].notna()]
+    hotspot = None
+    if not spots.empty:
+        r = spots.loc[spots["gain_s"].idxmax()]
+        hotspot = {"from": r["prev_stop_name"], "to": r["stop_name"], "stop_id": r["stop_id"],
+                   "commune": commune, "gain_s": float(r["gain_s"])}
+    return {"commune": commune, "n_stops": int(inside["stop_id"].nunique()), "share": share, "hotspot": hotspot}
+
+
+def peak_sentence(peak: dict, line: str | None = None) -> str | None:
+    """Phrase sur le moment de la semaine où les retards se concentrent."""
+    verdict = peak.get("verdict")
+    if verdict == "aucun":
+        return "Aucun moment de la semaine ne se détache nettement."
+    if verdict == "période courte":
+        return ("Pour repérer un moment qui revient chaque semaine (par exemple tous les vendredis vers 13 h), "
+                "élargir la période à au moins trois semaines.")
+    if verdict not in ("récurrent", "ponctuel", "à confirmer"):
+        return None
+    day = WEEKDAYS[peak["weekday"]].lower()
+    moment = f"le {day} {hour_range(peak['hour'])}"
+    figures = (f"{format_pct(peak['pct'])} de passages à plus de 5 min, contre "
+               f"{format_pct(peak['rest_pct'])} le reste du temps")
+    if verdict == "récurrent":
+        text = (f"Pic récurrent {moment} : {figures} ; {peak['bad_days']} {day}s dégradés sur "
+                f"{peak['days']}.")
+    elif verdict == "ponctuel":
+        text = (f"{moment[0].upper() + moment[1:]} ressort ({figures}), mais seulement "
+                f"{_days(peak['bad_days'], 'dégradé').replace('jour', day)} sur {peak['days']} : plutôt un "
+                "incident ponctuel.")
+    else:
+        text = (f"{moment[0].upper() + moment[1:]} ressort ({figures}), mais n'a été observé que "
+                f"{peak['days']} fois : à confirmer sur une période plus longue.")
+    if line:
+        text += f" Ligne la plus touchée à ce moment-là : {line}."
+    return text
+
+
+def propagation_sentence(prop: dict, ligne: str, stop_name: str) -> str | None:
+    """Phrase sur la répercussion du créneau le long de la ligne, autour d'un arrêt."""
+    verdict = prop.get("verdict")
+    if verdict == "inconnu":
+        return None
+    here = (f"À ce moment-là, la ligne {ligne} passe à {stop_name} avec "
+            f"{format_seconds(prop['slot_delay'], signed=True)} de retard, contre "
+            f"{format_seconds(prop['usual_delay'], signed=True)} d'habitude")
+    if verdict == "aucun":
+        return here + " : pas de surcroît notable."
+    origin = (" Ce surcroît naît sur le tronçon qui mène à l'arrêt" if prop["n_up"] == 0 else
+              f" Ce surcroît est déjà là dès {prop['origin']} ({prop['n_up']} arrêt(s) avant)")
+    if prop["is_last"]:
+        end = " ; l'arrêt est le dernier observé de la ligne."
+    elif verdict == "prolongé":
+        end = f" et se prolonge sur les {prop['n_down']} arrêt(s) suivant(s), jusqu'à {prop['until']}."
+    else:
+        end = " et se résorbe dès l'arrêt suivant."
+    return here + "." + origin + end
+
+
+def commune_sentence(info: dict | None) -> str | None:
+    if not info:
+        return None
+    if info["n_stops"] == 0:
+        return f"La ligne ne dessert pas {info['commune']} sur la période."
+    text = (f"Sur {info['commune']} ({info['n_stops']} arrêt(s) de la ligne), la ligne prend "
+            f"{format_pct(info['share'] * 100)} de son retard")
+    if info["hotspot"] and info["share"] >= 0.05:
+        h = info["hotspot"]
+        text += (f" ; tronçon le plus pénalisant de la commune : {h['from']} → {h['to']} "
+                 f"({format_seconds(h['gain_s'], signed=True)} en moyenne).")
+    else:
+        text += " : l'essentiel se forme ailleurs sur le parcours."
+    return text
+
+
+def slot_hotspot_sentence(hotspot: dict | None) -> str:
+    """Phrase sur le tronçon où le retard s'aggrave le plus à un moment donné (`slot_hotspot`)."""
+    if not hotspot:
+        return "À ce moment-là, aucun tronçon n'aggrave nettement le retard par rapport au reste du temps."
+    return (f"À ce moment-là, le retard s'aggrave surtout {_segment_label(hotspot)} : "
+            f"{format_seconds(hotspot['gain_s'], signed=True)} de plus que d'habitude sur ce tronçon.")

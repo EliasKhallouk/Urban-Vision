@@ -60,25 +60,25 @@ class TestScatterChart:
     def test_serie_par_mode_forme_dediee(self):
         config = hc.scatter_chart(self._df())
         assert len(config["series"]) == 2
-        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        bus = next(s for s in config["series"] if s["name"] == "Bus")
         assert bus["marker"]["symbol"] == "square"
         assert len(bus["data"]) == 2
         assert bus["data"][0]["score"] == 70.0
         assert bus["data"][0]["z"] == 100
-        tram = next(s for s in config["series"] if s["name"] == "● Tramway")
+        tram = next(s for s in config["series"] if s["name"] == "Tramway")
         assert tram["marker"]["symbol"] == "circle"
         assert tram["data"][0]["name"] == "M1"
         _assert_json_serializable(config)
 
     def test_couleur_du_point_par_palier_de_score(self):
         config = hc.scatter_chart(self._df())
-        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        bus = next(s for s in config["series"] if s["name"] == "Bus")
         assert bus["data"][0]["color"] == palette_hex(70.0, "score")
         assert bus["data"][1]["color"] == palette_hex(80.0, "score")
 
     def test_zone_de_risque_et_seuils_traces(self):
         config = hc.scatter_chart(self._df())
-        bus = next(s for s in config["series"] if s["name"] == "■ Bus")
+        bus = next(s for s in config["series"] if s["name"] == "Bus")
         assert bus["data"][0]["zone"] == "Retards fréquents mais courts"
         assert bus["data"][1]["zone"] == "Risque faible"
         assert config["xAxis"]["plotLines"][0]["value"] == 60.0
@@ -149,7 +149,7 @@ class TestModeCharts:
     def test_mode_daily_chart(self):
         config = hc.mode_daily_chart(self._mode_daily_df())
         names = [s["name"] for s in config["series"]]
-        assert names == ["■ Bus", "● Tramway"]
+        assert names == ["Bus", "Tramway"]
         bus, tram = config["series"]
         assert bus["color"] == BLACK_FOREST
         assert bus["marker"]["symbol"] == "square"
@@ -307,3 +307,72 @@ class TestHtml:
     def test_html_description_sans_series_nommees(self):
         html = hc._html({"chart": {"type": "line"}, "series": [{}]}, height=100)
         assert "Graphique en série temporelle" in html
+
+class TestLisibilite:
+    def test_aucun_format_de_nombre_invalide(self):
+        import inspect
+
+        assert ":,}" not in inspect.getsource(hc)
+
+    def test_legendes_sans_glyphe_double(self):
+        df = pd.DataFrame({"mode": ["Bus"], "route_type": [3], "retard_median_s": [50.0],
+                           "pct_retard_5min": [5.0], "observations": [100], "ligne": ["L1"],
+                           "score_fiabilite": [80.0]})
+        scatter = hc.scatter_chart(df)
+        assert scatter["series"][0]["name"] == "Bus"
+        assert scatter["legend"]["bubbleLegend"]["enabled"] is True
+        assert "{point.z:,.0f}" in scatter["series"][0]["tooltip"]["pointFormat"]
+        comp = hc.mode_comparison_chart(pd.DataFrame({
+            "route_type": [3], "mode": ["Bus"], "pct_a_l_heure": [90.0], "pct_retard_5min": [5.0],
+            "pct_avance_1min": [1.0], "pct_arrets_sautes": [0.5]}))
+        assert comp["series"][0]["name"] == "■ Bus"
+        assert comp["legend"]["symbolWidth"] == 0
+
+
+class TestProfils:
+    def _profile(self):
+        return pd.DataFrame({
+            "stop_id": ["a", "b", "c", "d", "e"], "stop_name": list("ABCDE"), "order": [1, 2, 3, 4, 5],
+            "prev_stop_name": [None, "A", "B", "C", "D"], "gain_s": [0.0, 10.0, 60.0, 5.0, 5.0],
+            "delay_s": [10.0, 20.0, 80.0, 85.0, 90.0], "skipped": [0] * 5, "eligible": [10] * 5,
+        })
+
+    def test_bandes_de_commune_sur_les_suites_d_arrets(self):
+        bands = hc.commune_bands(["a", "b", "c", "d", "e"], {"b", "c", "e"}, "Pessac")
+        assert [(b["from"], b["to"]) for b in bands] == [(0.5, 2.5), (3.5, 4.5)]
+        assert bands[0]["label"]["text"] == "Pessac"
+        assert "label" not in bands[1]
+        assert hc.commune_bands(["a"], set(), "Pessac") == []
+
+    def test_profil_de_ligne_commune_et_arret(self):
+        config = hc.line_profile_chart(self._profile(), highlight_stop_id="c", hotspot_stop_ids={"c"},
+                                       commune_stop_ids={"d", "e"}, commune_label="Pessac")
+        assert config["xAxis"]["plotLines"][0]["value"] == 2
+        assert config["xAxis"]["plotBands"][0]["from"] == 2.5
+        assert config["series"][0]["data"][2]["color"] == COPPERWOOD
+        _assert_json_serializable(config)
+
+    def test_profil_d_un_creneau(self):
+        sp = self._profile().assign(slot_delay=[30.0, None, 400.0, 380.0, 100.0],
+                                    usual_delay=[20.0, 25.0, 60.0, 70.0, 80.0])
+        config = hc.slot_profile_chart(sp, "Vendredi 13 h–14 h", highlight_stop_id="c")
+        assert config["series"][0]["name"] == "Vendredi 13 h–14 h"
+        assert config["series"][0]["data"] == [30, None, 400, 380, 100]
+        assert config["series"][1]["data"][2] == 60
+        assert config["xAxis"]["plotLines"][0]["value"] == 2
+        _assert_json_serializable(config)
+
+
+class TestLegendes:
+    def test_couleur_par_defaut_de_la_charte(self):
+        assert hc.LIGHT_THEME["colors"][0] == BLACK_FOREST
+
+    def test_pas_de_legende_sur_les_graphiques_a_une_serie(self):
+        assert hc.ranking_chart(_ranking_df())["legend"] == {"enabled": False}
+        t = pd.DataFrame({"période": ["Matin"], "obs": [10], "pct_gt300": [20.0]})
+        assert hc.risk_by_label_chart(t, "période")["legend"] == {"enabled": False}
+
+    def test_serie_du_profil_a_une_couleur_de_legende(self):
+        p = pd.DataFrame({"stop_id": ["a"], "stop_name": ["A"], "order": [1], "prev_stop_name": [None],
+                          "gain_s": [0.0], "delay_s": [10.0]})
+        assert hc.line_profile_chart(p)["series"][0]["color"] == hc.BLACK_FOREST_35
