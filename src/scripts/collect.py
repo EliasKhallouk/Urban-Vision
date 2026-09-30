@@ -146,11 +146,30 @@ def get_last_known_success(conn):
     return float(row[0]) if row[0] is not None else None
 
 
+def ensure_segments(conn) -> None:
+    """Rattrapage complet de agg_daily_segment si la table est vide.
+
+    Exécuté au démarrage du collecteur (jamais par le dashboard) : le recalcul
+    complet tient le verrou d'écriture quelques minutes sur une VM 1 vCPU.
+    """
+    try:
+        conn.executescript(dbio.AGG_DDL)
+        if conn.execute("SELECT 1 FROM agg_daily_segment LIMIT 1").fetchone() is not None:
+            return
+        logger.info("Rattrapage complet des tronçons (agg_daily_segment)…")
+        start = time.monotonic()
+        dbio.refresh_segments(conn)
+        logger.info("Rattrapage des tronçons terminé en %.0f s", time.monotonic() - start)
+    except Exception as e:
+        logger.warning("Rattrapage des tronçons échoué : %s", e)
+
+
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS};")
     logger.info("Démarrage de la collecte Urban Vision (intervalle: %ss)", POLL_INTERVAL_SECONDS)
+    ensure_segments(conn)
 
     last_success_ts = get_last_known_success(conn)
     last_refresh_ts = 0.0
@@ -167,14 +186,20 @@ def main():
             n_rows = process_feed(conn, feed)
 
             # Agrégats du dashboard : recalcul espacé, pas à chaque poll.
-            try:
-                if time.time() - last_refresh_ts >= AGGREGATE_REFRESH_INTERVAL_SECONDS:
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            if time.time() - last_refresh_ts >= AGGREGATE_REFRESH_INTERVAL_SECONDS:
+                today = datetime.now().strftime("%Y-%m-%d")
+                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                try:
                     dbio.refresh_aggregates(conn, days=[yesterday, today])
                     last_refresh_ts = time.time()
-            except Exception as e:
-                logger.warning("Refresh des agrégats échoué : %s", e)
+                except Exception as e:
+                    logger.warning("Refresh des agrégats échoué : %s", e)
+                try:
+                    segments_start = time.monotonic()
+                    dbio.refresh_segments(conn, days=[yesterday, today])
+                    logger.info("Tronçons rafraîchis en %.1f s", time.monotonic() - segments_start)
+                except Exception as e:
+                    logger.warning("Refresh des tronçons échoué : %s", e)
 
             logger.info(
                 "OK - %d entités, %d observations mises à jour (feed ts=%s)",

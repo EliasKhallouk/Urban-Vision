@@ -188,3 +188,46 @@ class TestBouclePrincipale:
             assert refresh_times[1] - refresh_times[0] >= 1.8, (
                 "le refresh doit être espacé d'au moins l'intervalle configuré"
             )
+
+class TestRattrapageTroncons:
+    def _obs(self, c):
+        c.executemany(
+            """INSERT INTO observations
+               (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id,
+                schedule_relationship, arrival_delay, departure_delay, departure_time, last_seen_at)
+               VALUES (?, '20260911', 'A', 0, ?, ?, 'SCHEDULED', NULL, ?, ?, 0)""",
+            [("t1", 1, "s1", 0, 1_789_120_000), ("t1", 2, "s2", 60, 1_789_120_300)],
+        )
+        c.commit()
+
+    def test_table_vide_recalculee_integralement(self, conn):
+        import collect as coll
+
+        self._obs(conn)
+        coll.ensure_segments(conn)
+        assert conn.execute("SELECT SUM(pairs), SUM(sum_gain) FROM agg_daily_segment").fetchone() == (1, 60)
+
+    def test_table_remplie_laissee_intacte(self, conn, monkeypatch):
+        import collect as coll
+        import db as dbio
+
+        self._obs(conn)
+        dbio.refresh_segments(conn)
+        calls = []
+        monkeypatch.setattr(dbio, "refresh_segments", lambda c, days=None: calls.append(days))
+        coll.ensure_segments(conn)
+        assert calls == []
+
+    def test_echec_journalise_sans_interrompre(self, conn, monkeypatch):
+        import collect as coll
+        import db as dbio
+
+        warnings = []
+        monkeypatch.setattr(coll.logger, "warning", lambda *a, **k: warnings.append(a))
+
+        def boom(c, days=None):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(dbio, "refresh_segments", boom)
+        coll.ensure_segments(conn)
+        assert warnings and "tronçons" in warnings[0][0]

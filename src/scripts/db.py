@@ -129,6 +129,26 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
+CREATE TABLE IF NOT EXISTS agg_daily_segment (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    stop_id TEXT NOT NULL,
+    eligible INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    sum_seq INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    pairs INTEGER NOT NULL,
+    sum_prev_delay INTEGER NOT NULL,
+    sum_gain INTEGER NOT NULL,
+    cnt_gain_gt120 INTEGER NOT NULL,
+    prev_stop_id TEXT,
+    hist_gain TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, direction_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_route ON agg_daily_segment(route_id, date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_id);
 """
 
 
@@ -208,6 +228,26 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
+CREATE TABLE IF NOT EXISTS agg_daily_segment (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    stop_id TEXT NOT NULL,
+    eligible INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    sum_seq INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    pairs INTEGER NOT NULL,
+    sum_prev_delay INTEGER NOT NULL,
+    sum_gain INTEGER NOT NULL,
+    cnt_gain_gt120 INTEGER NOT NULL,
+    prev_stop_id TEXT,
+    hist_gain TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, direction_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_route ON agg_daily_segment(route_id, date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_id);
 """
 
 # ::SCHED_BOUNDS:: borne le scan aux jours traités (incrémental) ; chaîne vide = tout
@@ -418,6 +458,130 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
             (d0_ts, d1_ts),
         )
         c.execute(_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?"), (d0_ts, d1_ts))
+    c.commit()
+
+
+_SEGMENT_SQL = """
+INSERT OR REPLACE INTO agg_daily_segment
+    (date_service, route_id, direction_id, stop_id, eligible, skipped, sum_seq,
+     obs, sum_delay, pairs, sum_prev_delay, sum_gain, cnt_gain_gt120,
+     prev_stop_id, hist_gain)
+WITH seq AS (
+    SELECT o.route_id, COALESCE(o.direction_id, -1) dir, o.stop_id, o.departure_time,
+           o.departure_delay,
+           LAG(o.departure_delay) OVER w prev_delay,
+           LAG(o.stop_id) OVER w prev_stop_id
+    FROM observations o
+    WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+          AND o.departure_time IS NOT NULL ::WINDOW_BOUNDS::
+    WINDOW w AS (PARTITION BY o.trip_id, o.start_date ORDER BY o.stop_sequence)
+),
+d AS (
+    SELECT route_id, dir, stop_id,
+           date(datetime(departure_time, 'unixepoch', 'localtime')) ds,
+           departure_delay, prev_delay, prev_stop_id,
+           departure_delay - prev_delay gain
+    FROM seq
+    WHERE 1 = 1 ::DAY_BOUNDS::
+),
+metrics AS (
+    SELECT route_id, dir, stop_id, ds, COUNT(*) obs,
+           COALESCE(SUM(departure_delay), 0) sum_delay,
+           COUNT(prev_delay) pairs,
+           COALESCE(SUM(prev_delay), 0) sum_prev_delay,
+           COALESCE(SUM(gain), 0) sum_gain,
+           COALESCE(SUM(CASE WHEN gain > 120 THEN 1 ELSE 0 END), 0) cnt_gain_gt120
+    FROM d GROUP BY route_id, dir, stop_id, ds
+),
+hist AS (
+    SELECT route_id, dir, stop_id, ds, json_group_object(gain, cnt) h
+    FROM (
+        SELECT route_id, dir, stop_id, ds, gain, COUNT(*) cnt
+        FROM d WHERE gain IS NOT NULL
+        GROUP BY route_id, dir, stop_id, ds, gain
+    ) GROUP BY route_id, dir, stop_id, ds
+),
+prevmode AS (
+    SELECT route_id, dir, stop_id, ds, prev_stop_id
+    FROM (
+        SELECT route_id, dir, stop_id, ds, prev_stop_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY route_id, dir, stop_id, ds
+                   ORDER BY COUNT(*) DESC, prev_stop_id
+               ) rn
+        FROM d WHERE prev_stop_id IS NOT NULL
+        GROUP BY route_id, dir, stop_id, ds, prev_stop_id
+    ) WHERE rn = 1
+),
+skp AS (
+    SELECT o.route_id, COALESCE(o.direction_id, -1) dir, o.stop_id, o.stop_sequence,
+           substr(o.start_date, 1, 4) || '-' || substr(o.start_date, 5, 2)
+               || '-' || substr(o.start_date, 7, 2) ds,
+           CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END skipped
+    FROM observations o
+    WHERE o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')
+          AND o.start_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+          ::SKP_BOUNDS::
+),
+skpagg AS (
+    SELECT route_id, dir, stop_id, ds, COUNT(*) eligible, SUM(skipped) skipped,
+           SUM(stop_sequence) sum_seq
+    FROM skp GROUP BY route_id, dir, stop_id, ds
+),
+parts AS (
+    SELECT ds, route_id, dir, stop_id, 0 eligible, 0 skipped, 0 sum_seq, obs, sum_delay,
+           pairs, sum_prev_delay, sum_gain, cnt_gain_gt120, NULL prev_stop_id, NULL h
+    FROM metrics
+    UNION ALL
+    SELECT ds, route_id, dir, stop_id, eligible, skipped, sum_seq, 0, 0, 0, 0, 0, 0, NULL, NULL
+    FROM skpagg
+    UNION ALL
+    SELECT ds, route_id, dir, stop_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, h FROM hist
+    UNION ALL
+    SELECT ds, route_id, dir, stop_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, prev_stop_id, NULL FROM prevmode
+)
+SELECT ds, route_id, dir, stop_id,
+       SUM(eligible), SUM(skipped), SUM(sum_seq), SUM(obs), SUM(sum_delay), SUM(pairs),
+       SUM(sum_prev_delay), SUM(sum_gain), SUM(cnt_gain_gt120),
+       MAX(prev_stop_id), COALESCE(MAX(h), '{}')
+FROM parts
+GROUP BY ds, route_id, dir, stop_id
+"""
+
+SEGMENT_LOOKBACK_SECONDS = 3 * 3600
+
+
+def refresh_segments(c, days: list[str] | None = None) -> None:
+    """Met à jour agg_daily_segment (retard pris tronçon par tronçon).
+
+    Pour chaque voyage, le retard observé à un arrêt est comparé à celui de
+    l'arrêt observé précédent du même voyage (LAG sur stop_sequence) : `gain`
+    est le retard pris sur le tronçon, `prev_delay` le retard déjà présent en
+    arrivant. Les arrêts sautés et l'ordre moyen de l'arrêt dans la ligne
+    (sum_seq / eligible) sont comptés par direction.
+
+    days=None  -> (re)calcul complet (coûteux, à faire une fois).
+    days=[...] -> ne recalcule que les dates-service listées ; la fenêtre de
+                  lecture remonte de SEGMENT_LOOKBACK_SECONDS pour que le premier
+                  arrêt d'un voyage à cheval sur minuit garde son prédécesseur.
+    """
+    c.executescript(AGG_DDL)
+    if days is None:
+        c.execute(_SEGMENT_SQL.replace("::WINDOW_BOUNDS::", "")
+                              .replace("::DAY_BOUNDS::", "")
+                              .replace("::SKP_BOUNDS::", ""))
+    else:
+        d0_ts = int(datetime.strptime(min(days), "%Y-%m-%d").timestamp())
+        d1_ts = int((datetime.strptime(max(days), "%Y-%m-%d") + timedelta(days=1)).timestamp())
+        day_ints = "', '".join(d.replace("-", "") for d in days)
+        day_strs = "', '".join(days)
+        c.execute(f"DELETE FROM agg_daily_segment WHERE date_service IN ('{day_strs}')")
+        c.execute(
+            _SEGMENT_SQL.replace("::WINDOW_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?")
+                        .replace("::DAY_BOUNDS::", "AND departure_time >= ?")
+                        .replace("::SKP_BOUNDS::", f"AND o.start_date IN ('{day_ints}')"),
+            (d0_ts - SEGMENT_LOOKBACK_SECONDS, d1_ts, d0_ts),
+        )
     c.commit()
 
 

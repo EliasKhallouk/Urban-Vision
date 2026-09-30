@@ -104,6 +104,7 @@ public en ligne (https://urban-vision.duckdns.org).
       │  collection_gaps,          │
       │  routes, stops,            │
       │  agg_daily/agg_hourly/…,   │
+      │  agg_daily_segment,        │
       │  stop_municipalities,      │
       │  municipalities,           │
       │  stop_direction,           │
@@ -133,6 +134,11 @@ Flux de traitement en résumé :
    (histogrammes JSON des délais pour une médiane exacte). Le collecteur
    rafraîchit les agrégats toutes les 300 s (incrément sur hier/aujourd'hui) ;
    le dashboard les reconstruit intégralement s'ils sont vides/incomplets.
+   `refresh_segments()` calcule en plus `agg_daily_segment` (retard pris
+   tronçon par tronçon, retard déjà présent en arrivant, arrêts sautés par
+   direction), au même rythme ; son rattrapage complet est fait par le
+   collecteur à son démarrage (`collect.py::ensure_segments`), jamais par le
+   dashboard.
 4. **Analyse quotidienne** : `analyze.py` calcule les statistiques par ligne
    (buffer de stabilisation 20 min, exclusion des trous de collecte) et les
    écrit dans `daily_line_stats` (usage historique, non lue par le dashboard).
@@ -204,7 +210,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 17 fichiers, 237 tests pytest
+└── tests/                          # 18 fichiers, 249 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -322,7 +328,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 237 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 249 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -520,12 +526,35 @@ le dashboard et les rapports.
 | `agg_hourly` | jour × ligne × heure | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300` |
 | `agg_daily_stop` | jour × ligne × arrêt | idem `agg_daily` + `skipped`/`eligible` |
 | `agg_hourly_stop` | jour × ligne × arrêt × heure | idem `agg_hourly` |
+| `agg_daily_segment` | jour × ligne × direction × arrêt | voir ci-dessous (calculée par `db.py::refresh_segments`) |
 
 - `cnt_le300` : passages avec retard ≤ 300 s (« à l'heure »).
 - `cnt_gt300` : passages avec retard > 300 s.
 - `cnt_lt60` : passages en avance de plus de 60 s.
 - `histogram` : JSON `{secondes_de_retard: effectif}` permettant de reconstruire
   une **médiane exacte** sur toute période (`app.py::_median_from_hists`).
+
+**`agg_daily_segment`** — retard pris tronçon par tronçon. Pour chaque voyage,
+le retard observé à un arrêt est comparé à celui de l'**arrêt observé
+précédent du même voyage** (`LAG(departure_delay) OVER (PARTITION BY trip_id,
+start_date ORDER BY stop_sequence)`, passages `SCHEDULED` à retard connu). PK
+`(date_service, route_id, direction_id, stop_id)` ; `direction_id` absent du
+flux → `-1`.
+
+| Colonne | Rôle |
+|---|---|
+| `eligible`, `skipped` | arrêts attendus (`SCHEDULED` + `SKIPPED`) et sautés, par direction (jour-service = `start_date`) |
+| `sum_seq` | somme des `stop_sequence` des arrêts attendus : `sum_seq / eligible` = rang moyen de l'arrêt dans la ligne (ordre du profil) |
+| `obs`, `sum_delay` | passages à retard connu et somme des retards à l'arrêt |
+| `pairs` | passages ayant un arrêt observé précédent dans le même voyage |
+| `sum_prev_delay` | somme des retards **déjà présents en arrivant** (à l'arrêt précédent) |
+| `sum_gain` | somme des retards **pris sur le tronçon** (retard ici − retard à l'arrêt précédent) |
+| `cnt_gain_gt120` | tronçons parcourus en perdant plus de 2 min |
+| `prev_stop_id` | arrêt précédent le plus fréquent (libellé du tronçon) |
+| `hist_gain` | JSON `{secondes_gagnées: effectif}` (médiane exacte du retard pris) |
+
+Un arrêt `SKIPPED` n'interrompt pas le calcul : le tronçon relie les deux arrêts
+observés qui l'encadrent.
 
 **Tables de référence**
 
@@ -546,7 +575,8 @@ le dashboard et les rapports.
 - `idx_service_alerts_period` (`active_period_start, active_period_end`)
 - `idx_observations_departure_time` (`departure_time, schedule_relationship, departure_delay, route_id`)
 - + index sur `agg_daily(date_service)`, `agg_hourly(date_service)`,
-  `agg_daily_stop(date_service)` et `(stop_id)`, `agg_hourly_stop(date_service)` et `(stop_id)`
+  `agg_daily_stop(date_service)` et `(stop_id)`, `agg_hourly_stop(date_service)` et `(stop_id)`,
+  `agg_daily_segment(route_id, date_service)` et `(stop_id)`
 - `idx_stop_municipalities_commune` (sur `commune_name`, défini dans `assign_stop_municipalities.py`)
 
 Le dashboard applique aussi en opportunité quelques index à la première
@@ -588,6 +618,7 @@ Vue temporelle d'une journée-type :
  60 s        collect.py  ──► upsert observations / trip_status
  120 s       collect_alerts.py ──► upsert service_alerts
  300 s       collect.py  ──► refresh_aggregates(days=[hier, aujourd'hui])
+                         ──► refresh_segments(days=[hier, aujourd'hui])
               │
  à chaq. réexéc.    dashboard/app.py ──► lit agg_* (cache 60 s)
               │
@@ -638,7 +669,13 @@ le dashboard territorial et les rapports (colonne « direction »).
   intervalle est inséré dans `collection_gaps` (+ warning log).
 - Rafraîchissement des agrégats toutes les **300 s** sur les jours « hier » et
   « aujourd'hui » (recalcul exact, coût contrôlé ; un échec est seulement loggé
-  en warning pour ne pas arrêter la collecte).
+  en warning pour ne pas arrêter la collecte). Dans le même créneau,
+  `refresh_segments` met à jour `agg_daily_segment` (bloc `try` séparé, durée
+  journalisée : « Tronçons rafraîchis en … s »).
+- Au démarrage, `ensure_segments` lance le recalcul complet de
+  `agg_daily_segment` si la table est vide (« Rattrapage complet des
+  tronçons… » puis « … terminé en … s ») ; un échec est journalisé en warning
+  et la collecte démarre quand même.
 - Boucle inconditionnelle ; les erreurs HTTP sont loggées et le cycle reprend.
   `time.sleep(max(0, interval - elapsed))` compense le temps de traitement.
 
@@ -660,6 +697,15 @@ le dashboard territorial et les rapports (colonne « direction »).
   d'écriture quelques minutes sur VM 1 vCPU → intervalle d'agrégation porté à
   300 s (cf. commentaire `collect.py:29-33`) ; `busy_timeout` élevés des deux
   collecteurs.
+- `refresh_segments(days=[hier, aujourd'hui])` (fenêtre `LAG` sur les
+  observations bornées par `departure_time`, élargie de
+  `SEGMENT_LOOKBACK_SECONDS` = 3 h pour les voyages à cheval sur minuit) prend
+  ~6 s sur le poste de développement ; le recalcul complet (~7 semaines)
+  ~33 s. La requête assemble ses parties par `UNION ALL` + `GROUP BY` (aucune
+  jointure entre CTE, qui dégénérait en boucle quadratique) et écarte l'index
+  `idx_observations_sched_delay` (`+o.schedule_relationship`) au profit de
+  `idx_observations_departure_time`. Durée en production à lire dans
+  `collect.log` (« Tronçons rafraîchis en … s »).
 - Les lectures du dashboard sont presque exclusivement sur les tables `agg_*`
   (petites) ; `observations` (grande table) n'est utilisée que sur la page
   « Collecte des données » (histogrammes minute par minute sur 7 jours,
@@ -1314,9 +1360,10 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 237 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 249 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
+`test_refresh_segments.py` (tronçons),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
 (génération LaTeX).
 
@@ -1324,7 +1371,9 @@ changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 
 Le stockage `histogram` est utilisé pour les médianes ; en cas de changement du
 format, penser à `refresh_aggregates(days=None)` (recalcul complet) une fois
-via un Python shell ou le collecteur.
+via un Python shell ou le collecteur. Pour `agg_daily_segment`, vider la table
+puis redémarrer `urban-vision-collect.service` : `ensure_segments` la
+recalcule intégralement.
 
 ---
 
@@ -1386,6 +1435,10 @@ Procédure documentée/observée :
    sudo systemctl restart urban-vision-collect-alerts.service
    sudo systemctl restart urban-vision-dashboard.service
    ```
+3. Après un déploiement qui ajoute `agg_daily_segment` (table vide), le premier
+   démarrage du collecteur lance le rattrapage complet : suivre
+   `tail -f ~/Urban-Vision/data/collect.log` jusqu'à « Rattrapage des tronçons
+   terminé en … s ».
 
 ### 20.3 Rapport de production
 
@@ -1549,7 +1602,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Les 3 URLs de flux + URL des contours + URL de l'API Adresse.
 - Schéma complet SQLite (colonnes, PK, index) — `src/scripts/db.py`.
 - Intervalles, timeouts et seuils (tableau 6.3 + 6.4).
-- Chaîne d'agrégation et mode incrémental `refresh_aggregates(days=...)`.
+- Chaîne d'agrégation et mode incrémental `refresh_aggregates(days=...)` ; agrégat tronçon `refresh_segments(days=...)` et rattrapage au démarrage du collecteur.
 - Formule du score, seuils de la synthèse exécutive, structure des PDF.
 - CLI complète des 6 scripts et du moteur.
 - Cache dashboard 60 s, buffer 20 min, views et loaders (noms de fonctions et
@@ -1557,7 +1610,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 237, isolés (suite `pytest` complète : 237 passed), flux synthétiques
+- Tests : 249, isolés (suite `pytest` complète : 249 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
