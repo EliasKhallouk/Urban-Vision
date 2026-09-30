@@ -418,37 +418,6 @@ def engagement_progression_chart(prog: pd.DataFrame) -> dict:
     }
 
 
-def timeline_chart(df: pd.DataFrame) -> dict:
-    data = [[int(pd.Timestamp(ts).timestamp() * 1000), round(r, 1)] for ts, r in zip(df["date_service"], df["pct_retard_5min"])]
-    return {
-        "chart": {"type": "area", "height": 285},
-        "title": {"text": None},
-        "xAxis": {"type": "datetime", "title": {"text": None}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"data": data, "fillOpacity": 0.12, "lineWidth": 2, "color": BLACK_FOREST, "marker": {"enabled": False, "states": {"hover": {"enabled": True}}}}],
-    }
-
-
-def hourly_risk_chart(df: pd.DataFrame, threshold: float | None = None) -> dict:
-    cat = [str(h) for h in range(24)]
-    hm = {int(r["heure"]): r for _, r in df.iterrows()}
-    data = []
-    for h in range(24):
-        if h in hm:
-            v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": palette_hex(v, "pourcent")})
-        else:
-            data.append({"y": 0, "color": SUNLIT_CLAY})
-    return {
-        "chart": {"type": "column", "height": 285},
-        "title": {"text": None},
-        "xAxis": {"categories": cat, "title": {"text": "Heure locale"}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"name": "> 5 min", "data": data}],
-        "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0, "pointPadding": 0.05}},
-    }
-
-
 def delay_distribution_chart(df: pd.DataFrame) -> dict:
     # Palette par seuil (identique aux rapports) : chaque classe d'écart à
     # l'horaire est rattachée aux seuils « retard » via l'écart absolu médian
@@ -517,4 +486,131 @@ def hourly_distribution_chart(df: pd.DataFrame) -> dict:
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
         "series": [{"name": "Passages", "data": data, "color": BLACK_FOREST}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.05, "pointPadding": 0.05}},
+    }
+
+
+BLACK_FOREST_35 = "rgba(40, 54, 24, 0.35)"
+CORNSILK = "#FEFAE0"
+
+
+def line_profile_chart(profile: pd.DataFrame, highlight_stop_id: str | None = None,
+                       hotspot_stop_ids: set | None = None) -> dict:
+    """Profil d'une direction : retard pris par tronçon (colonnes) et retard à l'arrêt (courbe).
+
+    Les tronçons où le retard se forme le plus (`hotspot_stop_ids`) ressortent en
+    Copperwood ; l'arrêt consulté est surligné par une bande Cornsilk.
+    """
+    p = profile.sort_values("order").reset_index(drop=True)
+    hot = hotspot_stop_ids or set()
+    gains = [{"y": round(float(g), 1), "color": COPPERWOOD if sid in hot else BLACK_FOREST_35,
+              "prev": prev if isinstance(prev, str) else "—"}
+             for sid, g, prev in zip(p["stop_id"], p["gain_s"], p["prev_stop_name"])]
+    delays = [round(float(v), 1) if pd.notna(v) else None for v in p["delay_s"]]
+    bands = []
+    if highlight_stop_id is not None and highlight_stop_id in set(p["stop_id"]):
+        i = int(p.index[p["stop_id"] == highlight_stop_id][0])
+        bands.append({"from": i - 0.5, "to": i + 0.5, "color": CORNSILK,
+                      "label": {"text": "Cet arrêt", "style": {"color": BLACK_FOREST, "fontWeight": "600"}}})
+    return {
+        "chart": {"height": 360},
+        "title": {"text": None},
+        "xAxis": {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": "10px"}},
+                  "plotBands": bands},
+        "yAxis": [{"title": {"text": "Retard (secondes)"}}],
+        "series": [
+            {"type": "column", "name": "Retard pris sur le tronçon", "data": gains,
+             "tooltip": {"pointFormat": "Depuis {point.prev} : <b>{point.y:+.0f} s</b><br/>"}},
+            {"type": "line", "name": "Retard moyen à l'arrêt", "data": delays, "color": BLACK_FOREST,
+             "lineWidth": 2, "marker": {"enabled": False}, "tooltip": {"valueSuffix": " s"}},
+        ],
+        "tooltip": {"shared": True},
+        "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+        "legend": {"enabled": True},
+    }
+
+
+def skip_profile_chart(profile: pd.DataFrame) -> dict:
+    """Taux d'arrêts sautés arrêt par arrêt le long d'une direction (palier « pourcent »)."""
+    p = profile.sort_values("order").reset_index(drop=True)
+    rates = (p["skipped"] / p["eligible"].where(p["eligible"] > 0) * 100).fillna(0.0)
+    data = [{"y": round(float(r), 1), "color": palette_hex(round(float(r), 1), "pourcent"),
+             "skipped": int(k)} for r, k in zip(rates, p["skipped"])]
+    return {
+        "chart": {"type": "column", "height": 300},
+        "title": {"text": None},
+        "xAxis": {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": "10px"}}},
+        "yAxis": {"title": {"text": "Arrêts sautés (%)"}, "min": 0},
+        "series": [{"name": "Arrêts sautés", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b> ({point.skipped} passages non desservis)"}}],
+        "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+    }
+
+
+def stop_lines_chart(lines: pd.DataFrame) -> dict:
+    """Passages > 5 min et arrêts sautés par ligne à un arrêt (nombres absolus)."""
+    df = lines.sort_values("cnt_gt300", ascending=False)
+    categories = [f"{mode_glyph(rt)} {l}" for rt, l in zip(df["route_type"], df["ligne"])]
+    return {
+        "chart": {"type": "bar", "height": max(160, 60 + 34 * len(df))},
+        "title": {"text": None},
+        "xAxis": {"categories": categories, "title": {"text": None}},
+        "yAxis": {"title": {"text": "Passages"}, "min": 0, "allowDecimals": False},
+        "series": [
+            {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": BLACK_FOREST},
+            {"name": "Arrêts sautés", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35},
+        ],
+        "plotOptions": {"bar": {"stacking": "normal", "borderRadius": 3, "groupPadding": 0.1}},
+        "legend": {"enabled": True},
+    }
+
+
+def risk_by_label_chart(table: pd.DataFrame, label_col: str) -> dict:
+    """Part des passages > 5 min par créneau ou par jour (palier « pourcent »)."""
+    data = [{"y": round(float(v), 1), "color": palette_hex(round(float(v), 1), "pourcent"),
+             "passages": int(o)} for v, o in zip(table["pct_gt300"], table["obs"])]
+    return {
+        "chart": {"type": "column", "height": 260},
+        "title": {"text": None},
+        "xAxis": {"categories": table[label_col].tolist(), "title": {"text": None}},
+        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
+        "series": [{"name": "Retards > 5 min", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,}"}}],
+        "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.08, "pointPadding": 0.05}},
+    }
+
+
+def daily_status_chart(daily: pd.DataFrame, threshold: float) -> dict:
+    """Bande quotidienne : part des passages > 5 min par jour, seuil du jour dégradé tracé."""
+    d = (daily.groupby("date_service").agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+         .reset_index())
+    d = d[d["obs"] > 0]
+    data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(float(c) / float(o) * 100, 1),
+             "color": palette_hex(round(float(c) / float(o) * 100, 1), "pourcent"), "passages": int(o)}
+            for ts, o, c in zip(d["date_service"], d["obs"], d["cnt_gt300"])]
+    return {
+        "chart": {"type": "column", "height": 240},
+        "title": {"text": None},
+        "xAxis": {"type": "datetime", "title": {"text": None}},
+        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0,
+                  "plotLines": [{"value": threshold, "color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1,
+                                 "zIndex": 3, "label": {"text": "jour dégradé", "align": "right",
+                                                        "style": {"color": OLIVE_LEAF_70}}}]},
+        "series": [{"name": "Retards > 5 min", "data": data,
+                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,}"}}],
+        "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+    }
+
+
+def cancellations_chart(df: pd.DataFrame) -> dict:
+    """Courses supprimées par jour de service."""
+    data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": int(c), "trips": int(t)}
+            for ts, c, t in zip(df["date_service"], df["cancelled"], df["trips"])]
+    return {
+        "chart": {"type": "column", "height": 240},
+        "title": {"text": None},
+        "xAxis": {"type": "datetime", "title": {"text": None}},
+        "yAxis": {"title": {"text": "Courses supprimées"}, "min": 0, "allowDecimals": False},
+        "series": [{"name": "Courses supprimées", "data": data, "color": BLACK_FOREST,
+                    "tooltip": {"pointFormat": "<b>{point.y}</b> sur {point.trips} courses connues"}}],
+        "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
     }

@@ -112,22 +112,6 @@ class TestSerieTemporelles:
         assert data[0] == {"y": 0, "color": SUNLIT_CLAY}
         assert data[20] == {"y": 4.0, "color": palette_hex(4.0, "pourcent")}
 
-    def test_hourly_risk_chart_compatible_threshold(self):
-        df = pd.DataFrame({"heure": [8], "pct_retard_5min": [10.0]})
-        config = hc.hourly_risk_chart(df, threshold=80.0)
-        assert len(config["series"][0]["data"]) == 24
-
-    def test_timeline_chart(self):
-        df = pd.DataFrame(
-            {
-                "date_service": pd.to_datetime(["2026-09-01", "2026-09-02"]),
-                "pct_retard_5min": [9.0, 14.5],
-            }
-        )
-        config = hc.timeline_chart(df)
-        assert config["chart"]["type"] == "area"
-        assert config["series"][0]["data"][0][1] == 9.0
-
 
 class TestModeCharts:
     def test_mode_comparison_chart_4_metriques(self):

@@ -32,6 +32,15 @@ import streamlit as st
 
 import pydeck as pdk
 
+import diagnostic as dg
+
+from diagnostic import (
+    PERIOD_ORDER,
+    format_seconds,
+    reliability_score,
+    median_from_hists as _median_from_hists,
+    period_labels as _period_labels,
+)
 from highcharts import (
     render as hc_render,
     ranking_chart,
@@ -46,11 +55,15 @@ from highcharts import (
     period_mode_chart,
     engagement_trend_chart,
     engagement_progression_chart,
-    timeline_chart,
-    hourly_risk_chart,
     delay_distribution_chart,
     collection_minutely_chart,
     hourly_distribution_chart,
+    line_profile_chart,
+    skip_profile_chart,
+    stop_lines_chart,
+    risk_by_label_chart,
+    daily_status_chart,
+    cancellations_chart,
 )
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "urban_vision.db"
@@ -74,6 +87,14 @@ from palette import (  # noqa: E402
     kpi_tier as palette_kpi_tier,
     mode_glyph,
     mode_marker,
+    risk_zone,
+    CRITICAL,
+    FREQUENT_SHORT,
+    LOW,
+    RARE_LONG,
+    RISK_MEDIAN_S,
+    RISK_PCT_GT300,
+    RISK_ZONE_LABELS,
 )
 
 SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
@@ -157,8 +178,6 @@ DIST_LABELS = [
     "0 à +1", "+1 à +2", "+2 à +5", "+5 à +10", "+10 à +20", "> +20 min",
 ]
 
-# Créneaux de fiabilité par période : combinaison jour de semaine × tranche horaire.
-PERIOD_ORDER = ["Matin", "Journée", "Pointe du soir", "Soirée & nuit", "Week-end"]
 
 # Présélections du time picker, en JOURS de service (les agrégats sont journaliers).
 PRESET_RANGES = [
@@ -200,42 +219,6 @@ def _day_bounds(since_ts: int | None, end_ts: int | None, cutoff_ts: int) -> tup
     else:
         end_day = datetime.fromtimestamp(end_ts).strftime("%Y-%m-%d")
     return since_day, end_day
-
-
-def _median_from_hists(hists) -> float | None:
-    """Médiane exacte (à la seconde) depuis les histogrammes JSON par jour/ligne.
-
-    Comporte comme pandas.median() : pour un effectif pair, moyenne des deux
-    valeurs centrales.
-    """
-    total = 0
-    counts: Counter = Counter()
-    for h in hists:
-        if not h:
-            continue
-        for k, v in h.items():
-            counts[int(k)] += v
-            total += v
-    if total == 0:
-        return None
-    if total % 2 == 1:
-        target = (total + 1) // 2
-        cum = 0
-        for sec in sorted(counts):
-            cum += counts[sec]
-            if cum >= target:
-                return sec
-    else:
-        lower, upper = total // 2, total // 2 + 1
-        cum, found = 0, []
-        for sec in sorted(counts):
-            cum += counts[sec]
-            if len(found) == 0 and cum >= lower:
-                found.append(sec)
-            if cum >= upper:
-                found.append(sec)
-                break
-        return (found[0] + found[1]) / 2.0
 
 
 def _ensure_aggregates(conn: sqlite3.Connection) -> None:
@@ -322,16 +305,6 @@ def get_cutoff_ts(conn: sqlite3.Connection) -> int | None:
     return None if row["max_ts"] is None else int(row["max_ts"]) - FRESHNESS_BUFFER_SECONDS
 
 
-def format_seconds(value: float | int | None, signed: bool = False) -> str:
-    if value is None or pd.isna(value):
-        return "—"
-    value = int(round(float(value)))
-    sign = "+" if signed and value > 0 else "−" if value < 0 else ""
-    absolute = abs(value)
-    minutes, seconds = divmod(absolute, 60)
-    return f"{sign}{minutes} min {seconds:02d} s" if minutes else f"{sign}{seconds} s"
-
-
 def format_date(ts: int | None) -> str:
     if not ts:
         return "inconnue"
@@ -340,30 +313,6 @@ def format_date(ts: int | None) -> str:
 
 def _day_midnight(d: datetime.date) -> datetime:
     return datetime.combine(d, dtime(0, 0))
-
-
-def _period_labels(date_service: pd.Series, heure: pd.Series) -> list[str]:
-    """Créneau (jour de semaine × tranche horaire) de chaque agrégat horaire.
-
-    Lundi–vendredi : Matin (06–10), Journée (10–16), Pointe du soir (16–20),
-    Soirée & nuit (20–06). Samedi et dimanche : un seul créneau Week-end.
-    """
-    dow = pd.to_datetime(date_service).dt.dayofweek
-    labels = []
-    for d, h in zip(dow, heure.astype(int)):
-        if d >= 5:
-            labels.append("Week-end")
-        elif h < 6:
-            labels.append("Soirée & nuit")
-        elif h < 10:
-            labels.append("Matin")
-        elif h < 16:
-            labels.append("Journée")
-        elif h < 20:
-            labels.append("Pointe du soir")
-        else:
-            labels.append("Soirée & nuit")
-    return labels
 
 
 def time_range_picker(cutoff_ts: int) -> tuple[int | None, int | None, str]:
@@ -498,6 +447,15 @@ def inject_style() -> None:
         .hero-subtitle {{ color: rgba(96, 108, 56, .70); font-size: .94rem; font-weight: 500; margin-bottom: 1.4rem; }}
         .section-note {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin-top: -.45rem; margin-bottom: .75rem; }}
         .insight {{ background: #ffffff; border-left: 3px solid #283618; border-radius: 8px; padding: .8rem 1rem; color: #283618; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .insight.brief {{ margin: 1rem 0 .6rem; }}
+        .insight.brief ul, .hints ul {{ margin: .35rem 0 0 1.1rem; padding: 0; }}
+        .insight.brief li {{ margin-bottom: .3rem; line-height: 1.45; }}
+        .hints {{ border: 1px dashed rgba(221, 161, 94, .7); border-radius: 8px; padding: .7rem 1rem; color: #283618; margin-bottom: 1rem; }}
+        .hints li {{ margin-bottom: .25rem; }}
+        .hint-note {{ color: rgba(96, 108, 56, .70); font-size: .8rem; }}
+        .fiche-title {{ color: #283618; font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; margin-top: 1.4rem; padding-top: 1rem; border-top: 2px solid #283618; }}
+        .fiche-sub {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin: .2rem 0 .9rem; }}
+        .zone-badge {{ display: inline-block; background: #FEFAE0; border: 1px solid #283618; border-radius: 999px; padding: .3rem .9rem; font-weight: 700; color: #283618; }}
         .stTabs [data-baseweb="tab-list"] {{ gap: 1.3rem; border-bottom: 1px solid rgba(221, 161, 94, .35); }}
         .stTabs [data-baseweb="tab"] {{ color: rgba(96, 108, 56, .70); padding: .55rem .15rem; font-size: .95rem; font-weight: 500; }}
         .stTabs [aria-selected="true"] {{ color: #283618; border-bottom-color: #283618; }}
@@ -790,22 +748,6 @@ def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_line_timeline(_conn, cutoff_ts: int, since_ts: int | None, route_id: str, end_ts: int | None = None,
-                       commune: str | None = None) -> pd.DataFrame:
-    """Timeline quotidienne d'une ligne, depuis les agrégats."""
-    core = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, route_id=route_id, commune=commune)
-    if core.empty:
-        return core[["date_service"]].head(0)
-    d = (core.groupby("date_service", sort=False)
-         .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"), cnt_gt300=("cnt_gt300", "sum"))
-         .reset_index())
-    d["observations"] = d["obs"]
-    d["retard_moyen_s"] = d["sum_delay"] / d["obs"].replace(0, np.nan)
-    d["pct_retard_5min"] = d["cnt_gt300"] / d["obs"].replace(0, np.nan) * 100
-    return d[["date_service", "observations", "retard_moyen_s", "pct_retard_5min"]]
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_hourly(_conn, cutoff_ts: int, since_ts: int | None, route_id: str | None = None,
                 end_ts: int | None = None, commune: str | None = None) -> pd.DataFrame:
     """Risque par tranche horaire (réseau, commune ou ligne), depuis les agrégats."""
@@ -907,8 +849,13 @@ def load_distribution(_conn, cutoff_ts: int, since_ts: int | None, route_id: str
     core = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, route_id=route_id, commune=commune)
     if core.empty:
         return pd.DataFrame(columns=["observations", "plage"])
+    return distribution_from_hists(core["hist"])
+
+
+def distribution_from_hists(hists) -> pd.DataFrame:
+    """Répartit des histogrammes {secondes: effectif} dans les 11 classes d'écart à l'horaire."""
     bucket_counts = Counter()
-    for h in core["hist"]:
+    for h in hists:
         for k, v in h.items():
             delay = int(k)
             if delay < -600:
@@ -933,7 +880,7 @@ def load_distribution(_conn, cutoff_ts: int, since_ts: int | None, route_id: str
                 bucket_counts["pos600"] += v
             else:
                 bucket_counts["pos1200"] += v
-    counts = pd.Series(bucket_counts).reindex(DIST_BUCKETS, fill_value=0).reset_index()
+    counts = pd.Series(bucket_counts, dtype="int64").reindex(DIST_BUCKETS, fill_value=0).reset_index()
     counts.columns = ["bucket", "observations"]
     return counts.assign(plage=DIST_LABELS).drop(columns="bucket")[["observations", "plage"]]
 
@@ -1330,6 +1277,179 @@ def load_disturbed_route_ids(_conn, since_ts: int | None, end_ts: int | None,
     return {r[0] for r in rows}
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_stop_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                    stop_id: str) -> pd.DataFrame:
+    """Compteurs quotidiens d'un arrêt, par ligne (agg_daily_stop, index sur stop_id)."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    df = pd.read_sql_query(
+        """
+        SELECT d.date_service, d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne,
+               r.route_type, d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.skipped,
+               d.eligible, d.histogram
+        FROM agg_daily_stop d LEFT JOIN routes r ON r.route_id = d.route_id
+        WHERE d.stop_id = ? AND d.date_service >= ? AND d.date_service < ?
+        ORDER BY d.date_service
+        """, _conn, params=(stop_id, since_day, end_day),
+    )
+    df["hist"] = df["histogram"].map(json.loads)
+    df["date_service"] = pd.to_datetime(df["date_service"])
+    return df.drop(columns="histogram")
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_stop_hourly(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                     stop_id: str) -> pd.DataFrame:
+    """Compteurs horaires d'un arrêt, toutes lignes (agg_hourly_stop, index sur stop_id)."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    return pd.read_sql_query(
+        """
+        SELECT date_service, route_id, heure, obs, cnt_gt300
+        FROM agg_hourly_stop
+        WHERE stop_id = ? AND date_service >= ? AND date_service < ?
+        """, _conn, params=(stop_id, since_day, end_day),
+    )
+
+
+def stop_lines_table(daily: pd.DataFrame) -> pd.DataFrame:
+    """Une ligne par ligne de transport desservant l'arrêt, avec score et médiane exacte."""
+    cols = ["route_id", "ligne", "route_type", "mode", "observations", "cnt_gt300", "skipped",
+            "eligible", "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes",
+            "retard_moyen_s", "retard_median_s", "score_fiabilite"]
+    if daily.empty:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for rid, sub in daily.groupby("route_id", sort=False):
+        obs = int(sub["obs"].sum())
+        eligible = int(sub["eligible"].sum())
+        pct_ok = sub["cnt_le300"].sum() / obs * 100 if obs else 0.0
+        pct_skip = sub["skipped"].sum() / eligible * 100 if eligible else 0.0
+        rows.append({
+            "route_id": rid, "ligne": sub["ligne"].iloc[0], "route_type": sub["route_type"].iloc[0],
+            "mode": MODE_LABELS.get(sub["route_type"].iloc[0], "Autre"),
+            "observations": obs, "cnt_gt300": int(sub["cnt_gt300"].sum()),
+            "skipped": int(sub["skipped"].sum()), "eligible": eligible,
+            "pct_a_l_heure": pct_ok,
+            "pct_retard_5min": sub["cnt_gt300"].sum() / obs * 100 if obs else 0.0,
+            "pct_arrets_sautes": pct_skip,
+            "retard_moyen_s": sub["sum_delay"].sum() / obs if obs else None,
+            "retard_median_s": _median_from_hists(list(sub["hist"])),
+            "score_fiabilite": reliability_score(pct_ok, pct_skip),
+        })
+    return pd.DataFrame(rows, columns=cols).sort_values("cnt_gt300", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def segments_available(_conn) -> bool:
+    """Vrai si agg_daily_segment contient des données (rattrapage du collecteur effectué)."""
+    try:
+        return _conn.execute("SELECT 1 FROM agg_daily_segment LIMIT 1").fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                        route_id: str) -> pd.DataFrame:
+    """Profil d'une ligne arrêt par arrêt et par direction (agg_daily_segment).
+
+    Colonnes : direction_id, stop_id, stop_name, commune, order (rang moyen de
+    l'arrêt), delay_s (retard moyen à l'arrêt), carried_s (retard déjà présent
+    en arrivant), gain_s (retard pris sur le tronçon), prev_stop_id,
+    prev_stop_name, pairs, obs, eligible, skipped, cnt_gain_gt120, terminus.
+    """
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    df = pd.read_sql_query(
+        """
+        SELECT g.direction_id, g.stop_id, s.stop_name, sm.commune_name AS commune,
+               SUM(g.eligible) eligible, SUM(g.skipped) skipped, SUM(g.sum_seq) sum_seq,
+               SUM(g.obs) obs, SUM(g.sum_delay) sum_delay, SUM(g.pairs) pairs,
+               SUM(g.sum_prev_delay) sum_prev_delay, SUM(g.sum_gain) sum_gain,
+               SUM(g.cnt_gain_gt120) cnt_gain_gt120
+        FROM agg_daily_segment g
+        LEFT JOIN stops s ON s.stop_id = g.stop_id
+        LEFT JOIN stop_municipalities sm ON sm.stop_id = g.stop_id
+        WHERE g.route_id = ? AND g.date_service >= ? AND g.date_service < ?
+        GROUP BY g.direction_id, g.stop_id
+        """, _conn, params=(route_id, since_day, end_day),
+    )
+    if df.empty:
+        return df
+    prev = pd.read_sql_query(
+        """
+        SELECT direction_id, stop_id, prev_stop_id, SUM(pairs) n
+        FROM agg_daily_segment
+        WHERE route_id = ? AND date_service >= ? AND date_service < ? AND prev_stop_id IS NOT NULL
+        GROUP BY direction_id, stop_id, prev_stop_id
+        """, _conn, params=(route_id, since_day, end_day),
+    )
+    prev = prev.sort_values(["n", "prev_stop_id"], ascending=[False, True]).drop_duplicates(["direction_id", "stop_id"])
+    df = df.merge(prev[["direction_id", "stop_id", "prev_stop_id"]], on=["direction_id", "stop_id"], how="left")
+    names = dict(zip(df["stop_id"], df["stop_name"]))
+    df["prev_stop_name"] = df["prev_stop_id"].map(names)
+    df = df[df["eligible"] > 0].copy()
+    df["order"] = df["sum_seq"] / df["eligible"]
+    df["delay_s"] = df["sum_delay"] / df["obs"].where(df["obs"] > 0)
+    df["carried_s"] = df["sum_prev_delay"] / df["pairs"].where(df["pairs"] > 0)
+    df["gain_s"] = (df["sum_gain"] / df["pairs"].where(df["pairs"] > 0)).fillna(0.0)
+    df = df.sort_values(["direction_id", "order"]).reset_index(drop=True)
+    terminus = df.groupby("direction_id")["stop_name"].last()
+    df["terminus"] = df["direction_id"].map(lambda d: f"vers {terminus[d]}")
+    return df
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_line_cancellations(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                            route_id: str) -> pd.DataFrame:
+    """Courses supprimées (trip_status = CANCELED) et courses connues, par jour de service."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    df = pd.read_sql_query(
+        """
+        SELECT substr(start_date, 1, 4) || '-' || substr(start_date, 5, 2) || '-'
+                   || substr(start_date, 7, 2) AS date_service,
+               SUM(CASE WHEN schedule_relationship = 'CANCELED' THEN 1 ELSE 0 END) AS cancelled,
+               COUNT(*) AS trips
+        FROM trip_status
+        WHERE route_id = ? AND start_date >= ? AND start_date < ? AND last_seen_at < ?
+        GROUP BY start_date
+        ORDER BY start_date
+        """, _conn, params=(route_id, since_day.replace("-", ""), end_day.replace("-", ""), cutoff_ts),
+    )
+    df["date_service"] = pd.to_datetime(df["date_service"])
+    return df
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_line_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                    route_id: str) -> pd.DataFrame:
+    """Arrêts d'une ligne avec passages > 5 min, arrêts sautés et direction (agg_daily_stop)."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    df = pd.read_sql_query(
+        """
+        SELECT d.stop_id, s.stop_name, sm.commune_name AS commune,
+               SUM(d.obs) obs, SUM(d.cnt_le300) cnt_le300, SUM(d.cnt_gt300) cnt_gt300,
+               SUM(d.skipped) skipped, SUM(d.eligible) eligible
+        FROM agg_daily_stop d
+        LEFT JOIN stops s ON s.stop_id = d.stop_id
+        LEFT JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
+        WHERE d.route_id = ? AND d.date_service >= ? AND d.date_service < ?
+        GROUP BY d.stop_id
+        """, _conn, params=(route_id, since_day, end_day),
+    )
+    if df.empty:
+        return df
+    directions = load_stop_directions(_conn)
+    df["direction"] = [directions.get((route_id, sid), "") for sid in df["stop_id"]]
+    df["pct_retard_5min"] = df["cnt_gt300"] / df["obs"].where(df["obs"] > 0) * 100
+    df["pct_arrets_sautes"] = df["skipped"] / df["eligible"].where(df["eligible"] > 0) * 100
+    df["score_fiabilite"] = [
+        reliability_score(le / o * 100 if o else 0.0, sk / el * 100 if el else 0.0)
+        for le, o, sk, el in zip(df["cnt_le300"], df["obs"], df["skipped"], df["eligible"])
+    ]
+    df["impact"] = df["cnt_gt300"] + df["skipped"]
+    return df.sort_values("impact", ascending=False).reset_index(drop=True)
+
+
 def _territorial_score(df: pd.DataFrame) -> float:
     """Score de fiabilité moyen (pondéré par les passages) du périmètre territorial.
 
@@ -1385,9 +1505,11 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
     st.pydeck_chart(
         pdk.Deck(layers=[layer], tooltip=tooltip, initial_view_state=view,
                  map_style="light", height=420),
-        use_container_width=True,
+        width="stretch", height=420, key="map_arrets",
+        on_select=_on_map_select, selection_mode="single-object",
     )
     st.caption(
+        "Cliquez sur un arrêt pour ouvrir sa fiche diagnostic. "
         f"Lecture non visuelle de la carte : {len(df)} arrêts affichés, "
         f"score de fiabilité de {df['score_fiabilite'].min():.0f} à "
         f"{df['score_fiabilite'].max():.0f}/100 "
@@ -1444,9 +1566,448 @@ def render_kpis(items) -> None:
         col.markdown(kpi_card(label, value, sublabel, polarity), unsafe_allow_html=True)
 
 
+PAGE_TERRITORY = "Vue territoriale"
+PAGE_LINE = "Analyse d'une ligne"
+STOP_VIEWS = ["Où ?", "Quand ?", "Quel type ?", "Contexte"]
+LINE_VIEWS = ["Retards : où ?", "Service non rendu", "Quand ?", "Contexte"]
+ZONE_EXPLANATIONS = {
+    CRITICAL: "Retards à la fois fréquents et longs : un problème installé, à traiter en priorité.",
+    FREQUENT_SHORT: "La plupart des passages ont un peu de retard : signe d'une congestion récurrente "
+                    "ou d'un temps de parcours prévu trop court.",
+    RARE_LONG: "La plupart des passages sont à l'heure, mais une part notable subit de gros retards : "
+               "incidents ou perturbations ponctuelles.",
+    LOW: "Retards rares et courts.",
+}
+
+
+def select_stop(stop_id: str | None) -> None:
+    st.session_state["stop_id"] = stop_id
+
+
+def open_stop(stop_id: str) -> None:
+    select_stop(stop_id)
+    st.session_state["sidebar_nav"] = PAGE_TERRITORY
+
+
+def open_line(route_id: str) -> None:
+    st.session_state["line_id"] = route_id
+    st.session_state["sidebar_nav"] = PAGE_LINE
+
+
+def _on_map_select() -> None:
+    state = st.session_state.get("map_arrets") or {}
+    objects = (state.get("selection") or {}).get("objects") or {}
+    picked = objects.get("arrets") or []
+    if picked:
+        select_stop(picked[0].get("stop_id"))
+
+
+def _on_table_select(table_key: str, ids_key: str, opener) -> None:
+    state = st.session_state.get(table_key) or {}
+    rows = (state.get("selection") or {}).get("rows") or []
+    ids = st.session_state.get(ids_key) or []
+    if rows and rows[0] < len(ids):
+        opener(ids[rows[0]])
+
+
+def apply_query_params() -> None:
+    """Ouvre la fiche désignée par l'URL (?arret=… ou ?ligne=…) au premier affichage."""
+    if st.session_state.get("_query_applied"):
+        return
+    st.session_state["_query_applied"] = True
+    params = st.query_params
+    if params.get("arret"):
+        st.session_state["stop_id"] = params["arret"]
+        st.session_state["sidebar_nav"] = PAGE_TERRITORY
+    elif params.get("ligne"):
+        st.session_state["line_id"] = params["ligne"]
+        st.session_state["sidebar_nav"] = PAGE_LINE
+
+
+def stop_labels(territorial: pd.DataFrame) -> dict:
+    """Libellé de recherche de chaque arrêt : nom, direction et lignes desservies."""
+    out = {}
+    for r in territorial.itertuples():
+        direction = f" — {r.direction}" if r.direction else ""
+        out[r.stop_id] = f"{r.stop_name}{direction} ({r.lignes})"
+    return out
+
+
+def network_score(ranking: pd.DataFrame) -> float:
+    """Score de fiabilité de l'ensemble des lignes (totaux pondérés par les passages)."""
+    obs = float(ranking["observations"].sum())
+    eligible = float(ranking["eligible"].sum())
+    if obs <= 0:
+        return 0.0
+    on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum()) / obs
+    skip = float(ranking["skipped"].sum()) / eligible * 100 if eligible else 0.0
+    return reliability_score(on_time, skip)
+
+
+def _delta_polarity(delta: float | None) -> str:
+    if delta is None:
+        return "neutral"
+    if delta >= 2:
+        return "positif"
+    if delta <= -2:
+        return "negatif"
+    return "moyen"
+
+
+def _alerts_overlapping(history: pd.DataFrame, route_ids: set, bad_dates: list) -> pd.DataFrame:
+    """Alertes des lignes données, avec un indicateur « recoupe un jour dégradé »."""
+    if history is None or history.empty:
+        return pd.DataFrame(columns=["ligne", "header_text", "debut_effectif", "fin_effective", "jour_degrade"])
+    h = history[history["route_id"].isin(route_ids)].copy()
+    if h.empty:
+        return h.assign(jour_degrade=pd.Series(dtype=bool))
+    starts = pd.to_datetime(h["debut_effectif"], format="%d/%m/%Y %H:%M").dt.normalize()
+    ends = pd.to_datetime(h["fin_effective"], format="%d/%m/%Y %H:%M").dt.normalize()
+    h["jour_degrade"] = [any(s <= d <= e for d in bad_dates) for s, e in zip(starts, ends)]
+    return h.sort_values("jour_degrade", ascending=False)
+
+
+def _render_brief(summary: list[str], hints: list[str]) -> None:
+    items = "".join(f"<li>{html.escape(x)}</li>" for x in summary)
+    st.markdown(f'<div class="insight brief"><b>En bref</b><ul>{items}</ul></div>', unsafe_allow_html=True)
+    if hints:
+        items = "".join(f"<li>{html.escape(x)}</li>" for x in hints)
+        st.markdown(f'<div class="hints"><b>Pistes</b> <span class="hint-note">(indices à '
+                    f'confirmer sur le terrain, pas des conclusions)</span><ul>{items}</ul></div>',
+                    unsafe_allow_html=True)
+
+
+def _render_alerts(alerts: pd.DataFrame) -> None:
+    if alerts.empty:
+        st.info("Aucune perturbation signalée par TBM sur ces lignes pendant la période.")
+        return
+    for r in alerts.head(8).itertuples():
+        flag = " · <b>recoupe un jour dégradé</b>" if r.jour_degrade else ""
+        st.markdown(
+            f"**Ligne {html.escape(str(r.ligne))}** — {html.escape(r.header_text or '')}  \n"
+            f"<span style='color:{OLIVE_LEAF_70}'>{r.debut_effectif} → {r.fin_effective}{flag}</span>",
+            unsafe_allow_html=True,
+        )
+    st.caption(CAUTION_TEXT)
+
+
+def _render_zone(median_s: float | None, pct_gt300: float, rank_text: str | None) -> None:
+    if median_s is None:
+        st.info("Pas assez de passages pour qualifier le type de retard.")
+        return
+    zone = risk_zone(median_s, pct_gt300)
+    st.markdown(
+        f'<div class="zone-badge">{html.escape(RISK_ZONE_LABELS[zone])}</div>'
+        f'<div class="section-note" style="margin-top:.4rem">{html.escape(ZONE_EXPLANATIONS[zone])} '
+        f'Retard médian {format_seconds(median_s, signed=True)}, '
+        f'{pct_gt300:.1f} % de passages à plus de 5 min (seuils : '
+        f'{RISK_MEDIAN_S:.0f} s et {RISK_PCT_GT300:.0f} %).</div>',
+        unsafe_allow_html=True,
+    )
+    if rank_text:
+        st.markdown(rank_text)
+
+
+def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
+                      territorial_network: pd.DataFrame, reference_score: float) -> None:
+    """Fiche diagnostic d'un arrêt : d'où vient le problème, quand, de quel type, et quelles pistes."""
+    daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
+    if daily.empty:
+        st.info("Aucun passage analysé à cet arrêt sur la période.")
+        return
+    lines = stop_lines_table(daily)
+    info = territorial_network[territorial_network["stop_id"] == stop_id]
+    name = str(info["stop_name"].iloc[0]) if not info.empty else stop_id
+    obs = int(lines["observations"].sum())
+    eligible = int(lines["eligible"].sum())
+    skipped = int(lines["skipped"].sum())
+    cnt_gt300 = int(lines["cnt_gt300"].sum())
+    pct_ok = float(daily["cnt_le300"].sum()) / max(obs, 1) * 100
+    pct_gt300 = cnt_gt300 / max(obs, 1) * 100
+    pct_skip = skipped / eligible * 100 if eligible else 0.0
+    score = reliability_score(pct_ok, pct_skip)
+    median = _median_from_hists(list(daily["hist"]))
+    days = int(daily["date_service"].nunique())
+
+    responsible = dg.responsible_line(lines)
+    directions = load_stop_directions(conn)
+    resp_dir = directions.get((responsible["route_id"], stop_id)) if responsible else None
+    seg_ok = segments_available(conn)
+    seg_row, profile_dir = None, None
+    if responsible is not None and seg_ok:
+        seg = load_route_segments(conn, cutoff, since_ts, end_ts, responsible["route_id"])
+        here = seg[seg["stop_id"] == stop_id] if not seg.empty else seg
+        if not here.empty:
+            seg_row = here.loc[here["obs"].idxmax()]
+            profile_dir = seg[seg["direction_id"] == seg_row["direction_id"]]
+    carried = seg_row["carried_s"] if seg_row is not None else None
+    gained = seg_row["gain_s"] if seg_row is not None else None
+    prev_name = seg_row["prev_stop_name"] if seg_row is not None and isinstance(seg_row["prev_stop_name"], str) else None
+    cause = dg.locate_cause(carried, gained, seg_row["delay_s"] if seg_row is not None else None)
+    hotspot = dg.upstream_hotspot(profile_dir, stop_id) if profile_dir is not None else None
+
+    rec = dg.recurrence(daily[["date_service", "obs", "cnt_gt300"]])
+    periods = dg.period_table(load_stop_hourly(conn, cutoff, since_ts, end_ts, stop_id))
+    weekdays = dg.weekday_table(daily)
+    conc = dg.concentration(periods, "période") or dg.concentration(weekdays, "jour")
+    zone = risk_zone(median, pct_gt300) if median is not None else None
+    trend = dg.half_trend(daily)
+    peers = territorial_network.loc[territorial_network["observations"] >= MIN_OBSERVATIONS, "score_fiabilite"]
+    rank = dg.percentile_rank(score, peers)
+    alerts = _alerts_overlapping(load_perturbation_history(conn, since_ts, end_ts, cutoff),
+                                 set(lines["route_id"]), rec["bad_dates"])
+    summary = dg.stop_summary(responsible, resp_dir, cause, carried, gained, prev_name, hotspot, rec, conc, zone)
+    hints = dg.stop_hints(cause, hotspot, prev_name, name, responsible, rec, pct_skip,
+                          bool(not alerts.empty and alerts["jour_degrade"].any()), carried)
+
+    st.query_params["arret"] = stop_id
+    if "ligne" in st.query_params:
+        del st.query_params["ligne"]
+    glyph_lines = " · ".join(f"{mode_glyph(rt)} {html.escape(str(l))}"
+                             for rt, l in zip(lines["route_type"], lines["ligne"]))
+    direction = info["direction"].iloc[0] if not info.empty else ""
+    st.markdown(
+        f'<div class="fiche-title">{html.escape(name)}'
+        f'{" — " + html.escape(direction) if direction else ""}</div>'
+        f'<div class="fiche-sub">Lignes : {glyph_lines} · lien direct : cette page (paramètre '
+        f'<code>?arret={html.escape(stop_id)}</code>)</div>',
+        unsafe_allow_html=True,
+    )
+    delta = trend["delta"] if trend else None
+    render_kpis([
+        ("Score de fiabilité", f"{score:.0f} / 100", f"réseau : {reference_score:.0f} / 100",
+         palette_kpi_tier({"fiability": score}, "fiability")),
+        ("Évolution", f"{delta:+.1f} pts" if delta is not None else "—", "moitié récente vs précédente",
+         _delta_polarity(delta)),
+        ("Passages à plus de 5 min", f"{pct_gt300:.1f} %", f"{cnt_gt300 / max(days, 1):.0f} par jour en moyenne",
+         palette_kpi_tier({"retard_5min": pct_gt300}, "retard_5min")),
+        ("Arrêts sautés", f"{pct_skip:.1f} %", f"{skipped:,} passages non desservis".replace(",", " "),
+         palette_kpi_tier({"skip_rate": pct_skip}, "skip_rate")),
+        ("Échantillon", f"{obs:,}".replace(",", " ") + " passages",
+         f"{days} jour{'s' if days > 1 else ''} · "
+         + ("échantillon faible" if obs < MIN_OBSERVATIONS else "échantillon suffisant"),
+         "neutral"),
+    ])
+    _render_brief(summary, hints)
+
+    view = st.segmented_control("Détail", STOP_VIEWS, default=STOP_VIEWS[0], key="stop_view",
+                                label_visibility="collapsed") or STOP_VIEWS[0]
+    if view == "Où ?":
+        left, right = st.columns([0.8, 1.2], gap="large")
+        with left:
+            st.markdown("#### Passages problématiques par ligne")
+            hc_render(stop_lines_chart(lines), height=max(160, 60 + 34 * len(lines)))
+        with right:
+            if responsible is None:
+                st.info("Aucun passage problématique à cet arrêt sur la période.")
+            elif not seg_ok:
+                st.info("L'analyse amont (retard pris tronçon par tronçon) est en cours de constitution "
+                        "par le collecteur.")
+            elif profile_dir is None:
+                st.info("Pas de données de tronçon pour cette ligne à cet arrêt sur la période.")
+            else:
+                st.markdown(f"#### Ligne {html.escape(responsible['ligne'])} : d'où vient le retard ?")
+                p = profile_dir.sort_values("order").reset_index(drop=True)
+                i = int(p.index[p["stop_id"] == stop_id][0])
+                window = p.iloc[max(0, i - 8):i + 3]
+                hot = {hotspot["stop_id"]} if dg.is_dominant_hotspot(hotspot, carried) else set()
+                hc_render(line_profile_chart(window, highlight_stop_id=stop_id, hotspot_stop_ids=hot), height=360)
+                st.caption("Colonnes : retard pris sur chaque tronçon (en Copperwood, le tronçon amont qui en "
+                           "prend le plus, s'il pèse au moins un quart du retard importé) ; courbe : retard "
+                           "moyen à l'arrêt. 8 arrêts en amont, 2 en aval.")
+            if responsible is not None:
+                st.button(f"Voir toute la ligne {responsible['ligne']} →", on_click=open_line,
+                          args=(responsible["route_id"],), key="open_line_from_stop")
+    elif view == "Quand ?":
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("#### Selon le créneau")
+            if periods.empty:
+                st.info("Aucune donnée horaire.")
+            else:
+                hc_render(risk_by_label_chart(periods, "période"), height=260)
+        with right:
+            st.markdown("#### Selon le jour de la semaine")
+            if weekdays.empty:
+                st.info("Aucune donnée quotidienne.")
+            else:
+                hc_render(risk_by_label_chart(weekdays, "jour"), height=260)
+        st.markdown("#### Jour par jour")
+        render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
+        hc_render(daily_status_chart(daily, RISK_PCT_GT300), height=240)
+    elif view == "Quel type ?":
+        rank_text = None
+        if rank is not None:
+            rank_text = (f"Cet arrêt fait partie des **{rank:.0f} %** d'arrêts les moins fiables du réseau."
+                         if rank <= 50 else f"Cet arrêt est plus fiable que **{rank:.0f} %** des arrêts du réseau.")
+        _render_zone(median, pct_gt300, rank_text)
+        with st.expander("Répartition des écarts à l'horaire"):
+            render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
+            hc_render(delay_distribution_chart(distribution_from_hists(daily["hist"])), height=280)
+    else:
+        _render_alerts(alerts)
+
+
+def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
+                      ranking_net: pd.DataFrame, disturbed: set) -> None:
+    """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
+    row = ranking_net[ranking_net["route_id"] == route_id]
+    if row.empty:
+        st.info("Aucun passage analysé pour cette ligne sur la période.")
+        return
+    line = row.iloc[0]
+    breakdown = dg.score_breakdown(line["pct_a_l_heure"], line["pct_arrets_sautes"])
+    same_mode = ranking_net[(ranking_net["route_type"] == line["route_type"])
+                            & (ranking_net["observations"] >= MIN_OBSERVATIONS)]
+    mode_median = float(same_mode["score_fiabilite"].median()) if not same_mode.empty else None
+    core = _load_daily_core(conn, cutoff, since_ts, end_ts, route_id=route_id)
+    trend = dg.half_trend(core) if not core.empty else None
+    periods = dg.period_table(_load_hourly_core(conn, cutoff, since_ts, end_ts, route_id=route_id))
+    weekdays = dg.weekday_table(core)
+    rec = dg.recurrence(core[["date_service", "obs", "cnt_gt300"]] if not core.empty else core)
+    conc = dg.concentration(periods, "période") or dg.concentration(weekdays, "jour")
+    canc = load_line_cancellations(conn, cutoff, since_ts, end_ts, route_id)
+    cancelled = int(canc["cancelled"].sum()) if not canc.empty else 0
+    trips = int(canc["trips"].sum()) if not canc.empty else 0
+    stops = load_line_stops(conn, cutoff, since_ts, end_ts, route_id)
+    seg_ok = segments_available(conn)
+    seg = load_route_segments(conn, cutoff, since_ts, end_ts, route_id) if seg_ok else pd.DataFrame()
+
+    per_dir = {}
+    for d, prof in (seg.groupby("direction_id") if not seg.empty else []):
+        per_dir[d] = {"profile": prof, "terminus": prof["terminus"].iloc[0],
+                      "origin": dg.classify_delay_origin(prof), "skips": dg.classify_skips(prof)}
+    main_dir = max(per_dir, key=lambda d: per_dir[d]["origin"]["peak_delay"] or 0) if per_dir else None
+    skip_dir = max(per_dir, key=lambda d: per_dir[d]["skips"]["rate"]) if per_dir else None
+    origin = per_dir[main_dir]["origin"] if main_dir is not None else dg.classify_delay_origin(None)
+    skips = per_dir[skip_dir]["skips"] if skip_dir is not None else dg.classify_skips(None)
+    by_dir = (stops[stops["direction"] != ""].groupby("direction")
+              .agg(obs=("obs", "sum"), cnt_gt300=("cnt_gt300", "sum")).reset_index()
+              .rename(columns={"direction": "terminus"})) if not stops.empty else pd.DataFrame()
+    imbalance = dg.direction_imbalance(by_dir)
+    ligne = str(line["ligne"])
+    summary = dg.line_summary(ligne, breakdown, cancelled, origin, imbalance, skips, rec, conc)
+    hints = dg.line_hints(origin, skips, cancelled)
+
+    st.query_params["ligne"] = route_id
+    if "arret" in st.query_params:
+        del st.query_params["arret"]
+    termini = " ↔ ".join(dict.fromkeys(v["terminus"].removeprefix("vers ") for v in per_dir.values()))
+    n_communes = int(stops["commune"].nunique()) if not stops.empty else 0
+    days = int(core["date_service"].nunique()) if not core.empty else 0
+    marker = " ⚠" if route_id in disturbed else ""
+    per_day = f"{int(line['observations']) / max(days, 1):,.0f}".replace(",", " ")
+    st.markdown(
+        f'<div class="fiche-title">{mode_glyph(line["route_type"])} Ligne {html.escape(ligne)}{marker} · '
+        f'{html.escape(str(line["mode"]))}</div>'
+        f'<div class="fiche-sub">{html.escape(termini) + " · " if termini else ""}'
+        f'{n_communes} commune(s) desservie(s) · {per_day} passages par jour · lien direct : paramètre '
+        f'<code>?ligne={html.escape(route_id)}</code></div>',
+        unsafe_allow_html=True,
+    )
+    if route_id in disturbed:
+        st.warning(CAUTION_TEXT)
+    delta = trend["delta"] if trend else None
+    ref = f"réseau : {network_score(ranking_net):.0f}"
+    if mode_median is not None:
+        ref += f" · médiane {str(line['mode']).lower()} : {mode_median:.0f}"
+    render_kpis([
+        ("Score de fiabilité", f"{line['score_fiabilite']:.0f} / 100", ref,
+         palette_kpi_tier({"fiability": line["score_fiabilite"]}, "fiability")),
+        ("Évolution", f"{delta:+.1f} pts" if delta is not None else "—", "moitié récente vs précédente",
+         _delta_polarity(delta)),
+        ("Points perdus : retards", f"{breakdown['lost_delay']:.0f}",
+         f"{line['pct_retard_5min']:.1f} % de passages à plus de 5 min",
+         palette_kpi_tier({"retard_5min": line["pct_retard_5min"]}, "retard_5min")),
+        ("Points perdus : arrêts sautés", f"{breakdown['lost_skip']:.0f}",
+         f"{line['pct_arrets_sautes']:.1f} % d'arrêts sautés",
+         palette_kpi_tier({"skip_rate": line["pct_arrets_sautes"]}, "skip_rate")),
+        ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "),
+         "neutral"),
+    ])
+    _render_brief(summary, hints)
+
+    view = st.segmented_control("Détail", LINE_VIEWS, default=LINE_VIEWS[0], key="line_view",
+                                label_visibility="collapsed") or LINE_VIEWS[0]
+    if view in ("Retards : où ?", "Service non rendu") and not per_dir:
+        st.info("L'analyse tronçon par tronçon est en cours de constitution par le collecteur."
+                if not seg_ok else "Pas de données de tronçon pour cette ligne sur la période.")
+    elif view in ("Retards : où ?", "Service non rendu"):
+        dirs = list(per_dir)
+        default = main_dir if view == "Retards : où ?" else skip_dir
+        chosen = st.radio("Direction", dirs, index=dirs.index(default), horizontal=True,
+                          format_func=lambda d: per_dir[d]["terminus"], key=f"line_dir_{view}")
+        d = per_dir[chosen]
+        if view == "Retards : où ?":
+            hot = {h["stop_id"] for h in d["origin"]["hotspots"]}
+            hc_render(line_profile_chart(d["profile"], hotspot_stop_ids=hot), height=360)
+            labels = {"départ": "retard déjà présent dès le départ", "localisé": "retard formé sur quelques tronçons",
+                      "diffus": "retard réparti sur tout le parcours", "aucun": "pas de retard notable"}
+            st.caption(f"{d['terminus'].capitalize()} : {labels[d['origin']['verdict']]}. En Copperwood, les "
+                       "3 tronçons qui prennent le plus de retard.")
+            if d["origin"]["hotspots"]:
+                top = pd.DataFrame(d["origin"]["hotspots"])
+                top["Tronçon"] = top["from"] + " → " + top["to"]
+                top["Retard pris"] = top["gain_s"].map(lambda v: format_seconds(v, signed=True))
+                st.dataframe(top[["Tronçon", "commune", "Retard pris"]].rename(columns={"commune": "Commune"}),
+                             hide_index=True, width="stretch")
+        else:
+            if cancelled:
+                st.markdown(f"#### Courses supprimées ({cancelled} sur {trips:,})".replace(",", " "))
+                hc_render(cancellations_chart(canc[canc["cancelled"] > 0]), height=240)
+            st.markdown("#### Arrêts sautés le long de la ligne")
+            render_tier_legend("Arrêts sautés", "bon", "à surveiller", invert=True)
+            hc_render(skip_profile_chart(d["profile"]), height=300)
+            labels = {"extrémités": "surtout aux extrémités (prises ou fins de service en cours de ligne)",
+                      "bloc": "en bloc sur une section (déviation probable)",
+                      "dispersé": "dispersés le long de la ligne", "aucun": "rares"}
+            st.caption(f"{d['terminus'].capitalize()} : arrêts sautés {labels[d['skips']['verdict']]}.")
+    elif view == "Quand ?":
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("#### Selon le créneau")
+            if periods.empty:
+                st.info("Aucune donnée horaire.")
+            else:
+                hc_render(risk_by_label_chart(periods, "période"), height=260)
+        with right:
+            st.markdown("#### Selon le jour de la semaine")
+            if weekdays.empty:
+                st.info("Aucune donnée quotidienne.")
+            else:
+                hc_render(risk_by_label_chart(weekdays, "jour"), height=260)
+        if not core.empty:
+            st.markdown("#### Jour par jour")
+            render_tier_legend("Retards > 5 min", "bon", "jour dégradé", invert=True)
+            hc_render(daily_status_chart(core, RISK_PCT_GT300), height=240)
+    else:
+        _render_zone(line["retard_median_s"], float(line["pct_retard_5min"]), None)
+        st.markdown("#### Perturbations signalées")
+        _render_alerts(_alerts_overlapping(load_perturbation_history(conn, since_ts, end_ts, cutoff),
+                                           {route_id}, rec["bad_dates"]))
+        with st.expander("Répartition des écarts à l'horaire"):
+            render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
+            hc_render(delay_distribution_chart(load_distribution(conn, cutoff, since_ts, route_id, end_ts)),
+                      height=280)
+
+    if not stops.empty:
+        st.markdown("#### Arrêts les plus touchés de la ligne")
+        st.caption("Sélectionnez une ligne du tableau pour ouvrir la fiche de l'arrêt.")
+        top = stops[stops["obs"] >= 1].head(10)
+        st.session_state["_line_stop_ids"] = top["stop_id"].tolist()
+        table = top[["stop_name", "direction", "commune", "cnt_gt300", "skipped", "score_fiabilite"]].copy()
+        table.columns = ["Arrêt", "Direction", "Commune", "Passages > 5 min", "Arrêts sautés", "Score / 100"]
+        st.dataframe(
+            table.style.map(_score_tier_style, subset=["Score / 100"]).format({"Score / 100": "{:.0f}"}),
+            hide_index=True, width="stretch", key="line_stops_table", on_select=lambda: _on_table_select(
+                "line_stops_table", "_line_stop_ids", open_stop), selection_mode="single-row",
+        )
+
+
 def main() -> None:
     st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon="◉", layout="wide")
     inject_style()
+    apply_query_params()
     page = render_sidebar()
     if not DB_PATH.exists():
         st.error(f"Base SQLite introuvable : {DB_PATH}")
@@ -1523,6 +2084,8 @@ def main() -> None:
         st.caption("**Passage analysé** : un départ programmé (SCHEDULED) avec retard connu, sorti du flux depuis ≥ 20 min. **Observation** : une ligne brute du flux GTFS-RT (sert à mesurer le volume de collecte). **Arrêts sautés** : arrêts annoncés SKIPPED, rapportés aux arrêts attendus (SCHEDULED + SKIPPED).")
 
         disturbed = load_disturbed_route_ids(conn, since_ts, end_ts, cutoff, commune=commune)
+        ranking_net = ranking if commune is None else make_ranking(
+            *load_network_data(conn, cutoff, since_ts, end_ts, commune=None))
 
         # navigation pilotée par la sidebar (voir render_sidebar).
 
@@ -1546,7 +2109,19 @@ def main() -> None:
             elif territorial.empty:
                 st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
             render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
+            labels = stop_labels(territorial_network)
+            options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],
+                             key=lambda sid: labels.get(sid, sid))
+            current = st.session_state.get("stop_id")
+            if current and current not in options:
+                options = [current] + options
+            search_kwargs = {} if "stop_id" in st.session_state else {"index": None}
+            st.selectbox("Chercher un arrêt", options, key="stop_id", placeholder="Nom de l'arrêt…",
+                         format_func=lambda sid: labels.get(sid, sid), **search_kwargs)
             _territorial_map(territorial, commune)
+            if st.session_state.get("stop_id"):
+                render_stop_panel(conn, cutoff, since_ts, end_ts, st.session_state["stop_id"],
+                                  territorial_network, network_score(ranking_net))
             if commune is None:
                 st.markdown("#### Comparaison des communes")
                 communes = load_commune_stats(conn, cutoff, since_ts, end_ts)
@@ -1582,6 +2157,9 @@ def main() -> None:
                     st.info("Aucune donnée par commune pour cette période.")
             if not territorial.empty:
                 st.markdown("#### Arrêts du périmètre")
+                st.caption("Sélectionnez une ligne du tableau pour ouvrir la fiche de l'arrêt sous la carte.")
+                territorial = territorial.sort_values("score_fiabilite").reset_index(drop=True)
+                st.session_state["_territory_stop_ids"] = territorial["stop_id"].tolist()
                 tdisp = territorial[["stop_name", "direction", "ligne", "lignes", "score_fiabilite", "pct_retard_5min", "observations"]].copy()
                 tdisp.columns = ["Arrêt", "Direction", "Ligne principale", "Lignes desservies", "Score / 100", "Retards > 5 min", "Passages"]
                 tstyled = (
@@ -1589,7 +2167,9 @@ def main() -> None:
                     .map(_score_tier_style, subset=["Score / 100"])
                     .format({"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": "{:,}"})
                 )
-                st.dataframe(tstyled, use_container_width=True, hide_index=True, height=320)
+                st.dataframe(tstyled, width="stretch", hide_index=True, height=320, key="territory_table",
+                             on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", select_stop),
+                             selection_mode="single-row")
                 if commune is not None:
                     st.caption("Carte et tableau restreints aux arrêts de la commune sélectionnée, centrés automatiquement sur son périmètre.")
 
@@ -1758,54 +2338,27 @@ def main() -> None:
                                    "Retard moyen": lambda x: format_seconds(x)}))
                 st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
-        if page == "Analyse d'une ligne":
-            options = visible_ranking if not visible_ranking.empty else ranking
-            route_labels = {
-                f"Ligne {r.ligne} · {int(r.observations):,} passages": r.route_id
-                for r in options.itertuples()
-            }
-            default_line = list(route_labels.values())[0] if route_labels else None
-            st.selectbox(
-                "Ligne analysée", list(route_labels), index=0,
-                key="line_selector",
-            )
-            selected_label = st.session_state.get("line_selector")
-            selected_route_id = route_labels[selected_label] if selected_label in route_labels else default_line
-            line = ranking[ranking.route_id == selected_route_id].iloc[0]
-            marker = " ⚠" if selected_route_id in disturbed else ""
-            st.markdown(f"### Ligne {html.escape(str(line['ligne']))}{marker} · {mode_glyph(line['route_type'])} {line['mode']}", unsafe_allow_html=True)
-            if selected_route_id in disturbed:
-                st.warning(CAUTION_TEXT)
-            render_kpis([
-                ("Score de fiabilité", f"{line.score_fiabilite:.1f} / 100", None,
-                 palette_kpi_tier({"fiability": line.score_fiabilite}, "fiability")),
-                ("Retard médian", format_seconds(line.retard_median_s, signed=True), None,
-                 palette_kpi_tier({"retard_median": line.retard_median_s}, "retard_median")),
-                ("Passages > 5 min", f"{line.pct_retard_5min:.1f} %", None,
-                 palette_kpi_tier({"retard_5min": line.pct_retard_5min}, "retard_5min")),
-                ("En avance > 1 min", f"{line.pct_avance_1min:.1f} %", None, "neutral"),
-            ])
-            timeline = load_line_timeline(conn, cutoff, since_ts, selected_route_id, end_ts, commune=commune)
-            hourly = load_hourly(conn, cutoff, since_ts, selected_route_id, end_ts, commune=commune)
-            left, right = st.columns(2, gap="large")
-            with left:
-                st.markdown("#### Évolution quotidienne")
-                if timeline.empty or len(timeline) < 2:
-                    st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
-                else:
-                    hc_render(timeline_chart(timeline), height=285)
-            with right:
-                st.markdown("#### Risque selon l'heure")
-                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
-                if hourly.empty:
-                    st.info("Cette vue nécessite les heures de départ des observations.")
-                else:
-                    hc_render(hourly_risk_chart(hourly, delayed), height=285)
-            st.markdown("#### Profil des retards")
-            distribution = load_distribution(conn, cutoff, since_ts, selected_route_id, end_ts, commune=commune)
-            if not distribution.empty:
-                render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
-                hc_render(delay_distribution_chart(distribution), height=280)
+        if page == PAGE_LINE:
+            st.markdown("### Pourquoi cette ligne n'est-elle pas fiable ?")
+            st.markdown('<div class="section-note">La fiche porte sur toute la ligne, tous territoires '
+                        'confondus : le retard subi dans une commune se forme souvent ailleurs sur le '
+                        'parcours.</div>', unsafe_allow_html=True)
+            options_df = ranking_net[ranking_net["observations"] >= MIN_OBSERVATIONS]
+            if options_df.empty:
+                options_df = ranking_net
+            line_labels = {r.route_id: f"{mode_glyph(r.route_type)} Ligne {r.ligne} · score {r.score_fiabilite:.0f}/100"
+                           for r in options_df.itertuples()}
+            line_options = list(line_labels)
+            current_line = st.session_state.get("line_id")
+            if current_line and current_line not in line_options:
+                line_options = [current_line] + line_options
+            if current_line is None and line_options:
+                st.session_state["line_id"] = line_options[0]
+            st.selectbox("Ligne analysée (classées de la moins fiable à la plus fiable)", line_options,
+                         key="line_id", format_func=lambda rid: line_labels.get(rid, rid))
+            if st.session_state.get("line_id"):
+                render_line_panel(conn, cutoff, since_ts, end_ts, st.session_state["line_id"],
+                                  ranking_net, disturbed)
 
         if page == "Évolution & tendances":
             st.markdown("### Évolution de la fiabilité dans le temps")

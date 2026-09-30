@@ -475,3 +475,131 @@ class TestLoadEngagement:
         end = _epoch_local(2026, 9, 12)
         assert app_mod.load_engagement_trend(conn, cutoff, since, end).empty
         assert app_mod.load_engagement_progression(conn, cutoff, since, end).empty
+
+class TestLoadersDiagnostic:
+    def _seed(self, conn):
+        import db as dbio
+
+        _seed_routes(conn)
+        initialize_tables(conn)
+        conn.executemany(
+            "INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon) VALUES (?, ?, 44.8, -0.6)",
+            [("s1", "Gare"), ("s2", "Mairie"), ("s3", "Parc")],
+        )
+        conn.executemany(
+            "INSERT INTO stop_municipalities (stop_id, insee_code, commune_name, assignment_method, "
+            "assigned_at) VALUES (?, ?, ?, 'point-in-polygon', 1)",
+            [("s1", "33063", "Bordeaux"), ("s2", "33281", "Mérignac"), ("s3", "33281", "Mérignac")],
+        )
+        conn.executescript(dbio.STOP_DIRECTION_DDL)
+        conn.executemany(
+            "INSERT INTO stop_direction (route_id, stop_id, direction_id, terminus) VALUES ('A', ?, 0, 'Parc')",
+            [("s1",), ("s2",), ("s3",)],
+        )
+        conn.executemany(
+            """INSERT INTO observations
+               (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id,
+                schedule_relationship, arrival_delay, departure_delay, departure_time, last_seen_at)
+               VALUES (?, '20260911', 'A', 0, ?, ?, ?, NULL, ?, ?, 0)""",
+            [
+                ("t1", 1, "s1", "SCHEDULED", 30, _epoch_local(2026, 9, 11, 8, 0)),
+                ("t1", 2, "s2", "SCHEDULED", 150, _epoch_local(2026, 9, 11, 8, 5)),
+                ("t1", 3, "s3", "SCHEDULED", 400, _epoch_local(2026, 9, 11, 8, 10)),
+                ("t2", 1, "s1", "SCHEDULED", 0, _epoch_local(2026, 9, 11, 9, 0)),
+                ("t2", 2, "s2", "SKIPPED", None, None),
+                ("t2", 3, "s3", "SCHEDULED", 60, _epoch_local(2026, 9, 11, 9, 10)),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO trip_status (trip_id, start_date, route_id, schedule_relationship, last_seen_at) "
+            "VALUES (?, ?, 'A', ?, ?)",
+            [("t1", "20260911", "SCHEDULED", 10), ("t2", "20260911", "SCHEDULED", 10),
+             ("t3", "20260911", "CANCELED", 10), ("t4", "20260911", "CANCELED", 2_000_000_000),
+             ("t5", "20260820", "CANCELED", 10)],
+        )
+        conn.commit()
+        dbio.refresh_aggregates(conn, days=["2026-09-11"])
+        dbio.refresh_segments(conn, days=["2026-09-11"])
+
+    def _bounds(self):
+        return _epoch_local(2026, 9, 12), _epoch_local(2026, 9, 1), _epoch_local(2026, 9, 12)
+
+    def test_profil_de_ligne_ordonne_avec_troncons(self, conn):
+        self._seed(conn)
+        cutoff, since, end = self._bounds()
+        prof = app_mod.load_route_segments(conn, cutoff, since, end, "A")
+        assert list(prof["stop_name"]) == ["Gare", "Mairie", "Parc"]
+        parc = prof[prof["stop_id"] == "s3"].iloc[0]
+        assert parc["prev_stop_name"] == "Gare"
+        assert parc["pairs"] == 2
+        assert parc["carried_s"] == pytest.approx((150 + 0) / 2)
+        assert parc["gain_s"] == pytest.approx((250 + 60) / 2)
+        assert parc["commune"] == "Mérignac"
+        assert parc["terminus"] == "vers Parc"
+        mairie = prof[prof["stop_id"] == "s2"].iloc[0]
+        assert (mairie["skipped"], mairie["eligible"]) == (1, 2)
+
+    def test_segments_disponibles(self, conn):
+        assert app_mod.segments_available(conn) is False
+        self._seed(conn)
+        import streamlit as st
+        st.cache_data.clear()
+        assert app_mod.segments_available(conn) is True
+
+    def test_courses_supprimees_bornees_a_la_periode_et_stabilisees(self, conn):
+        self._seed(conn)
+        cutoff, since, end = self._bounds()
+        canc = app_mod.load_line_cancellations(conn, cutoff, since, end, "A")
+        assert len(canc) == 1
+        assert (int(canc["cancelled"].iloc[0]), int(canc["trips"].iloc[0])) == (1, 3)
+
+    def test_arrets_de_la_ligne_classes_par_impact(self, conn):
+        self._seed(conn)
+        cutoff, since, end = self._bounds()
+        stops = app_mod.load_line_stops(conn, cutoff, since, end, "A")
+        assert stops.iloc[0]["stop_id"] in {"s2", "s3"}
+        s3 = stops[stops["stop_id"] == "s3"].iloc[0]
+        assert (s3["cnt_gt300"], s3["direction"]) == (1, "vers Parc")
+        assert s3["score_fiabilite"] == 50.0
+
+    def test_compteurs_d_un_arret_et_table_des_lignes(self, conn):
+        self._seed(conn)
+        cutoff, since, end = self._bounds()
+        daily = app_mod.load_stop_daily(conn, cutoff, since, end, "s3")
+        lines = app_mod.stop_lines_table(daily)
+        row = lines.iloc[0]
+        assert (row["observations"], row["cnt_gt300"]) == (2, 1)
+        assert row["retard_median_s"] == 230.0
+        assert row["mode"] == "Bus"
+        hourly = app_mod.load_stop_hourly(conn, cutoff, since, end, "s3")
+        assert sorted(hourly["heure"]) == [8, 9]
+
+
+class TestAidesFiche:
+    def test_score_reseau_pondere(self):
+        ranking = pd.DataFrame({"observations": [100, 300], "pct_a_l_heure": [80.0, 100.0],
+                                "skipped": [5, 5], "eligible": [100, 400]})
+        assert app_mod.network_score(ranking) == pytest.approx(95.0 - 2 * 2.0)
+
+    def test_libelles_de_recherche(self):
+        df = pd.DataFrame({"stop_id": ["s1", "s2"], "stop_name": ["Gare", "Parc"],
+                           "direction": ["vers Parc", ""], "lignes": ["1, 11", "A"]})
+        assert app_mod.stop_labels(df) == {"s1": "Gare — vers Parc (1, 11)", "s2": "Parc (A)"}
+
+    def test_alertes_qui_recoupent_un_jour_degrade(self):
+        history = pd.DataFrame({
+            "route_id": ["A", "A", "B"], "ligne": ["1", "1", "2"],
+            "header_text": ["Travaux", "Grève", "Autre"],
+            "debut_effectif": ["01/09/2026 06:00", "10/09/2026 06:00", "01/09/2026 06:00"],
+            "fin_effective": ["03/09/2026 20:00", "11/09/2026 20:00", "30/09/2026 20:00"],
+        })
+        out = app_mod._alerts_overlapping(history, {"A"}, [pd.Timestamp("2026-09-10")])
+        assert list(out["header_text"]) == ["Grève", "Travaux"]
+        assert list(out["jour_degrade"]) == [True, False]
+
+    def test_repartition_en_classes(self):
+        dist = app_mod.distribution_from_hists([{"30": 2, "400": 1}, {"-700": 1}])
+        counts = dict(zip(dist["plage"], dist["observations"]))
+        assert counts["0 à +1"] == 2
+        assert counts["+5 à +10"] == 1
+        assert counts["< −10 min"] == 1
