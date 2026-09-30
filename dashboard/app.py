@@ -11,7 +11,7 @@ passages pour lesquels le retard est stabilise.
 
 Architecture de chargement : les aggregations lourdes sont faites en SQL (seuls
 quelques resultats agregees transitent en pandas, pas les 1,3 M de lignes brutes),
-les onglets sont rendus paresseusement (seul l'onglet actif calcule ses
+les pages sont rendues paresseusement (seule la page active calcule ses
 graphiques) et les loaders sont mis en cache 60 secondes.
 """
 
@@ -22,6 +22,7 @@ import math
 import sqlite3
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, time as dtime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -455,6 +456,7 @@ def inject_style() -> None:
         .hint-note {{ color: rgba(96, 108, 56, .70); font-size: .8rem; }}
         .fiche-title {{ color: #283618; font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; margin-top: 1.4rem; padding-top: 1rem; border-top: 2px solid #283618; }}
         .fiche-sub {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin: .2rem 0 .9rem; }}
+        .watch-title {{ color: #283618; font-size: 1.05rem; font-weight: 700; margin-top: .3rem; line-height: 1.25; }}
         .zone-badge {{ display: inline-block; background: #FEFAE0; border: 1px solid #283618; border-radius: 999px; padding: .3rem .9rem; font-weight: 700; color: #283618; }}
         .stTabs [data-baseweb="tab-list"] {{ gap: 1.3rem; border-bottom: 1px solid rgba(221, 161, 94, .35); }}
         .stTabs [data-baseweb="tab"] {{ color: rgba(96, 108, 56, .70); padding: .55rem .15rem; font-size: .95rem; font-weight: 500; }}
@@ -1453,7 +1455,7 @@ def load_line_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
 def _territorial_score(df: pd.DataFrame) -> float:
     """Score de fiabilité moyen (pondéré par les passages) du périmètre territorial.
 
-    Utilisé pour la phrase d'accroche de la Vue territoriale (« La fiabilité de la
+    Utilisé pour le verdict de la page « Mon territoire » (« La fiabilité de la
     commune est de X/100, contre Y/100 pour l'ensemble du réseau »).
     """
     if df is None or df.empty:
@@ -1519,9 +1521,7 @@ def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
 
 
 NAV_ITEMS = [
-    "Vue territoriale", "Vue réseau", "Modes de transport", "Fiabilité par période",
-    "Analyse d'une ligne", "Évolution & tendances",
-    "Perturbations", "Collecte des données", "Méthode & données",
+    "Mon territoire", "Lignes", "Quand ?", "Réseau & modes", "Perturbations", "Données & méthode",
 ]
 
 def _logo_data_uri() -> str:
@@ -1566,8 +1566,8 @@ def render_kpis(items) -> None:
         col.markdown(kpi_card(label, value, sublabel, polarity), unsafe_allow_html=True)
 
 
-PAGE_TERRITORY = "Vue territoriale"
-PAGE_LINE = "Analyse d'une ligne"
+PAGE_TERRITORY = "Mon territoire"
+PAGE_LINE = "Lignes"
 STOP_VIEWS = ["Où ?", "Quand ?", "Quel type ?", "Contexte"]
 LINE_VIEWS = ["Retards : où ?", "Service non rendu", "Quand ?", "Contexte"]
 ZONE_EXPLANATIONS = {
@@ -2004,6 +2004,589 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         )
 
 
+@dataclass
+class PageContext:
+    conn: sqlite3.Connection
+    cutoff: int
+    since_ts: int | None
+    end_ts: int | None
+    commune: str | None
+    ranking: pd.DataFrame
+    visible_ranking: pd.DataFrame
+    ranking_net: pd.DataFrame
+    disturbed: set
+    total: int
+
+
+def _verdict(text: str) -> None:
+    st.markdown(f'<div class="insight">{text}</div>', unsafe_allow_html=True)
+
+
+def _tier_word(score: float) -> str:
+    return {"positif": "bon", "moyen": "moyen", "negatif": "à surveiller"}[
+        palette_kpi_tier({"fiability": score}, "fiability")]
+
+
+def _render_watchlist(items: list[dict]) -> None:
+    if not items:
+        return
+    st.markdown("#### À surveiller")
+    cols = st.columns(len(items))
+    for i, (col, item) in enumerate(zip(cols, items)):
+        with col:
+            st.markdown(
+                f'<div class="kpi-card" style="border-left-color:{COPPERWOOD}">'
+                f'<div class="kpi-label">{html.escape(item["kind"].capitalize())}</div>'
+                f'<div class="watch-title">{html.escape(str(item["title"]))}</div>'
+                f'<div class="kpi-sublabel">{html.escape(item["reason"])}</div></div>',
+                unsafe_allow_html=True,
+            )
+            opener = open_line if item["kind"] == "ligne" else select_stop
+            st.button("Ouvrir la fiche", key=f"watch_{i}", on_click=opener, args=(item["id"],))
+
+
+def render_page_territory(c: PageContext) -> None:
+    territorial = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    territorial_network = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None)
+    reference = network_score(c.ranking_net)
+    if territorial.empty:
+        st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
+    elif c.commune is not None:
+        local = _territorial_score(territorial)
+        gap = local - _territorial_score(territorial_network)
+        comparison = ("au niveau de l’ensemble du réseau" if abs(gap) < 1
+                      else f"{abs(gap):.0f} point(s) {'au-dessus' if gap > 0 else 'en dessous'} de l’ensemble du réseau")
+        _verdict(f'La fiabilité de <b>{html.escape(c.commune)}</b> est de <b>{local:.0f}/100</b> '
+                 f'({_tier_word(local)}), {comparison}.')
+    else:
+        _verdict(f'Le réseau obtient un score de fiabilité de <b>{reference:.0f}/100</b> '
+                 f'({_tier_word(reference)}). Les points ci-dessous méritent une attention en priorité ; '
+                 f'cliquez sur un arrêt de la carte pour comprendre d’où vient son problème.')
+    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    _render_watchlist(dg.watchlist(prog, c.visible_ranking, territorial, MIN_OBSERVATIONS))
+
+    st.markdown("#### Carte des arrêts")
+    st.markdown('<div class="section-note">Couleur : score de fiabilité de l’arrêt, toutes lignes '
+                'confondues. Forme : mode de la ligne principale (● tram, ■ bus, ▲ ferry). Taille : '
+                'nombre de passages analysés.</div>', unsafe_allow_html=True)
+    render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
+    labels = stop_labels(territorial_network)
+    options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],
+                     key=lambda sid: labels.get(sid, sid))
+    current = st.session_state.get("stop_id")
+    if current and current not in options:
+        options = [current] + options
+    search_kwargs = {} if "stop_id" in st.session_state else {"index": None}
+    st.selectbox("Chercher un arrêt", options, key="stop_id", placeholder="Nom de l'arrêt…",
+                 format_func=lambda sid: labels.get(sid, sid), **search_kwargs)
+    _territorial_map(territorial, c.commune)
+    if st.session_state.get("stop_id"):
+        render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
+                          territorial_network, reference)
+
+    if c.commune is None:
+        with st.expander("Comparer les communes"):
+            communes = load_commune_stats(c.conn, c.cutoff, c.since_ts, c.end_ts)
+            if communes.empty:
+                st.info("Aucune donnée par commune pour cette période.")
+            else:
+                worst_c, best_c = communes.iloc[0], communes.iloc[-1]
+                st.markdown(
+                    f'Sur {len(communes)} communes, la fiabilité s’étend de '
+                    f'**{best_c["commune"]}** ({best_c["score_fiabilite"]:.1f}/100) à '
+                    f'**{worst_c["commune"]}** ({worst_c["score_fiabilite"]:.1f}/100).'
+                )
+                left, right = st.columns([1.0, 1.0], gap="large")
+                with left:
+                    render_tier_legend("Score de fiabilité", "à surveiller", "bon")
+                    hc_render(commune_ranking_chart(communes), height=460)
+                with right:
+                    table = communes[["commune", "score_fiabilite", "pct_a_l_heure", "pct_retard_5min",
+                                      "retard_moyen_s", "pct_arrets_sautes", "n_lignes", "observations"]].copy()
+                    table.columns = ["Commune", "Score / 100", "Ponctualité ≤ 5 min", "Retards > 5 min",
+                                     "Retard moyen", "Arrêts sautés", "Lignes", "Passages"]
+                    st.dataframe(
+                        table.style.map(_score_tier_style, subset=["Score / 100"]).format({
+                            "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %",
+                            "Retards > 5 min": "{:.1f} %", "Retard moyen": lambda x: format_seconds(x),
+                            "Arrêts sautés": "{:.2f} %", "Lignes": "{:.0f}", "Passages": "{:,}"}),
+                        width="stretch", hide_index=True, height=460)
+    if not territorial.empty:
+        with st.expander("Tous les arrêts du périmètre (du moins fiable au plus fiable)"):
+            st.caption("Sélectionnez une ligne du tableau pour ouvrir la fiche de l'arrêt sous la carte.")
+            ordered = territorial.sort_values("score_fiabilite").reset_index(drop=True)
+            st.session_state["_territory_stop_ids"] = ordered["stop_id"].tolist()
+            tdisp = ordered[["stop_name", "direction", "ligne", "lignes", "score_fiabilite",
+                             "pct_retard_5min", "observations"]].copy()
+            tdisp.columns = ["Arrêt", "Direction", "Ligne principale", "Lignes desservies", "Score / 100",
+                             "Retards > 5 min", "Passages"]
+            st.dataframe(
+                tdisp.style.map(_score_tier_style, subset=["Score / 100"]).format(
+                    {"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": "{:,}"}),
+                width="stretch", hide_index=True, height=320, key="territory_table",
+                on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", select_stop),
+                selection_mode="single-row")
+
+
+def select_line(route_id: str) -> None:
+    st.session_state["line_id"] = route_id
+
+
+def render_page_lines(c: PageContext) -> None:
+    st.markdown("### Quelles lignes posent problème, et pourquoi ?")
+    worst = c.ranking.iloc[0]
+    worst_note = " — ⚠ perturbation signalée sur la période" if worst.route_id in c.disturbed else ""
+    _verdict(f'À examiner en premier : <b>ligne {html.escape(str(worst.ligne))}</b>{worst_note}, score '
+             f'{worst.score_fiabilite:.0f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de '
+             f'5 minutes. Sélectionnez une ligne dans le tableau pour ouvrir sa fiche.')
+    left, right = st.columns([1.0, 1.0], gap="large")
+    with left:
+        st.markdown("#### Les 15 lignes les moins fiables")
+        render_tier_legend(invert=False)
+        chart_data = c.visible_ranking.head(15).sort_values("score_fiabilite").copy()
+        chart_data["ligne_plot"] = [f"⚠ {l}" if rid in c.disturbed else l
+                                    for l, rid in zip(chart_data["ligne"], chart_data["route_id"])]
+        hc_render(ranking_chart(chart_data), height=390)
+    with right:
+        st.markdown("#### Toutes les lignes")
+        table_src = c.visible_ranking.reset_index(drop=True)
+        st.session_state["_lines_table_ids"] = table_src["route_id"].tolist()
+        display = pd.DataFrame({
+            "Ligne": [f"{mode_glyph(rt)} {'⚠ ' if rid in c.disturbed else ''}{l}"
+                      for rt, rid, l in zip(table_src["route_type"], table_src["route_id"], table_src["ligne"])],
+            "Score / 100": table_src["score_fiabilite"],
+            "Retards > 5 min": table_src["pct_retard_5min"],
+            "Arrêts sautés": table_src["pct_arrets_sautes"],
+            "Passages": table_src["observations"],
+        })
+        st.dataframe(
+            display.style.map(_score_tier_style, subset=["Score / 100"]).format({
+                "Score / 100": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %",
+                "Passages": "{:,}"}),
+            width="stretch", hide_index=True, height=390, key="lines_table",
+            on_select=lambda: _on_table_select("lines_table", "_lines_table_ids", select_line),
+            selection_mode="single-row")
+    if c.disturbed:
+        st.caption(f"⚠ {len(c.disturbed & set(c.ranking['route_id']))} ligne(s) du périmètre font l'objet "
+                   "d'une perturbation signalée par TBM sur la période — sans lien de causalité établi avec "
+                   "les statistiques présentées.")
+    if c.commune is not None:
+        st.caption("Classement restreint aux arrêts de la commune ; la fiche porte sur toute la ligne, car "
+                   "le retard subi dans une commune se forme souvent ailleurs sur le parcours.")
+
+    options_df = c.ranking_net[c.ranking_net["observations"] >= MIN_OBSERVATIONS]
+    if options_df.empty:
+        options_df = c.ranking_net
+    line_labels = {r.route_id: f"{mode_glyph(r.route_type)} Ligne {r.ligne} · score {r.score_fiabilite:.0f}/100"
+                   for r in options_df.itertuples()}
+    line_options = list(line_labels)
+    current_line = st.session_state.get("line_id")
+    if current_line and current_line not in line_options:
+        line_options = [current_line] + line_options
+    if current_line is None and line_options:
+        st.session_state["line_id"] = str(c.ranking.iloc[0]["route_id"])
+        if st.session_state["line_id"] not in line_options:
+            line_options = [st.session_state["line_id"]] + line_options
+    st.selectbox("Ligne analysée", line_options, key="line_id",
+                 format_func=lambda rid: line_labels.get(rid, rid))
+    if st.session_state.get("line_id"):
+        render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["line_id"],
+                          c.ranking_net, c.disturbed)
+
+
+def _period_verdict(period: pd.DataFrame) -> str | None:
+    table = period.assign(obs=period["observations"],
+                          cnt_gt300=period["observations"] * period["pct_retard_5min"] / 100,
+                          pct_gt300=period["pct_retard_5min"])
+    conc = dg.concentration(table, "période")
+    if conc is None:
+        return ("Aucun créneau ne se détache nettement : les retards se répartissent sur l'ensemble de la "
+                "journée et de la semaine.")
+    return (f"Le créneau le plus difficile est <b>{html.escape(conc['label'])}</b> : "
+            f"{conc['pct']:.1f} % de passages à plus de 5 min, contre {conc['rest_pct']:.1f} % le reste du temps.")
+
+
+def render_page_when(c: PageContext) -> None:
+    st.markdown("### Quand les problèmes surviennent-ils ?")
+    view = st.segmented_control("Vue", ["Selon le créneau", "Dans le temps"], default="Selon le créneau",
+                                key="when_view", label_visibility="collapsed") or "Selon le créneau"
+    if view == "Selon le créneau":
+        period = load_period_stats(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+        if period.empty:
+            st.info("Aucune donnée horaire disponible sur ce périmètre pour la période.")
+            return
+        _verdict(_period_verdict(period))
+        st.markdown('<div class="section-note">Matin (06–10), Journée (10–16), Pointe du soir (16–20), '
+                    'Soirée & nuit (20–06) du lundi au vendredi, et Week-end. Les arrêts sautés n’y sont '
+                    'pas décomptés.</div>', unsafe_allow_html=True)
+        left, right = st.columns([1.05, 0.95], gap="large")
+        with left:
+            st.markdown("#### Ponctualité par créneau")
+            render_tier_legend("Ponctualité ≤ 5 min", "à surveiller", "bon")
+            hc_render(period_punctuality_chart(period), height=300)
+        with right:
+            st.markdown("#### Retards > 5 min par mode et créneau")
+            render_tier_legend("Retards > 5 min", "bon", "à surveiller", invert=True)
+            pm = load_period_mode(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+            if pm.empty:
+                st.info("Aucune donnée par mode sur ce périmètre.")
+            else:
+                hc_render(period_mode_chart(pm), height=300)
+        with st.expander("Lignes les moins ponctuelles d'un créneau"):
+            selected_period = st.selectbox("Créneau", period["période"].tolist(), key="period_selector")
+            lines = load_period_lines(c.conn, c.cutoff, c.since_ts, c.end_ts,
+                                      periode=selected_period, commune=c.commune)
+            if lines.empty:
+                st.info(f"Aucune ligne n'atteint le seuil de {MIN_OBSERVATIONS} passages sur le créneau "
+                        f"{selected_period}.")
+            else:
+                display = lines[["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min",
+                                 "retard_moyen_s"]].copy()
+                display["ligne"] = [f"{mode_glyph(rt)} {l}" for rt, l in zip(lines["route_type"], lines["ligne"])]
+                display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min",
+                                   "Retard moyen"]
+                st.dataframe(display.style.map(_score_tier_style, subset=["Ponctualité ≤ 5 min"]).format({
+                    "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
+                    "Retard moyen": lambda x: format_seconds(x)}), width="stretch", hide_index=True, height=320)
+        return
+
+    trend = load_engagement_trend(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    if trend.empty:
+        st.info("Aucune donnée quotidienne sur ce périmètre pour la période.")
+        return
+    dates = list(dict.fromkeys(trend["date_service"].sort_values().tolist()))
+    if len(dates) >= 2:
+        mid = dates[len(dates) // 2]
+        recent, prev = trend[trend["date_service"] >= mid], trend[trend["date_service"] < mid]
+
+        def _weighted_mean(w: pd.Series, v: pd.Series) -> float:
+            return float((w * v).sum()) / max(float(w.sum()), 1)
+
+        r_ponct = _weighted_mean(recent["observations"], recent["pct_a_l_heure"])
+        p_ponct = _weighted_mean(prev["observations"], prev["pct_a_l_heure"])
+        delta_ponct = r_ponct - p_ponct
+        r_skip = _weighted_mean(recent["observations"], recent["pct_arrets_sautes"])
+        p_skip = _weighted_mean(prev["observations"], prev["pct_arrets_sautes"])
+        arrow = "▲" if delta_ponct >= 0 else "▼"
+        delta_color = OLIVE_LEAF if delta_ponct >= 0 else COPPERWOOD
+        _verdict(f'Sur la moitié la plus récente de la période, la ponctualité (≤ 5 min) est de '
+                 f'<b>{r_ponct:.1f} %</b>, soit <span style="color:{delta_color}"><b>{arrow}'
+                 f'{abs(delta_ponct):.1f} point(s)</b></span> par rapport à la moitié précédente. Les arrêts '
+                 f'sautés passent de <b>{p_skip:.2f} %</b> à <b>{r_skip:.2f} %</b>.')
+    else:
+        st.caption("La comparaison récent / précédent apparaîtra dès que plusieurs jours de service seront couverts.")
+    st.markdown("#### Ponctualité jour par jour")
+    hc_render(engagement_trend_chart(trend, "pct_a_l_heure"), height=340)
+    with st.expander("Suivre un autre indicateur"):
+        trend_metrics = [("Retards > 5 min", "pct_retard_5min"), ("Arrêts sautés", "pct_arrets_sautes"),
+                         ("Retard moyen", "retard_moyen_s")]
+        metric_label = st.selectbox("Indicateur", [label for label, _ in trend_metrics], key="trend_metric")
+        hc_render(engagement_trend_chart(trend, dict(trend_metrics)[metric_label]), height=340)
+    st.markdown("#### Lignes qui se dégradent ou s'améliorent")
+    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    if prog.empty:
+        st.info(f"Aucune ligne ne cumule au moins {MIN_OBSERVATIONS} passages sur chacune des deux moitiés "
+                "de la période.")
+        return
+    worst, best = prog.iloc[0], prog.iloc[-1]
+    st.markdown(f"La plus forte dégradation concerne la **ligne {worst['ligne']}** "
+                f"({worst['delta_score']:+.1f} points de score), la meilleure progression la **ligne "
+                f"{best['ligne']}** ({best['delta_score']:+.1f} points).")
+    hc_render(engagement_progression_chart(prog), height=330)
+    with st.expander("Détail par ligne"):
+        table = prog[["ligne", "mode", "score_fiabilite_prev", "score_fiabilite", "delta_score",
+                      "pct_a_l_heure", "pct_arrets_sautes", "observations"]].copy()
+        table.columns = ["Ligne", "Mode", "Score précédent", "Score récent", "Évolution",
+                         "Ponctualité récente", "Arrêts sautés récents", "Passages récents"]
+        st.dataframe(table.style.map(_delta_style, subset=["Évolution"]).format({
+            "Score précédent": "{:.1f}", "Score récent": "{:.1f}", "Évolution": lambda x: f"{x:+.1f} pts",
+            "Ponctualité récente": "{:.1f} %", "Arrêts sautés récents": "{:.2f} %",
+            "Passages récents": "{:,}"}), width="stretch", hide_index=True, height=330)
+        st.caption(f"Score de fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil : "
+                   f"{MIN_OBSERVATIONS} passages dans chacune des deux moitiés.")
+
+
+def render_page_network(c: PageContext) -> None:
+    st.markdown("### Le réseau et ses modes, pour situer un problème")
+    view = st.segmented_control("Vue", ["Réseau", "Modes de transport"], default="Réseau", key="network_view",
+                                label_visibility="collapsed") or "Réseau"
+    if view == "Réseau":
+        _verdict(f'Score de fiabilité du périmètre : <b>{network_score(c.ranking):.0f}/100</b>. La carte de '
+                 f'risque situe chaque ligne selon la durée typique de ses retards (retard médian) et leur '
+                 f'fréquence (part des passages à plus de 5 min).')
+        st.markdown("#### Carte de risque des lignes")
+        hc_render(scatter_chart(c.visible_ranking), height=390)
+        st.caption(f"Traits pointillés : seuils de {RISK_MEDIAN_S:.0f} s et {RISK_PCT_GT300:.0f} %. En haut à "
+                   "droite, retards fréquents et longs (zone critique) ; en bas à droite, retards fréquents "
+                   "mais courts ; en haut à gauche, retards rares mais longs. Couleur : score ; forme : mode.")
+        daily = load_network_daily(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("#### Retards > 5 min par jour")
+            render_tier_legend("Retards", "bon", "à surveiller", invert=True)
+            if daily.empty or len(daily) < 2:
+                st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
+            else:
+                hc_render(network_daily_chart(daily), height=300)
+        with right:
+            st.markdown("#### Retards > 5 min selon l'heure")
+            render_tier_legend("Retards", "bon", "à surveiller", invert=True)
+            net_hourly = load_hourly(c.conn, c.cutoff, c.since_ts, end_ts=c.end_ts, commune=c.commune)
+            if net_hourly.empty:
+                st.info("Cette vue nécessite les heures de départ des observations.")
+            else:
+                hc_render(network_hourly_chart(net_hourly), height=300)
+        with st.expander("Répartition des écarts à l'horaire"):
+            distribution = load_distribution(c.conn, c.cutoff, c.since_ts, end_ts=c.end_ts, commune=c.commune)
+            if not distribution.empty:
+                render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
+                hc_render(delay_distribution_chart(distribution), height=280)
+        with st.expander("Tableau détaillé des lignes"):
+            display = c.visible_ranking[["ligne", "mode", "score_fiabilite", "pct_a_l_heure", "retard_moyen_s",
+                                         "retard_median_s", "pct_retard_5min", "pct_arrets_sautes",
+                                         "observations"]].copy()
+            display["ligne"] = [f"⚠ {l}" if rid in c.disturbed else l
+                                for l, rid in zip(display["ligne"], c.visible_ranking["route_id"])]
+            display.columns = ["Ligne", "Mode", "Score / 100", "Ponctualité ≤ 5 min", "Retard moyen (s)",
+                               "Retard médian (s)", "Retards > 5 min", "Arrêts sautés", "Passages"]
+            st.dataframe(display.style.map(_score_tier_style, subset=["Score / 100"]).format({
+                "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}",
+                "Retard médian (s)": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %",
+                "Passages": "{:,}"}), width="stretch", hide_index=True, height=330)
+        return
+
+    mode_stats = load_mode_stats(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    if mode_stats.empty:
+        st.warning("Aucune donnée exploitable par mode.")
+        return
+    worst_mode = mode_stats.sort_values("pct_a_l_heure").iloc[0]
+    _verdict(f'Le mode le moins ponctuel du périmètre est le <b>{html.escape(str(worst_mode["mode"]).lower())}</b> '
+             f'({worst_mode["pct_a_l_heure"]:.1f} % de passages à l’heure). Tram, bus et ferry n’ont pas les '
+             f'mêmes contraintes : les comparer aide à distinguer un problème de ligne d’un problème de mode.')
+    card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
+    for r in mode_stats.itertuples():
+        ponct_color = palette_hex(r.pct_a_l_heure, "score")
+        card_html += (
+            f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
+            f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
+            f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
+            f'<div style="font-size:1.9rem;font-weight:700;color:{BLACK_FOREST};line-height:1.15">{r.pct_a_l_heure:.1f} %</div>'
+            f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">à l’heure · {int(r.observations):,} passages · '
+            f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {r.pct_retard_5min:.1f} % &gt; 5 min</div>'
+            f'</div>'
+        )
+    st.markdown(card_html + '</div>', unsafe_allow_html=True)
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.markdown("#### Comparaison des indicateurs")
+        hc_render(mode_comparison_chart(mode_stats), height=330)
+    with right:
+        st.markdown("#### Retards > 5 min selon l'heure")
+        mh = load_mode_hourly(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+        if mh.empty:
+            st.info("Aucune donnée horaire par mode.")
+        else:
+            hc_render(mode_hourly_chart(mh), height=330)
+    st.markdown("#### Évolution quotidienne par mode")
+    md = load_mode_daily(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    if md.empty or md["date_service"].nunique() < 2:
+        st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
+    else:
+        st.caption("Chaque mode a son trait et sa forme de marqueur (● tram trait plein, ■ bus tirets, "
+                   "▲ ferry pointillés) ; la couleur des marqueurs indique le palier.")
+        hc_render(mode_daily_chart(md), height=300)
+    with st.expander("Tableau par mode"):
+        table = mode_stats[["mode", "observations", "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min",
+                            "retard_moyen_s", "retard_median_s", "pct_arrets_sautes"]].copy()
+        table.columns = ["Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min",
+                         "Retard moyen (s)", "Retard médian (s)", "Arrêts sautés"]
+        st.dataframe(table.style.format({
+            "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
+            "En avance > 1 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}",
+            "Arrêts sautés": "{:.2f} %"}), width="stretch", hide_index=True, height=220)
+
+
+def render_page_perturbations(c: PageContext) -> None:
+    st.markdown("### Perturbations sur la période")
+    st.markdown('<div class="section-note">Perturbations diffusées par TBM dans le flux GTFS-RT Service '
+                'Alerts. La cause indiquée par TBM (quasi toujours « inconnue ») n’est pas fiable et n’est pas '
+                'affichée ; le titre, la description, les lignes concernées et la période restent en revanche '
+                'exploitables.</div>', unsafe_allow_html=True)
+    now_ts = int(datetime.now().timestamp())
+    alerts_now = load_active_alerts(c.conn, now_ts)
+    if c.commune is not None and not alerts_now.empty:
+        commune_routes = load_commune_routes(c.conn, c.commune)
+        alerts_now = alerts_now[(alerts_now["route_id"] == "") | (alerts_now["route_id"].isin(commune_routes))]
+    history = load_perturbation_history(c.conn, c.since_ts, c.end_ts, c.cutoff, commune=c.commune)
+    lignes_actives = int(alerts_now["route_id"].nunique()) if not alerts_now.empty else 0
+    jours_lignes = int(history["jours_couverts"].sum()) if not history.empty else 0
+    render_kpis([
+        ("Lignes actuellement perturbées", str(lignes_actives), None, "negatif" if lignes_actives > 0 else "positif"),
+        ("Jours-lignes cumulés perturbés", f"{jours_lignes:,}".replace(",", " "), None, "neutral"),
+        ("Perturbations sur la période", str(len(history)), None, "neutral"),
+    ])
+    if c.commune is not None:
+        st.caption("Périmètre restreint : lignes desservant des arrêts de la commune sélectionnée.")
+    st.markdown("#### Historique des perturbations (période sélectionnée)")
+    if history.empty:
+        st.info("Aucune perturbation active sur tout ou partie de la période sélectionnée.")
+    else:
+        st.caption("Période effective tronquée à l'intersection avec la période sélectionnée ; lignes classées "
+                   "par nombre total de jours perturbés décroissant.")
+        search = st.text_input("Filtrer (ligne, titre, description)", key="pert_search")
+        q = (search or "").strip().lower()
+        by_line: dict[str, list] = {}
+        for r in history.itertuples():
+            hay = f"{r.ligne} {r.header_text} {r.description_text}".lower()
+            if q and q not in hay:
+                continue
+            by_line.setdefault(r.ligne, []).append(r)
+        if not by_line:
+            st.info("Aucune perturbation ne correspond à ce filtre.")
+        else:
+            order = sorted(by_line.items(), key=lambda kv: sum(x.jours_couverts for x in kv[1]), reverse=True)
+            for ligne, items in order:
+                n = len(items)
+                jours = int(sum(x.jours_couverts for x in items))
+                acc = (f"**Ligne {ligne}** — {n} alerte{'s' if n > 1 else ''} · "
+                       f"{jours} jour{'s' if jours > 1 else ''} cumulé{'s' if jours > 1 else ''}")
+                inner = items if n <= 6 else sorted(items, key=lambda x: x.jours_couverts, reverse=True)[:6]
+                with st.expander(acc):
+                    for x in inner:
+                        st.markdown(
+                            f"**{html.escape(x.header_text or '')}**  \n"
+                            f"<span style='color:{OLIVE_LEAF_70}'>{x.debut_effectif} → "
+                            f"{x.fin_effective} · {x.jours_couverts} j</span>",
+                            unsafe_allow_html=True,
+                        )
+                        st.write(x.description_text or "(description non fournie)")
+                        st.markdown("")
+                    if len(items) > 6:
+                        st.caption(f"+ {len(items) - 6} autre(s) alerte(s) sur cette ligne.")
+    st.markdown(f'<div class="section-note">{CAUTION_TEXT}</div>', unsafe_allow_html=True)
+
+
+def _render_method(c: PageContext) -> None:
+    st.markdown("### Ce que mesure ce tableau de bord")
+    st.markdown("Les données viennent des flux GTFS-RT **TripUpdates** TBM. Une observation est considérée "
+                "stabilisée après 20 minutes hors du flux temps réel ; cela évite d'interpréter comme final un "
+                "retard qui peut encore évoluer.")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("**Ponctualité**  \nUn passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de "
+                "retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
+    c2.markdown("**Arrêts sautés**  \nLes événements `SKIPPED` sont suivis à part : ils ne gonflent pas "
+                "artificiellement le retard moyen, mais pénalisent le score de fiabilité (score = ponctualité "
+                "− 2 × taux d'arrêts sautés).")
+    c3.markdown(f"**Seuil d'échantillon**  \nUne ligne n'apparaît dans les classements et graphiques que si "
+                f"elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes "
+                f"trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
+    st.markdown("#### Lire les fiches arrêt et ligne")
+    st.markdown(
+        "- **Retard déjà présent en arrivant / retard pris sur le tronçon** : pour chaque voyage, le retard "
+        "à un arrêt est comparé à celui de l'arrêt précédent du même véhicule. Si le retard était déjà là, "
+        "il est *importé* de l'amont ; s'il apparaît entre les deux arrêts, il naît sur ce tronçon.\n"
+        f"- **Jour dégradé** : jour où au moins {RISK_PCT_GT300:.0f} % des passages ont plus de 5 min de "
+        "retard. Un problème est *ponctuel* s'il touche moins d'un quart des jours, *chronique* au-delà de "
+        "la moitié.\n"
+        "- **Points perdus** : le score part de 100 ; les retards de plus de 5 min et les arrêts sautés "
+        "(comptés double) en retirent. La fiche ligne dit lequel des deux pèse le plus.\n"
+        "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions. Les courses "
+        "supprimées absentes du flux ne sont pas comptées dans le score ; la fiche ligne les montre à part."
+    )
+    st.markdown(
+        "<div class='section-note'><b>Pourquoi un tram peut-il avoir des arrêts sautés ?</b> "
+        "Un événement <code>SKIPPED</code> signifie que le véhicule ne dessert pas un arrêt alors "
+        "que le trajet continue. Deux situations courantes l'expliquent :<br/>"
+        "• <b>Prise / rendu de service en cours de ligne</b> : le tram ne dessert pas le terminus ou "
+        "les premiers arrêts (départ ou fin de service plus loin sur la ligne, retour dépôt, rotation). "
+        "Seuls quelques arrêts sont sautés, le reste du trajet circule normalement.<br/>"
+        "• <b>Trajet entièrement annulé</b> : tous les arrêts de la course sont marqués "
+        "<code>SKIPPED</code>. Il s'agit d'une annulation de course, pas d'un saut d'arrêt au sens "
+        "strict : le véhicule ne circule pas du tout.</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Fenêtre analysée : {c.total:,} passages programmés stabilisés ; dernier point retenu le "
+               f"{format_date(c.cutoff)}.".replace(",", " "))
+
+
+def _render_open_data(c: PageContext) -> None:
+    st.markdown("### Données ouvertes (CSV)")
+    st.markdown('<div class="section-note">Les agrégats (pas les observations brutes) sont exportés en CSV — '
+                'format stable, sans donnée nominative. Le collecteur régénère ces fichiers sur la période '
+                '(`src/scripts/export_open_data.py`) ; les boutons ci-dessous produisent le même export pour la '
+                'période sélectionnée.</div>', unsafe_allow_html=True)
+    open_specs = [
+        ("lignes_journalier", "lignes-journalier.csv", "Journalier par ligne",
+         "Ponctualité, retards et arrêts sautés par ligne et par jour (avec l'histogramme des écarts)."),
+        ("arrets_journalier", "arrets-journalier.csv", "Journalier par arrêt",
+         "Détail par arrêt, ligne et jour, avec commune, direction et coordonnées."),
+        ("horaire", "horaire.csv", "Horaire par ligne", "Retards par tranche horaire et par ligne."),
+        ("communes_journalier", "communes-journalier.csv", "Journalier par commune",
+         "Agrégats par commune et par jour (code Insee, nombre de lignes)."),
+    ]
+    open_cols = st.columns(2)
+    for i, (name, fname, title, desc) in enumerate(open_specs):
+        df = load_open_dataset(c.conn, name, c.cutoff, c.since_ts, c.end_ts)
+        with open_cols[i % 2]:
+            st.markdown(f"**{title}**  \n{desc}  \n{len(df):,} lignes pour cette période".replace(",", " "))
+            st.download_button("Télécharger le CSV", data=df.to_csv(index=False).encode("utf-8-sig"),
+                               file_name=fname, mime="text/csv", key=f"open_{name}")
+
+
+def _render_collection(c: PageContext) -> None:
+    stats = load_collection_stats(c.conn)
+    st.markdown("### Suivi de la collecte")
+    st.markdown('<div class="section-note">Volume et continuité des données collectées via les flux GTFS-RT '
+                'TripUpdates. Les « observations brutes » comptent toutes les lignes reçues du flux ; les '
+                '« passages analysés » sont les passages programmés (SCHEDULED) avec retard connu, hors 20 '
+                'dernières minutes. Les arrêts sautés (SKIPPED) sont suivis à part.</div>', unsafe_allow_html=True)
+    render_kpis([
+        ("Observations (brutes)", f"{stats['total']:,}".replace(",", " "), None, "neutral"),
+        ("Passages analysés", f"{stats['analysed']:,}".replace(",", " "), "stabilisés", "neutral"),
+        ("Trajets distincts", f"{stats['trajets']:,}".replace(",", " "), None, "neutral"),
+        ("Première date", format_date(stats["first_ts"]), None, "neutral"),
+        ("Dernière date", format_date(stats["last_ts"]), None, "neutral"),
+    ])
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.markdown("#### Observations par minute")
+        last_ts = stats["last_ts"]
+        if not last_ts:
+            st.info("Aucune donnée disponible.")
+        else:
+            c_end_ts = (int(last_ts) // 60) * 60
+            minutely = load_collection_minutely(c.conn, c_end_ts - 7 * 24 * 3600, c_end_ts)
+            if minutely.empty:
+                st.info("Aucune donnée pour cette période.")
+            else:
+                hc_render(collection_minutely_chart(minutely), height=340, use_stock=True)
+    with right:
+        st.markdown("#### Répartition horaire")
+        hourly = stats["hourly"]
+        if hourly.empty:
+            st.info("Aucune donnée horaire.")
+        else:
+            hc_render(hourly_distribution_chart(hourly), height=280)
+
+
+def render_page_data(c: PageContext) -> None:
+    views = {"Méthode": _render_method, "Données ouvertes": _render_open_data,
+             "Suivi de la collecte": _render_collection}
+    view = st.segmented_control("Vue", list(views), default="Méthode", key="data_view",
+                                label_visibility="collapsed") or "Méthode"
+    views[view](c)
+
+
+PAGES = {
+    "Mon territoire": render_page_territory,
+    "Lignes": render_page_lines,
+    "Quand ?": render_page_when,
+    "Réseau & modes": render_page_network,
+    "Perturbations": render_page_perturbations,
+    "Données & méthode": render_page_data,
+}
+
+
 def main() -> None:
     st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon="◉", layout="wide")
     inject_style()
@@ -2021,7 +2604,6 @@ def main() -> None:
         communes = load_communes(conn)
         commune_options = ["Réseau complet (toutes communes)"] + communes
         st.session_state.setdefault("commune_idx", 0)
-        _cidx = st.session_state["commune_idx"]
 
         # ---- Barre supérieure persistante : identité (sidebar) + commune + plage.
         tb = st.columns([0.42, 0.02, 1.0, 0.02, 0.8])
@@ -2036,7 +2618,7 @@ def main() -> None:
                 format_func=lambda i: commune_options[i],
                 index=st.session_state["commune_idx"],
                 key="commune_topbar",
-                help="Restreint tous les onglets aux arrêts situés dans la commune.",
+                help="Restreint toutes les pages aux arrêts situés dans la commune.",
             )
         st.session_state["commune_idx"] = int(commune_label)
         selected_commune_label = commune_options[st.session_state["commune_idx"]]
@@ -2057,7 +2639,6 @@ def main() -> None:
 
         total = int(ranking["observations"].sum())
         on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))
-        delayed = float((ranking["observations"] * ranking["pct_retard_5min"]).sum() / max(total, 1))
         retard_moyen_network = float((ranking["observations"] * ranking["retard_moyen_s"]).sum() / max(total, 1))
         skipped_total = int(ranking["skipped"].sum())
         eligible_total = int(ranking["eligible"].sum())
@@ -2086,504 +2667,9 @@ def main() -> None:
         disturbed = load_disturbed_route_ids(conn, since_ts, end_ts, cutoff, commune=commune)
         ranking_net = ranking if commune is None else make_ranking(
             *load_network_data(conn, cutoff, since_ts, end_ts, commune=None))
-
-        # navigation pilotée par la sidebar (voir render_sidebar).
-
-        if page == "Vue territoriale":
-            st.markdown('<div class="section-note">La carte est le point de départ : '
-                        'chaque marqueur est un arrêt. Sa couleur donne le score de fiabilité de '
-                        'l’arrêt, toutes lignes confondues, selon les seuils des rapports '
-                        '(négatif = Copperwood, moyen = Sunlit Clay, positif = Olive Leaf) ; sa forme '
-                        'indique le mode de la ligne principale (● tram, ■ bus, ▲ ferry) ; sa taille '
-                        'croît avec le nombre de passages analysés. '
-                        'Survolez un arrêt pour le détail.</div>', unsafe_allow_html=True)
-            territorial = load_territorial(conn, cutoff, since_ts, end_ts, commune=commune)
-            territorial_network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
-            if commune is not None and not territorial.empty:
-                st.markdown(
-                    f'<div class="insight">La fiabilité de <b>{html.escape(commune)}</b> est de '
-                    f'<b>{_territorial_score(territorial)}/100</b>, contre '
-                    f'{_territorial_score(territorial_network)}/100 pour l’ensemble du réseau.</div>',
-                    unsafe_allow_html=True,
-                )
-            elif territorial.empty:
-                st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
-            render_tier_legend("Fiabilité par arrêt", "à surveiller", "bon")
-            labels = stop_labels(territorial_network)
-            options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],
-                             key=lambda sid: labels.get(sid, sid))
-            current = st.session_state.get("stop_id")
-            if current and current not in options:
-                options = [current] + options
-            search_kwargs = {} if "stop_id" in st.session_state else {"index": None}
-            st.selectbox("Chercher un arrêt", options, key="stop_id", placeholder="Nom de l'arrêt…",
-                         format_func=lambda sid: labels.get(sid, sid), **search_kwargs)
-            _territorial_map(territorial, commune)
-            if st.session_state.get("stop_id"):
-                render_stop_panel(conn, cutoff, since_ts, end_ts, st.session_state["stop_id"],
-                                  territorial_network, network_score(ranking_net))
-            if commune is None:
-                st.markdown("#### Comparaison des communes")
-                communes = load_commune_stats(conn, cutoff, since_ts, end_ts)
-                if not communes.empty:
-                    n = len(communes)
-                    worst_c, best_c = communes.iloc[0], communes.iloc[-1]
-                    st.markdown(
-                        f'<div class="insight">Sur {n} communes, la fiabilité s’étend de '
-                        f'<b>{html.escape(str(best_c["commune"]))}</b> ({best_c["score_fiabilite"]:.1f}/100) '
-                        f'à <b>{html.escape(str(worst_c["commune"]))}</b> ({worst_c["score_fiabilite"]:.1f}/100). '
-                        f'Le score combine ponctualité ≤ 5 min et arrêts sautés, comme le classement des lignes.</div>',
-                        unsafe_allow_html=True,
-                    )
-                    left, right = st.columns([1.0, 1.0], gap="large")
-                    with left:
-                        st.markdown("#### Classement par score")
-                        render_tier_legend("Score de fiabilité", "à surveiller", "bon")
-                        hc_render(commune_ranking_chart(communes), height=460)
-                    with right:
-                        st.markdown("#### Détail par commune")
-                        table = communes[["commune", "score_fiabilite", "pct_a_l_heure", "pct_retard_5min",
-                                          "retard_moyen_s", "pct_arrets_sautes", "n_lignes", "observations"]].copy()
-                        table.columns = ["Commune", "Score / 100", "Ponctualité ≤ 5 min", "Retards > 5 min",
-                                         "Retard moyen", "Arrêts sautés", "Lignes", "Passages"]
-                        styled = (table.style
-                                  .map(_score_tier_style, subset=["Score / 100"])
-                                  .format({"Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %",
-                                           "Retards > 5 min": "{:.1f} %",
-                                           "Retard moyen": lambda x: format_seconds(x),
-                                           "Arrêts sautés": "{:.2f} %", "Lignes": "{:.0f}", "Passages": "{:,}"}))
-                        st.dataframe(styled, use_container_width=True, hide_index=True, height=460)
-                else:
-                    st.info("Aucune donnée par commune pour cette période.")
-            if not territorial.empty:
-                st.markdown("#### Arrêts du périmètre")
-                st.caption("Sélectionnez une ligne du tableau pour ouvrir la fiche de l'arrêt sous la carte.")
-                territorial = territorial.sort_values("score_fiabilite").reset_index(drop=True)
-                st.session_state["_territory_stop_ids"] = territorial["stop_id"].tolist()
-                tdisp = territorial[["stop_name", "direction", "ligne", "lignes", "score_fiabilite", "pct_retard_5min", "observations"]].copy()
-                tdisp.columns = ["Arrêt", "Direction", "Ligne principale", "Lignes desservies", "Score / 100", "Retards > 5 min", "Passages"]
-                tstyled = (
-                    tdisp.style
-                    .map(_score_tier_style, subset=["Score / 100"])
-                    .format({"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": "{:,}"})
-                )
-                st.dataframe(tstyled, width="stretch", hide_index=True, height=320, key="territory_table",
-                             on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", select_stop),
-                             selection_mode="single-row")
-                if commune is not None:
-                    st.caption("Carte et tableau restreints aux arrêts de la commune sélectionnée, centrés automatiquement sur son périmètre.")
-
-        if page == "Vue réseau":
-            st.markdown("### Priorités de fiabilité")
-            st.markdown("<div class=\"section-note\">Le score combine ponctualité (≤ 5 min) et passages signalés comme sautés. Plus il est bas, plus la ligne mérite une attention. Le marqueur ⚠ signale une ligne faisant l'objet d'une perturbation annoncée par TBM sur la période.</div>", unsafe_allow_html=True)
-            left, right = st.columns([1.05, .95], gap="large")
-            with left:
-                st.markdown("#### Score de fiabilité")
-                render_tier_legend(invert=False)
-                chart_data = visible_ranking.head(15).sort_values("score_fiabilite").copy()
-                chart_data["perturbed"] = chart_data["route_id"].isin(disturbed)
-                chart_data["ligne_plot"] = [
-                    f"⚠ {l}" if p else l for l, p in zip(chart_data["ligne"], chart_data["perturbed"])
-                ]
-                hc_render(ranking_chart(chart_data), height=390)
-            with right:
-                st.markdown("#### Carte de risque (retard médian par mode)")
-                hc_render(scatter_chart(visible_ranking), height=390)
-            worst = ranking.iloc[0]
-            worst_note = ""
-            if worst.route_id in disturbed:
-                worst_note = " — ⚠ ligne signalée en perturbation sur la période"
-            st.markdown(f'<div class="insight">À surveiller en premier : <b>ligne {html.escape(str(worst.ligne))}</b>{worst_note} — score de fiabilité {worst.score_fiabilite:.1f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de 5 minutes.</div>', unsafe_allow_html=True)
-
-            st.markdown("### Évolution du réseau")
-            daily = load_network_daily(conn, cutoff, since_ts, end_ts, commune=commune)
-            left, right = st.columns(2, gap="large")
-            with left:
-                st.markdown("#### Retards > 5 min par jour")
-                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
-                if daily.empty or len(daily) < 2:
-                    st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
-                else:
-                    hc_render(network_daily_chart(daily), height=300)
-            with right:
-                st.markdown("#### Risque selon l'heure")
-                render_tier_legend("Retards", "bon", "à surveiller", invert=True)
-                net_hourly = load_hourly(conn, cutoff, since_ts, end_ts=end_ts, commune=commune)
-                if net_hourly.empty:
-                    st.info("Cette vue nécessite les heures de départ des observations.")
-                else:
-                    hc_render(network_hourly_chart(net_hourly), height=300)
-
-            st.markdown("#### Profil des retards du réseau")
-            distribution = load_distribution(conn, cutoff, since_ts, end_ts=end_ts, commune=commune)
-            if not distribution.empty:
-                render_tier_legend("Écart à l'horaire", "proche de l'horaire", "dérive", invert=True)
-                hc_render(delay_distribution_chart(distribution), height=280)
-
-            st.markdown("#### Détail des lignes")
-            render_tier_legend("Score de fiabilité", "à surveiller", "bon")
-            display = visible_ranking[["ligne", "mode", "score_fiabilite", "pct_a_l_heure", "retard_moyen_s", "retard_median_s", "pct_retard_5min", "pct_arrets_sautes", "observations"]].copy()
-            display["ligne"] = [
-                f"⚠ {l}" if rid in disturbed else l
-                for l, rid in zip(display["ligne"], visible_ranking["route_id"])
-            ]
-            display.columns = ["Ligne", "Mode", "Score / 100", "Ponctualité ≤ 5 min", "Retard moyen (s)", "Retard médian (s)", "Retards > 5 min", "Arrêts sautés", "Passages"]
-            styled = (
-                display.style
-                .map(_score_tier_style, subset=["Score / 100"])
-                .format({
-                    "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}",
-                    "Retard médian (s)": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts sautés": "{:.2f} %", "Passages": "{:,}",
-                })
-            )
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=330)
-            if disturbed:
-                st.caption(f"⚠ {len(disturbed & set(ranking['route_id']))} ligne(s) du périmètre font l'objet d'une perturbation signalée par TBM sur la période — sans lien de causalité établi avec les statistiques présentées.")
-            if commune is not None:
-                st.info("Données restreintes aux arrêts situés dans la commune sélectionnée.")
-
-        if page == "Modes de transport":
-            mode_stats = load_mode_stats(conn, cutoff, since_ts, end_ts, commune=commune)
-            if mode_stats.empty:
-                st.warning("Aucune donnée exploitable par mode.")
-                return
-            st.markdown("### Comparaison par mode de transport")
-            st.markdown('<div class="section-note">Tramway, bus et ferry n’ont pas les mêmes contraintes : comparer leurs profils permet d’isoler des problèmes structurels. Chaque mode a sa forme (● tram, ■ bus, ▲ ferry) ; la couleur indique toujours le palier de performance.</div>', unsafe_allow_html=True)
-            card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
-            for r in mode_stats.itertuples():
-                ponct_color = palette_hex(r.pct_a_l_heure, "score")
-                card_html += (
-                    f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
-                    f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
-                    f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
-                    f'<div style="font-size:1.9rem;font-weight:700;color:{ponct_color};line-height:1.15">{r.pct_a_l_heure:.1f} %</div>'
-                    f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">{int(r.observations):,} passages · '
-                    f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {r.pct_retard_5min:.1f} % &gt; 5 min</div>'
-                    f'</div>'
-                )
-            card_html += '</div>'
-            st.markdown(card_html, unsafe_allow_html=True)
-            left, right = st.columns(2, gap="large")
-            with left:
-                st.markdown("#### Comparaison des indicateurs")
-                hc_render(mode_comparison_chart(mode_stats), height=330)
-            with right:
-                st.markdown("#### Profil horaire par mode")
-
-                mh = load_mode_hourly(conn, cutoff, since_ts, end_ts, commune=commune)
-                if mh.empty:
-                    st.info("Aucune donnée horaire par mode.")
-                else:
-                    hc_render(mode_hourly_chart(mh), height=330)
-            st.markdown("#### Évolution quotidienne par mode")
-            md = load_mode_daily(conn, cutoff, since_ts, end_ts, commune=commune)
-            if md.empty or md["date_service"].nunique() < 2:
-                st.info("L'évolution apparaîtra dès que plusieurs jours de données seront disponibles.")
-            else:
-                st.caption("Séries de comparaison : chaque mode a sa couleur propre (cuivre tram, teal bus, forêt ferry) ; le trait pointillé distingue le ferry.")
-                hc_render(mode_daily_chart(md), height=300)
-
-            table = mode_stats[["mode", "observations", "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min", "retard_moyen_s", "retard_median_s", "pct_arrets_sautes"]].copy()
-            table.columns = ["Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min", "Retard moyen (s)", "Retard médian (s)", "Arrêts sautés"]
-            st.dataframe(table.style.format({
-                "Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
-                "En avance > 1 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}", "Arrêts sautés": "{:.2f} %",
-            }), use_container_width=True, hide_index=True, height=220)
-
-        if page == "Fiabilité par période":
-            st.markdown("### Fiabilité selon la période de la journée")
-            st.markdown('<div class="section-note">Combinaison jour de semaine × tranche horaire, depuis les agrégats horaires : Matin (06–10), Journée (10–16), Pointe du soir (16–20), Soirée & nuit (20–06) du lundi au vendredi, et un créneau Week-end (samedi + dimanche). La vue mesure ponctualité, retard moyen et retards > 5 min ; les arrêts sautés n’y sont pas décomptés.</div>', unsafe_allow_html=True)
-            period = load_period_stats(conn, cutoff, since_ts, end_ts, commune=commune)
-            if period.empty:
-                st.info("Aucune donnée horaire disponible sur ce périmètre pour la période.")
-                return
-            st.markdown("#### Vue d'ensemble")
-            render_tier_legend("Ponctualité ≤ 5 min", "à surveiller", "bon")
-            left, right = st.columns([1.05, 0.95], gap="large")
-            with left:
-                hc_render(period_punctuality_chart(period), height=300)
-            with right:
-                st.markdown("#### Retards > 5 min par mode et créneau")
-                pm = load_period_mode(conn, cutoff, since_ts, end_ts, commune=commune)
-                if pm.empty:
-                    st.info("Aucune donnée par mode sur ce périmètre.")
-                else:
-                    hc_render(period_mode_chart(pm), height=300)
-            st.markdown("#### Métriques par créneau")
-            table = period[["période", "observations", "pct_a_l_heure", "pct_retard_5min", "retard_moyen_s"]].copy()
-            table.columns = ["Créneau", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "Retard moyen"]
-            styled = (table.style
-                      .map(_score_tier_style, subset=["Ponctualité ≤ 5 min"])
-                      .format({"Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %",
-                               "Retards > 5 min": "{:.1f} %",
-                               "Retard moyen": lambda x: format_seconds(x)}))
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=200)
-            st.markdown("#### Détail des lignes par créneau")
-            selected_period = st.selectbox(
-                "Créneau", period["période"].tolist(), key="period_selector",
-            )
-            lines = load_period_lines(conn, cutoff, since_ts, end_ts,
-                                      periode=selected_period, commune=commune)
-            if lines.empty:
-                st.info(f"Aucune ligne n'atteint le seuil de {MIN_OBSERVATIONS} passages sur le créneau {selected_period}.")
-            else:
-                worst = lines.iloc[0]
-                st.markdown(f'<div class="insight">Sur le créneau <b>{html.escape(selected_period)}</b>, la ligne la moins ponctuelle de ce périmètre est <b>{html.escape(str(worst["ligne"]))}</b> : {worst.pct_a_l_heure:.1f} % de passages à l’heure, {worst.pct_retard_5min:.1f} % au-delà de 5 min.</div>', unsafe_allow_html=True)
-                display = lines[["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min", "retard_moyen_s"]].copy()
-                display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "Retard moyen"]
-                styled = (display.style
-                          .map(_score_tier_style, subset=["Ponctualité ≤ 5 min"])
-                          .format({"Passages": "{:,}", "Ponctualité ≤ 5 min": "{:.1f} %",
-                                   "Retards > 5 min": "{:.1f} %",
-                                   "Retard moyen": lambda x: format_seconds(x)}))
-                st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
-
-        if page == PAGE_LINE:
-            st.markdown("### Pourquoi cette ligne n'est-elle pas fiable ?")
-            st.markdown('<div class="section-note">La fiche porte sur toute la ligne, tous territoires '
-                        'confondus : le retard subi dans une commune se forme souvent ailleurs sur le '
-                        'parcours.</div>', unsafe_allow_html=True)
-            options_df = ranking_net[ranking_net["observations"] >= MIN_OBSERVATIONS]
-            if options_df.empty:
-                options_df = ranking_net
-            line_labels = {r.route_id: f"{mode_glyph(r.route_type)} Ligne {r.ligne} · score {r.score_fiabilite:.0f}/100"
-                           for r in options_df.itertuples()}
-            line_options = list(line_labels)
-            current_line = st.session_state.get("line_id")
-            if current_line and current_line not in line_options:
-                line_options = [current_line] + line_options
-            if current_line is None and line_options:
-                st.session_state["line_id"] = line_options[0]
-            st.selectbox("Ligne analysée (classées de la moins fiable à la plus fiable)", line_options,
-                         key="line_id", format_func=lambda rid: line_labels.get(rid, rid))
-            if st.session_state.get("line_id"):
-                render_line_panel(conn, cutoff, since_ts, end_ts, st.session_state["line_id"],
-                                  ranking_net, disturbed)
-
-        if page == "Évolution & tendances":
-            st.markdown("### Évolution de la fiabilité dans le temps")
-            st.markdown('<div class="section-note">Suivre la tendance, c\'est vérifier que le service s\'améliore — un indicateur direct pour juger du respect des engagements annoncés. La période sélectionnée est partagée en deux moitiés de durée égale (par nombre de jours de service) : la plus récente est comparée à la précédente, ligne par ligne. Les définitions (retard ≤ 5 min, arrêts sautés, score) sont celles du reste du tableau de bord.</div>', unsafe_allow_html=True)
-            trend = load_engagement_trend(conn, cutoff, since_ts, end_ts, commune=commune)
-            if trend.empty:
-                st.info("Aucune donnée quotidienne sur ce périmètre pour la période.")
-            else:
-                dates = list(dict.fromkeys(trend["date_service"].sort_values().tolist()))
-                if len(dates) >= 2:
-                    mid = dates[len(dates) // 2]
-                    recent = trend[trend["date_service"] >= mid]
-                    prev = trend[trend["date_service"] < mid]
-
-                    def _weighted_mean(s: pd.Series, v: pd.Series) -> float:
-                        total = float((s * v).sum())
-                        return total / max(float(s.sum()), 1)
-
-                    r_ponct = _weighted_mean(recent["observations"], recent["pct_a_l_heure"])
-                    p_ponct = _weighted_mean(prev["observations"], prev["pct_a_l_heure"])
-                    delta_ponct = r_ponct - p_ponct
-                    r_skip = _weighted_mean(recent["observations"], recent["pct_arrets_sautes"])
-                    p_skip = _weighted_mean(prev["observations"], prev["pct_arrets_sautes"])
-                    arrow = "▲" if delta_ponct >= 0 else "▼"
-                    delta_color = OLIVE_LEAF if delta_ponct >= 0 else COPPERWOOD
-                    st.markdown(
-                        f'<div class="insight">Sur la période la plus récente, la ponctualité '
-                        f'(≤ 5 min) est de <b>{r_ponct:.1f} %</b>, soit '
-                        f'<span style="color:{delta_color}"><b>{arrow}{abs(delta_ponct):.1f} '
-                        f'point(s)</b></span> par rapport à la moitié précédente. Les arrêts '
-                        f'sautés passent de <b>{p_skip:.2f} %</b> à <b>{r_skip:.2f} %</b>.</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.caption("L'analyse récent / précédent apparaîtra dès que plusieurs jours de service seront couverts.")
-                trend_metrics = [
-                    ("Ponctualité ≤ 5 min", "pct_a_l_heure"),
-                    ("Retards > 5 min", "pct_retard_5min"),
-                    ("Arrêts sautés", "pct_arrets_sautes"),
-                    ("Retard moyen", "retard_moyen_s"),
-                ]
-                metric_label = st.selectbox(
-                    "Métrique suivie", [label for label, _ in trend_metrics], key="trend_metric",
-                )
-                metric_col = dict((label, col) for label, col in trend_metrics)[metric_label]
-                hc_render(engagement_trend_chart(trend, metric_col), height=340)
-            st.markdown("#### Progression par ligne (moitié récente vs précédente)")
-            prog = load_engagement_progression(conn, cutoff, since_ts, end_ts, commune=commune)
-            if prog.empty:
-                st.info(f"Aucune ligne ne cumule au moins {MIN_OBSERVATIONS} passages sur chacune des deux moitiés de la période.")
-            else:
-                worst, best = prog.iloc[0], prog.iloc[-1]
-                st.markdown(
-                    f'<div class="insight">La plus forte dégradation concerne '
-                    f'<b>{html.escape(str(worst["ligne"]))}</b> ({worst["delta_score"]:+.1f} points de '
-                    f'score, {worst["pct_a_l_heure"]:.1f} % de ponctualité récente) et la meilleure '
-                    f'progression <b>{html.escape(str(best["ligne"]))}</b> '
-                    f'({best["delta_score"]:+.1f} points). Le score combine ponctualité '
-                    f'≤ 5 min et arrêts sautés.</div>',
-                    unsafe_allow_html=True,
-                )
-                left, right = st.columns([1.0, 1.0], gap="large")
-                with left:
-                    st.markdown("#### Évolution du score")
-                    hc_render(engagement_progression_chart(prog), height=330)
-                with right:
-                    st.markdown("#### Détail par ligne")
-                    table = prog[["ligne", "mode", "score_fiabilite_prev", "score_fiabilite",
-                                  "delta_score", "pct_a_l_heure", "pct_arrets_sautes",
-                                  "observations"]].copy()
-                    table.columns = ["Ligne", "Mode", "Score précédent", "Score récent",
-                                     "Évolution", "Ponctualité récente", "Arrêts sautés récents",
-                                     "Passages récents"]
-                    styled = (table.style
-                              .map(_delta_style, subset=["Évolution"])
-                              .format({"Score précédent": "{:.1f}", "Score récent": "{:.1f}",
-                                       "Évolution": lambda x: f"{x:+.1f} pts",
-                                       "Ponctualité récente": "{:.1f} %",
-                                       "Arrêts sautés récents": "{:.2f} %",
-                                       "Passages récents": "{:,}"}))
-                    st.dataframe(styled, use_container_width=True, hide_index=True, height=330)
-                st.caption(f"Score de fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil de visibilité : {MIN_OBSERVATIONS} passages dans chacune des deux moitiés.")
-
-        if page == "Perturbations":
-            st.markdown("### Perturbations sur la période")
-            st.markdown('<div class="section-note">Perturbations diffusées par TBM dans le flux GTFS-RT Service Alerts. La cause indiquée par TBM (quasi toujours « inconnue ») n’est pas fiable et n’est pas affichée ; le titre, la description, les lignes concernées et la période restent en revanche exploitables.', unsafe_allow_html=True)
-            now_ts = int(datetime.now().timestamp())
-            alerts_now = load_active_alerts(conn, now_ts)
-            if commune is not None and not alerts_now.empty:
-                commune_routes = load_commune_routes(conn, commune)
-                alerts_now = alerts_now[(alerts_now["route_id"] == "") | (alerts_now["route_id"].isin(commune_routes))]
-            history = load_perturbation_history(conn, since_ts, end_ts, cutoff, commune=commune)
-            lignes_actives = int(alerts_now["route_id"].nunique()) if not alerts_now.empty else 0
-            jours_lignes = int(history["jours_couverts"].sum()) if not history.empty else 0
-            render_kpis([
-                ("Lignes actuellement perturbées", str(lignes_actives), None, "bad" if lignes_actives > 0 else "good"),
-                ("Jours-lignes cumulés perturbés", f"{jours_lignes:,}", None, "neutral"),
-                ("Perturbations sur la période", str(len(history)), None, "neutral"),
-            ])
-            if commune is not None:
-                st.caption("Périmètre restreint : lignes desservant des arrêts de la commune sélectionnée.")
-            st.markdown("#### Historique des perturbations (période sélectionnée)")
-            if history.empty:
-                st.info("Aucune perturbation active sur tout ou partie de la période sélectionnée.")
-            else:
-                st.caption("Période effective tronquée à l'intersection avec la période sélectionnée ; lignes classées par nombre total de jours perturbés décroissant.")
-                search = st.text_input("Filtrer (ligne, titre, description)", key="pert_search")
-                q = (search or "").strip().lower()
-                by_line: dict[str, list] = {}
-                for r in history.itertuples():
-                    hay = f"{r.ligne} {r.header_text} {r.description_text}".lower()
-                    if q and q not in hay:
-                        continue
-                    by_line.setdefault(r.ligne, []).append(r)
-                if not by_line:
-                    st.info("Aucune perturbation ne correspond à ce filtre.")
-                else:
-                    order = sorted(
-                        by_line.items(),
-                        key=lambda kv: sum(x.jours_couverts for x in kv[1]),
-                        reverse=True,
-                    )
-                    for ligne, items in order:
-                        n = len(items)
-                        jours = int(sum(x.jours_couverts for x in items))
-                        acc = (
-                            f"**Ligne {ligne}** — {n} alerte{'s' if n > 1 else ''} · "
-                            f"{jours} jour{'s' if jours > 1 else ''} cumulé{'s' if jours > 1 else ''}"
-                        )
-                        inner = items if n <= 6 else sorted(
-                            items, key=lambda x: x.jours_couverts, reverse=True)[:6]
-                        with st.expander(acc):
-                            for x in inner:
-                                st.markdown(
-                                    f"**{html.escape(x.header_text or '')}**  \n"
-                                    f"<span style='color:{OLIVE_LEAF_70}'>{x.debut_effectif} → "
-                                    f"{x.fin_effective} · {x.jours_couverts} j</span>",
-                                    unsafe_allow_html=True,
-                                )
-                                st.write(x.description_text or "(description non fournie)")
-                                st.markdown("")
-                            if len(items) > 6:
-                                st.caption(f"+ {len(items) - 6} autre(s) alerte(s) sur cette ligne.")
-            st.markdown(f'<div class="section-note">{CAUTION_TEXT}</div>', unsafe_allow_html=True)
-
-        if page == "Collecte des données":
-            stats = load_collection_stats(conn)
-            st.markdown("### Suivi de la collecte")
-            st.markdown('<div class="section-note">Volume et continuité des données collectées via les flux GTFS-RT TripUpdates.</div>', unsafe_allow_html=True)
-            st.caption("**Observation (brute)** : toute ligne reçue du flux, quelle que soit sa nature. **Passage analysé** : observation SCHEDULED avec retard connu, hors 20 dernières minutes — c'est la définition utilisée partout dans la Vue réseau. Les arrêts SKIPPED ne comptent pas comme passages analysés mais sont suivis à part.")
-            render_kpis([
-                ("Observations (brutes)", f"{stats['total']:,}".replace(",", " "), None, "neutral"),
-                ("Passages analysés", f"{stats['analysed']:,}".replace(",", " "), "stabilisés, horaires < 5 min", "neutral"),
-                ("Trajets distincts", f"{stats['trajets']:,}".replace(",", " "), None, "neutral"),
-                ("Première date", format_date(stats["first_ts"]), None, "neutral"),
-                ("Dernière date", format_date(stats["last_ts"]), None, "neutral"),
-            ])
-            st.markdown('<div class="section-note">Les « Observations brutes » comptent toutes les lignes reçues du flux. Les « Passages analysés » reprennent la définition de la Vue réseau : passages programmés (SCHEDULED) avec retard connu, hors 20 dernières minutes. Les arrêts sautés (SKIPPED) ne sont pas comptés comme passages mais restent suivis séparément.</div>', unsafe_allow_html=True)
-            left, right = st.columns(2, gap="large")
-            with left:
-                st.markdown("#### Observations par minute")
-                last_ts = stats["last_ts"]
-                if not last_ts:
-                    st.info("Aucune donnée disponible.")
-                else:
-                    ref_ts = int(last_ts)
-                    c_end_ts = (ref_ts // 60) * 60
-                    c_start_ts = c_end_ts - 7 * 24 * 3600
-                    minutely = load_collection_minutely(conn, c_start_ts, c_end_ts)
-                    if minutely.empty:
-                        st.info("Aucune donnée pour cette période.")
-                    else:
-                        hc_render(collection_minutely_chart(minutely), height=340, use_stock=True)
-            with right:
-                st.markdown("#### Répartition horaire")
-                hourly = stats["hourly"]
-                if hourly.empty:
-                    st.info("Aucune donnée horaire.")
-                else:
-                    hc_render(hourly_distribution_chart(hourly), height=280)
-
-        if page == "Méthode & données":
-            st.markdown("### Ce que mesure ce tableau de bord")
-            st.markdown("Les données viennent des flux GTFS-RT **TripUpdates** TBM. Une observation est considérée stabilisée après 20 minutes hors du flux temps réel ; cela évite d'interpréter comme final un retard qui peut encore évoluer.")
-            c1, c2, c3 = st.columns(3)
-            c1.markdown("**Ponctualité**  \nUn passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
-            c2.markdown("**Arrêts sautés**  \nLes événements `SKIPPED` sont suivis à part : ils ne gonflent pas artificiellement le retard moyen, mais pénalisent le score de fiabilité.")
-            c3.markdown(f"**Seuil d'échantillon**  \nUne ligne n'apparaît dans les classements et graphiques que si elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
-            st.markdown(
-                f"<div class='section-note'><b>Pourquoi un tram peut-il avoir des arrêts sautés ?</b> "
-                f"Un événement <code>SKIPPED</code> signifie que le véhicule ne dessert pas un arrêt alors "
-                f"que le trajet continue. Deux situations courantes l'expliquent :<br/>"
-                f"• <b>Prise / rendu de service en cours de ligne</b> : le tram ne dessert pas le terminus ou "
-                f"les premiers arrêts (départ ou fin de service plus loin sur la ligne, retour dépôt, rotation). "
-                f"Seuls quelques arrêts sont sautés, le reste du trajet circule normalement.<br/>"
-                f"• <b>Trajet entièrement annulé</b> : tous les arrêts de la course sont marqués "
-                f"<code>SKIPPED</code>. Il s'agit d'une annulation de course, pas d'un saut d'arrêt au sens "
-                f"strict : le véhicule ne circule pas du tout.</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown("#### Données ouvertes (CSV)")
-            st.markdown('<div class="section-note">Les agrégats (pas les observations brutes) sont exportés en CSV — format stable, sans donnée nominative. Le collecteur régénère ces fichiers sur la période (`src/scripts/export_open_data.py`) ; les boutons ci-dessous produisent le même export pour la période sélectionnée.</div>', unsafe_allow_html=True)
-            open_specs = [
-                ("lignes_journalier", "lignes-journalier.csv", "Journalier par ligne",
-                 "Ponctualité, retards et arrêts sautés par ligne et par jour (avec l'histogramme des écarts)."),
-                ("arrets_journalier", "arrets-journalier.csv", "Journalier par arrêt",
-                 "Détail par arrêt, ligne et jour, avec commune, direction et coordonnées."),
-                ("horaire", "horaire.csv", "Horaire par ligne",
-                 "Retards par tranche horaire et par ligne."),
-                ("communes_journalier", "communes-journalier.csv", "Journalier par commune",
-                 "Agrégats par commune et par jour (code Insee, nombre de lignes)."),
-            ]
-            open_cols = st.columns(2)
-            for i, (name, fname, title, desc) in enumerate(open_specs):
-                df = load_open_dataset(conn, name, cutoff, since_ts, end_ts)
-                with open_cols[i % 2]:
-                    st.markdown(f"**{title}**  \n{desc}  \n{len(df):,} lignes pour cette période".replace(",", " "))
-                    st.download_button(
-                        "Télécharger le CSV",
-                        data=df.to_csv(index=False).encode("utf-8-sig"),
-                        file_name=fname,
-                        mime="text/csv",
-                        key=f"open_{name}",
-                    )
-            st.caption(f"Fenêtre analysée : {total:,} passages programmés stabilisés ; dernier point retenu le {format_date(cutoff)}.")
+        ctx = PageContext(conn, cutoff, since_ts, end_ts, commune, ranking, visible_ranking,
+                          ranking_net, disturbed, total)
+        PAGES[page](ctx)
     finally:
         conn.close()
 

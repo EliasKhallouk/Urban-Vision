@@ -573,3 +573,56 @@ def line_hints(origin: dict, skips: dict, cancelled: int) -> list[str]:
         hints.append(f"Arrêts sautés entre {skips['block'][0]} et {skips['block'][1]} : "
                      "à recouper avec les alertes travaux et déviations.")
     return hints
+
+
+WATCH_DECLINE_POINTS = 5.0
+WATCH_SCORE_BELOW = 80.0
+
+
+def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
+              stops: pd.DataFrame | None, min_obs: int, limit: int = 3) -> list[dict]:
+    """Points à surveiller en priorité, sans notification : au plus `limit` éléments.
+
+    1. parmi les lignes dont le score baisse d'au moins WATCH_DECLINE_POINTS points
+       entre les deux moitiés de la période, celle dont la baisse pèse le plus
+       (baisse × passages récents) ;
+    2. l'arrêt qui cumule le plus de passages > 5 min parmi ceux sous
+       WATCH_SCORE_BELOW ;
+    3. la ligne qui cumule le plus de passages > 5 min parmi celles sous
+       WATCH_SCORE_BELOW, si elle n'est pas déjà citée.
+    """
+    items: list[dict] = []
+    if progression is not None and not progression.empty:
+        declining = progression[progression["delta_score"] <= -WATCH_DECLINE_POINTS]
+        if not declining.empty:
+            weight = -declining["delta_score"] * declining["observations"]
+            worst = declining.loc[weight.idxmax()]
+            items.append({
+                "kind": "ligne", "id": worst["route_id"], "title": f"Ligne {worst['ligne']}",
+                "reason": (f"score en baisse de {abs(float(worst['delta_score'])):.1f} points "
+                           f"({float(worst['score_fiabilite_prev']):.1f} → {float(worst['score_fiabilite']):.1f})"),
+            })
+    if stops is not None and not stops.empty:
+        s = stops[(stops["observations"] >= min_obs) & (stops["score_fiabilite"] < WATCH_SCORE_BELOW)]
+        if not s.empty:
+            s = s.assign(late=s["observations"] * s["pct_retard_5min"] / 100).sort_values("late", ascending=False)
+            top = s.iloc[0]
+            direction = f" — {top['direction']}" if top.get("direction") else ""
+            items.append({
+                "kind": "arrêt", "id": top["stop_id"], "title": f"{top['stop_name']}{direction}",
+                "reason": (f"{float(top['late']):.0f} passages à plus de 5 min, "
+                           f"score {float(top['score_fiabilite']):.1f}/100"),
+            })
+    if lines is not None and not lines.empty:
+        cited = {i["id"] for i in items if i["kind"] == "ligne"}
+        l = lines[(lines["observations"] >= min_obs) & (lines["score_fiabilite"] < WATCH_SCORE_BELOW)
+                  & ~lines["route_id"].isin(cited)]
+        if not l.empty:
+            l = l.assign(late=l["observations"] * l["pct_retard_5min"] / 100).sort_values("late", ascending=False)
+            top = l.iloc[0]
+            items.append({
+                "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
+                "reason": (f"{float(top['late']):.0f} passages à plus de 5 min, "
+                           f"score {float(top['score_fiabilite']):.1f}/100"),
+            })
+    return items[:limit]

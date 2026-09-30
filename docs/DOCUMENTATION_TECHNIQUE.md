@@ -211,7 +211,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 19 fichiers, 298 tests pytest
+└── tests/                          # 19 fichiers, 302 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -329,7 +329,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 298 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 302 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -605,7 +605,7 @@ consommateur :
   les secondes de coupure et les observations écartées dans la section
   « Méthode » (grâce à `query_collection_gaps`) ;
 - `app.py` (dashboard) : n'applique pas l'exclusion des trous (l'écart est
-  visible sur la page « Collecte des données »).
+  visible dans « Données & méthode › Suivi de la collecte »).
 
 ---
 
@@ -709,7 +709,7 @@ le dashboard territorial et les rapports (colonne « direction »).
   `collect.log` (« Tronçons rafraîchis en … s »).
 - Les lectures du dashboard sont presque exclusivement sur les tables `agg_*`
   (petites) ; `observations` (grande table) n'est utilisée que sur la page
-  « Collecte des données » (histogrammes minute par minute sur 7 jours,
+  « Suivi de la collecte » (histogrammes minute par minute sur 7 jours,
   optimisés par index).
 
 ---
@@ -789,69 +789,71 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 ### 11.3 Structure des vues
 
-Navigation par `st.radio` dans la sidebar (pas d'onglets natifs). Ordre :
+Navigation par `st.radio` dans la sidebar (pas d'onglets natifs), 6 pages
+organisées par question (`NAV_ITEMS`, une fonction `render_page_*` par page,
+aiguillage par le dictionnaire `PAGES` ; contexte commun `PageContext`). Chaque
+page suit le même ordre de lecture : une phrase de verdict (bloc `insight`), le
+graphique principal, puis le détail en blocs repliables. Seule la page active
+est calculée ; les pages qui regroupent plusieurs vues passent par
+`st.segmented_control`, qui ne calcule que la vue affichée.
 
-1. **Vue territoriale** — carte pydeck (`pdk.IconLayer`, fond « light ») des
-   arrêts (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du
-   score de fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min
-   − 2 × arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la
-   plus fréquentée), via des icônes SVG `marker_icon(forme, couleur)` ; taille
-   (7 à 18 px) selon les passages. Filtre « Territoire » en haut à droite,
-   tableau des arrêts (direction, lignes, score, retards > 5 min, passages).
-   **Fiche arrêt** (§11.7) : ouverte sous la carte par un clic sur un arrêt
-   (`st.pydeck_chart(on_select=…, selection_mode="single-object")`), par la
-   liste « Chercher un arrêt » ou par une ligne du tableau des arrêts
-   (`st.dataframe(on_select=…)`) ; ces trois entrées écrivent la même clé
-   `st.session_state["stop_id"]`. En périmètre « Réseau complet », un bloc **Comparaison des
-   communes** (loader `load_commune_stats`, agrégé depuis `agg_daily_stop`) :
-   classement par score (même formule que les lignes : ponctualité ≤ 5 min
-   pénalisée par les arrêts sautés), graphique `commune_ranking_chart` et
-   tableau détaillé (ponctualité, retards > 5 min, retard moyen, arrêts sautés,
-   lignes, passages).
-2. **Vue réseau** (`1586`) — KPI band (5 cartes) + classement des lignes
-   (barres, top 15), carte de risque (retard médian × retards > 5 min, bulles
-   par mode), série quotidienne « retards > 5 min », colonnes du risque horaire,
-   distribution des retards (11 classes), tableaux détaillés.
-3. **Modes de transport** (`1655`) — comparaison d'indicateurs par mode
-   (ponctualité, > 5 min, en avance, arrêts sautés), profil horaire par mode,
-   évolution quotidienne par mode. Chaque mode est identifié par son glyphe
-   (● ■ ▲) ; les valeurs sont colorées par palier.
-4. **Fiabilité par période** (`1703`) — fiabilité selon le créneau (jour de
-   semaine × tranche horaire) : Matin 06–10, Journée 10–16, Pointe du soir
-   16–20, Soirée & nuit 20–06 (lundi–vendredi) et Week-end (samedi + dimanche).
-   Charge `agg_hourly` (jamais la table brute) via les loaders
-   `load_period_stats` (métriques par créneau), `load_period_mode` (retards
-   > 5 min par mode × créneau) et `load_period_lines` (classement des lignes
-   d'un créneau, seuil `MIN_OBSERVATIONS`). Le classificateur
-   `_period_labels` déduit le jour de semaine de `date_service`. Les arrêts
-   sautés ne sont pas décomptés (absents de `agg_hourly`) — c'est mentionné
-   dans la note de la page.
-5. **Analyse d'une ligne** — sélecteur de ligne (toutes les lignes du réseau
-   d'au moins `MIN_OBSERVATIONS` passages, de la moins fiable à la plus
-   fiable ; clé `st.session_state["line_id"]`) et **fiche ligne** (§11.7),
-   calculée sur toute la ligne quel que soit le filtre « Territoire ».
-6. **Évolution & tendances** (`1797`) — suivi de la fiabilité dans le temps :
-   la période sélectionnée est partagée en deux moitiés de durée égale et la plus
-   récente est comparée à la précédente. Charge `agg_daily` (ou `agg_daily_stop` en
-   périmètre commune) via `load_engagement_trend` (série quotidienne du réseau :
-   ponctualité, retards > 5 min, arrêts sautés, retard moyen) et
-   `load_engagement_progression` (score de fiabilité de chaque ligne sur les deux
-   moitiés, seules les lignes ≥ `MIN_OBSERVATIONS` sur chacune). Graphiques
-   `engagement_trend_chart` (avec moyenne glissante 7 jours) et
-   `engagement_progression_chart`. C'est un indicateur de tendance au regard des
-   engagements de service annoncés : aucun seuil d'engagement chiffré externe n'est
-   retenu.
-7. **Perturbations** (`1879`) — alertes actives à l'instant courant +
-   historique (dédupliqué : une même annonce peut être publiée sous plusieurs
+1. **Mon territoire** — verdict (score du réseau, ou de la commune comparé au
+   réseau), bloc **À surveiller** (`diagnostic.watchlist` : la ligne dont la
+   baisse de score pèse le plus, baisse × passages, pour une baisse d'au moins
+   5 points ; l'arrêt et la ligne qui cumulent le plus de passages > 5 min
+   parmi ceux sous 80/100 ; bouton « Ouvrir la fiche »), liste « Chercher un
+   arrêt », carte pydeck (`pdk.IconLayer`, fond « light ») des arrêts
+   (`load_territorial`, depuis `agg_daily_stop`) : couleur = palier du score de
+   fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min − 2 ×
+   arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la plus
+   fréquentée), via des icônes SVG `marker_icon(forme, couleur)` ; taille (7 à
+   18 px) selon les passages. **Fiche arrêt** (§11.7) sous la carte, ouverte
+   par un clic sur un arrêt (`st.pydeck_chart(on_select=…,
+   selection_mode="single-object")`), par la liste de recherche, par le bloc
+   « À surveiller » ou par une ligne du tableau des arrêts
+   (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
+   `st.session_state["stop_id"]`. Blocs repliables : **Comparer les
+   communes** (périmètre « Réseau complet » ; `load_commune_stats`, graphique
+   `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
+2. **Lignes** — verdict (ligne à examiner en premier), les 15 lignes les moins
+   fiables (`ranking_chart`), tableau de toutes les lignes du périmètre (une
+   sélection ouvre la fiche), liste « Ligne analysée » (toutes les lignes du
+   réseau d'au moins `MIN_OBSERVATIONS` passages ; clé
+   `st.session_state["line_id"]`) et **fiche ligne** (§11.7), calculée sur
+   toute la ligne quel que soit le filtre « Territoire ».
+3. **Quand ?** — deux vues :
+   - *Selon le créneau* : verdict (créneau qui se détache, règle de
+     concentration de §11.7), ponctualité par créneau
+     (`period_punctuality_chart`), retards > 5 min par mode et créneau
+     (`period_mode_chart`), lignes les moins ponctuelles d'un créneau
+     (repliable). Créneaux : Matin 06–10, Journée 10–16, Pointe du soir 16–20,
+     Soirée & nuit 20–06 (lundi–vendredi) et Week-end. Loaders
+     `load_period_stats`, `load_period_mode`, `load_period_lines` sur
+     `agg_hourly` ; les arrêts sautés n'y sont pas décomptés.
+   - *Dans le temps* : la période est partagée en deux moitiés de durée égale
+     (en jours de service), la plus récente est comparée à la précédente.
+     Verdict (ponctualité et arrêts sautés), ponctualité jour par jour
+     (`engagement_trend_chart`, moyenne glissante 7 jours), autre indicateur au
+     choix (repliable), lignes qui se dégradent ou s'améliorent
+     (`engagement_progression_chart`, détail repliable). Loaders
+     `load_engagement_trend` et `load_engagement_progression`.
+4. **Réseau & modes** — deux vues :
+   - *Réseau* : verdict, carte de risque des lignes (`scatter_chart`, seuils
+     de `risk_zone`), retards > 5 min par jour et selon l'heure ; répartition
+     des écarts et tableau détaillé des lignes (repliables).
+   - *Modes de transport* : verdict (mode le moins ponctuel), cartes par mode
+     (glyphe ● ■ ▲, bordure au palier), comparaison d'indicateurs, retards
+     selon l'heure et évolution quotidienne par mode ; tableau (repliable).
+5. **Perturbations** — alertes actives à l'instant courant + historique
+   (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-8. **Collecte des données** (`1941`) — totaux bruts (observations, trajets,
-   lignes, stabilisées), graphique « observations/min » sur 7 jours glissants
-   (Highcharts Stock, zoom), répartition horaire.
-9. **Méthode & données** (`1977`) — définitions, seuils, sources, mention de la
-   stabilisation 20 min, et bloc **Données ouvertes** : boutons de
-   téléchargement CSV de la période (loader `load_open_dataset`, qui passe par
-   `src/scripts/export_open_data.py` — voir §11.6).
+6. **Données & méthode** — trois vues : *Méthode* (définitions, seuils,
+   stabilisation 20 min, lecture des fiches, arrêts sautés), *Données
+   ouvertes* (boutons de téléchargement CSV de la période, loader
+   `load_open_dataset`, qui passe par `src/scripts/export_open_data.py` — voir
+   §11.6) et *Suivi de la collecte* (totaux bruts, observations par minute sur
+   7 jours glissants en Highcharts Stock, répartition horaire).
 
 Sélecteur de période : menu popover « Grafana-style »
 (`time_range_picker`) avec presets relatifs (1/7/30/90 jours, « tout »),
@@ -1433,7 +1435,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 298 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 302 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -1691,7 +1693,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 298, isolés (suite `pytest` complète : 298 passed), flux synthétiques
+- Tests : 302, isolés (suite `pytest` complète : 302 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

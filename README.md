@@ -42,9 +42,12 @@ quand.
 
 ## Fonctionnalités principales
 
-- **Tableau de bord web public** : vue territoriale par commune, vue réseau,
-  comparaison des modes de transport (tram / bus / ferry), analyse par ligne,
-  perturbations en cours, suivi de la collecte.
+- **Tableau de bord web public** : carte par commune avec, pour chaque arrêt,
+  une fiche qui explique d'où vient le problème (ligne en cause, retard né sur
+  place ou venu de plus loin, heures et jours concernés) ; fiche de chaque
+  ligne (où le retard se forme, arrêts sautés, courses supprimées) ; créneaux
+  et tendances ; réseau et modes de transport ; perturbations ; méthode et
+  données ouvertes.
   → <https://urban-vision.duckdns.org>
 - **Rapports mensuels PDF**, un pour le réseau, un pour chacune des
   28 communes de Bordeaux Métropole.
@@ -59,7 +62,7 @@ quand.
   maintenance) : [`docs/DOCUMENTATION_TECHNIQUE.md`](docs/DOCUMENTATION_TECHNIQUE.md)
 - 🔧 **Prise en main pour développeurs** : une fois sur la machine, `docs/DOCUMENTATION_TECHNIQUE.md`
   (§ 5 Installation et § 13 Référence des scripts) donne toutes les commandes.
-- 🧪 **Tests** : suite `pytest` complète 298 tests, isolée de toute donnée réelle.
+- 🧪 **Tests** : suite `pytest` complète 302 tests, isolée de toute donnée réelle.
 
 ## Le projet
 

@@ -307,3 +307,40 @@ class TestTronconDominant:
                               rec, 0.0, False, 300.0)
         assert hints == ["Retard importé et accumulé sur tout le parcours amont : il relève du temps "
                          "de parcours de la ligne plus que d'un aménagement local. Voir la fiche de la ligne 5."]
+
+
+class TestASurveiller:
+    def _prog(self, delta):
+        return pd.DataFrame({"route_id": ["A", "B"], "ligne": ["1", "2"], "delta_score": [delta, 3.0],
+                             "observations": [1000, 1000],
+                             "score_fiabilite_prev": [80.0, 70.0], "score_fiabilite": [80.0 + delta, 73.0]})
+
+    def _lines(self):
+        return pd.DataFrame({"route_id": ["A", "C", "D"], "ligne": ["1", "3", "4"],
+                             "observations": [1000, 5000, 20], "pct_retard_5min": [30.0, 10.0, 90.0],
+                             "score_fiabilite": [60.0, 75.0, 10.0]})
+
+    def _stops(self):
+        return pd.DataFrame({"stop_id": ["s1", "s2"], "stop_name": ["Gare", "Parc"],
+                             "direction": ["vers Parc", ""], "observations": [400, 900],
+                             "pct_retard_5min": [50.0, 5.0], "score_fiabilite": [50.0, 95.0]})
+
+    def test_trois_signaux_distincts(self):
+        items = dg.watchlist(self._prog(-12.0), self._lines(), self._stops(), 50)
+        assert [(i["kind"], i["id"]) for i in items] == [("ligne", "A"), ("arrêt", "s1"), ("ligne", "C")]
+        assert items[0]["reason"] == "score en baisse de 12.0 points (80.0 → 68.0)"
+        assert items[1]["title"] == "Gare — vers Parc"
+        assert items[1]["reason"] == "200 passages à plus de 5 min, score 50.0/100"
+
+    def test_baisse_ponderee_par_les_passages(self):
+        prog = pd.DataFrame({"route_id": ["A", "B"], "ligne": ["Arena", "24"],
+                             "delta_score": [-50.0, -6.0], "observations": [60, 9000],
+                             "score_fiabilite_prev": [97.0, 85.0], "score_fiabilite": [47.0, 79.0]})
+        assert dg.watchlist(prog, None, None, 50)[0]["id"] == "B"
+
+    def test_baisse_faible_ignoree_et_petit_echantillon_exclu(self):
+        items = dg.watchlist(self._prog(-2.0), self._lines(), None, 50)
+        assert [(i["kind"], i["id"]) for i in items] == [("ligne", "C")]
+
+    def test_rien_a_signaler(self):
+        assert dg.watchlist(None, None, None, 50) == []
