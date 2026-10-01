@@ -8,14 +8,20 @@ def _epoch_local(year, month, day, hour, minute=0):
     return int(datetime(year, month, day, hour, minute).timestamp())
 
 
+def _seen(row):
+    start_date, departure_time = row[1], row[8]
+    noon = _epoch_local(int(start_date[:4]), int(start_date[4:6]), int(start_date[6:]), 12)
+    return departure_time or noon
+
+
 def _insert(conn, rows):
     conn.executemany(
         """INSERT INTO observations
            (trip_id, start_date, route_id, direction_id, stop_sequence,
             stop_id, schedule_relationship, arrival_delay, departure_delay,
             departure_time, last_seen_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0)""",
-        rows,
+           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)""",
+        [row + (_seen(row),) for row in rows],
     )
     conn.commit()
 
@@ -166,3 +172,16 @@ class TestRefreshSegments:
         ).fetchall()
         assert incremental == complet
         assert len(complet) == 7
+
+    def test_plan_ne_lit_observations_que_par_les_index_bornes(self, conn):
+        import db as dbio
+
+        sql, params = dbio.incremental_segment_statement(["2026-09-11", "2026-09-12"])
+        accesses = [
+            row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+            if row[3].startswith(("SCAN o", "SEARCH o"))
+        ]
+        assert accesses
+        for access in accesses:
+            assert ("idx_observations_departure_time" in access
+                    or "idx_observations_last_seen_at" in access), access

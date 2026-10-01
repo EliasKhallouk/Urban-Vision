@@ -501,14 +501,14 @@ class TestLoadersDiagnostic:
             """INSERT INTO observations
                (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id,
                 schedule_relationship, arrival_delay, departure_delay, departure_time, last_seen_at)
-               VALUES (?, '20260911', 'A', 0, ?, ?, ?, NULL, ?, ?, 0)""",
+               VALUES (?, '20260911', 'A', 0, ?, ?, ?, NULL, ?, ?, ?)""",
             [
-                ("t1", 1, "s1", "SCHEDULED", 30, _epoch_local(2026, 9, 11, 8, 0)),
-                ("t1", 2, "s2", "SCHEDULED", 150, _epoch_local(2026, 9, 11, 8, 5)),
-                ("t1", 3, "s3", "SCHEDULED", 400, _epoch_local(2026, 9, 11, 8, 10)),
-                ("t2", 1, "s1", "SCHEDULED", 0, _epoch_local(2026, 9, 11, 9, 0)),
-                ("t2", 2, "s2", "SKIPPED", None, None),
-                ("t2", 3, "s3", "SCHEDULED", 60, _epoch_local(2026, 9, 11, 9, 10)),
+                ("t1", 1, "s1", "SCHEDULED", 30, _epoch_local(2026, 9, 11, 8, 0), _epoch_local(2026, 9, 11, 8, 15)),
+                ("t1", 2, "s2", "SCHEDULED", 150, _epoch_local(2026, 9, 11, 8, 5), _epoch_local(2026, 9, 11, 8, 15)),
+                ("t1", 3, "s3", "SCHEDULED", 400, _epoch_local(2026, 9, 11, 8, 10), _epoch_local(2026, 9, 11, 8, 15)),
+                ("t2", 1, "s1", "SCHEDULED", 0, _epoch_local(2026, 9, 11, 9, 0), _epoch_local(2026, 9, 11, 9, 15)),
+                ("t2", 2, "s2", "SKIPPED", None, None, _epoch_local(2026, 9, 11, 9, 15)),
+                ("t2", 3, "s3", "SCHEDULED", 60, _epoch_local(2026, 9, 11, 9, 10), _epoch_local(2026, 9, 11, 9, 15)),
             ],
         )
         conn.executemany(

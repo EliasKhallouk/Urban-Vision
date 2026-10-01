@@ -118,6 +118,30 @@ class TestGapDetection:
         assert n == 0
 
 
+class TestDureeRafraichissement:
+    def test_duree_normale_en_info_et_lente_en_warning(self, monkeypatch):
+        import collect as coll
+
+        messages = []
+
+        class CapturingLogger:
+            def info(self, msg, *args):
+                messages.append(("info", msg % args))
+
+            def warning(self, msg, *args):
+                messages.append(("warning", msg % args))
+
+        monkeypatch.setattr(coll, "logger", CapturingLogger())
+        coll.log_refresh_duration(12.34)
+        coll.log_refresh_duration(coll.REFRESH_WARN_SECONDS + 15)
+        coll.log_refresh_duration(5.3, "tronçons")
+        coll.log_refresh_duration(coll.REFRESH_WARN_SECONDS + 1, "tronçons")
+        assert messages[0] == ("info", "Agrégats rafraîchis en 12.3 s")
+        assert messages[1] == ("warning", "Rafraîchissement des agrégats lent : 75.0 s (seuil 60 s)")
+        assert messages[2] == ("info", "Tronçons rafraîchis en 5.3 s")
+        assert messages[3] == ("warning", "Rafraîchissement des tronçons lent : 61.0 s (seuil 60 s)")
+
+
 class TestConfig:
     def test_collecteur_configure_busy_timeout(self, db_path):
         import collect as coll
