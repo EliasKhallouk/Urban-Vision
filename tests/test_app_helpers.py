@@ -64,52 +64,6 @@ class TestMedianFromHistograms:
 
 
 class TestCouleurs:
-    def test_atlas_12_icones_forme_par_palier(self):
-        import base64
-        import io
-
-        from PIL import Image
-
-        uri, mapping = app_mod.marker_atlas()
-        assert uri.startswith("data:image/png;base64,")
-        assert len(mapping) == 12
-        img = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
-        assert img.size == (4 * app_mod.MARKER_CELL, 3 * app_mod.MARKER_CELL)
-        cell = mapping["square|#bc6c25"]
-        center = img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))
-        assert center[:3] == (0xBC, 0x6C, 0x25)
-
-    def test_cle_d_icone(self):
-        assert app_mod.icon_key(3, 90.0) == "square|#606c38"
-        assert app_mod.icon_key(0, 60.0) == "circle|#DDA15E"
-        assert app_mod.icon_key(11, 10.0) == "diamond|#bc6c25"
-        uri, mapping = app_mod.marker_atlas()
-        assert app_mod.icon_key(4, 30.0) in mapping
-
-    def test_couche_carte_constantes_non_interpretees_comme_expressions(self):
-        import json
-
-        import pydeck as pdk
-
-        df = pd.DataFrame({"stop_id": ["s1"], "lon": [-0.57], "lat": [44.84], "route_type": [3],
-                           "score_fiabilite": [90.0], "observations": [400]})
-        deck = json.loads(pdk.Deck(layers=[app_mod.territorial_layer(df)]).to_json())
-        layer = deck["layers"][0]
-        assert layer["sizeUnits"] == "meters"
-        assert (layer["sizeMinPixels"], layer["sizeMaxPixels"]) == app_mod.STOP_SIZE_PIXELS
-        assert layer["iconAtlas"].startswith("data:image/png;base64,")
-        assert layer["getIcon"] == "@@=icon"
-        assert layer["data"][0]["icon"] == "square|#606c38"
-        assert layer["data"][0]["size"] == app_mod.STOP_SIZE_METERS[1]
-
-    def test_taille_selon_les_passages(self):
-        df = pd.DataFrame({"stop_id": ["a", "b", "c"], "lon": [-0.57] * 3, "lat": [44.84] * 3,
-                           "route_type": [3] * 3, "score_fiabilite": [90.0] * 3,
-                           "observations": [10, 225, 5000]})
-        sizes = [row["size"] for row in app_mod.territorial_layer(df).data]
-        low, high = app_mod.STOP_SIZE_METERS
-        assert sizes == [low, (low + high) / 2, high]
-
     def test_score_tier_style(self):
         style = app_mod._score_tier_style(90.0)
         assert "background-color: #606c38" in style
@@ -298,17 +252,16 @@ class TestSelectionDesFiches:
     def test_clic_sur_la_carte_ouvre_la_fiche_arret(self):
         import streamlit as st
 
-        st.session_state["map_arrets"] = {"selection": {"indices": {"arrets": [3]},
-                                                        "objects": {"arrets": [{"stop_id": "s9", "stop_name": "Gare"}]}}}
-        app_mod._on_map_select()
+        st.session_state["carte_arrets"] = {"clicked": "s9"}
+        app_mod._on_map_click()
         assert st.session_state["stop_id"] == "s9"
 
     def test_clic_dans_le_vide_ne_change_rien(self):
         import streamlit as st
 
         st.session_state["stop_id"] = "s1"
-        st.session_state["map_arrets"] = {"selection": {"indices": {}, "objects": {}}}
-        app_mod._on_map_select()
+        st.session_state["carte_arrets"] = {"clicked": None}
+        app_mod._on_map_click()
         assert st.session_state["stop_id"] == "s1"
 
     def test_ligne_de_tableau_selectionnee(self):
@@ -361,11 +314,6 @@ class TestRegroupementDesSens:
         assert tram["n_sens"] == 1
         assert set(g.loc[g["stop_name"] == "Gare", "stop_id"]) == {"s4", "s5"}
 
-    def test_pire_arret_dessine_en_dernier(self):
-        layer = app_mod.territorial_layer(app_mod.group_stops(self._stops()))
-        scores = [row["score_fiabilite"] for row in layer.data]
-        assert scores == sorted(scores, reverse=True)
-
 
 class TestGrilleJourHeure:
     def _table(self):
@@ -404,8 +352,8 @@ class TestNavigation:
     def test_clic_sur_la_carte_demande_le_defilement_vers_la_fiche(self):
         import streamlit as st
 
-        st.session_state["map_arrets"] = {"selection": {"objects": {"arrets": [{"stop_id": "s9"}]}}}
-        app_mod._on_map_select()
+        st.session_state["carte_arrets"] = {"clicked": "s9"}
+        app_mod._on_map_click()
         assert st.session_state["_scroll_to"] == "fiche-arret"
 
     def test_fiche_ligne_depuis_un_arret_garde_le_retour(self):
@@ -426,3 +374,67 @@ class TestArretsRarementDesservis:
         kept = app_mod.keep_served_stops(df)
         assert list(kept["stop_id"]) == ["a", "b", "d", "e"]
         assert app_mod.keep_served_stops(df.head(0)).empty
+
+
+class TestPeriode:
+    def test_mois_disponibles_puis_autres_periodes(self):
+        from datetime import date
+
+        opts = app_mod.period_options(date(2026, 7, 27), date(2026, 9, 30))
+        assert opts == ["mois:2026-09", "mois:2026-08", "mois:2026-07", "jours:7", "jours:30", "tout", "dates"]
+
+    def test_mois_par_defaut(self):
+        from datetime import date
+
+        assert app_mod.default_period_choice(date(2026, 7, 27), date(2026, 9, 30)) == "mois:2026-09"
+        assert app_mod.default_period_choice(date(2026, 7, 27), date(2026, 10, 3)) == "mois:2026-09"
+        assert app_mod.default_period_choice(date(2026, 10, 1), date(2026, 10, 3)) == "mois:2026-10"
+
+    def test_libelles(self):
+        from datetime import date
+
+        last = date(2026, 9, 28)
+        assert app_mod.period_choice_label("mois:2026-08", last) == "Août 2026"
+        assert app_mod.period_choice_label("mois:2026-09", last) == "Septembre 2026 (jusqu'au 28/09)"
+        assert app_mod.period_choice_label("mois:2026-09", date(2026, 9, 30)) == "Septembre 2026"
+        assert app_mod.period_choice_label("jours:7", last) == "7 derniers jours"
+
+    def test_mois_compare_au_mois_precedent(self):
+        from datetime import date
+
+        p = app_mod.resolve_period("mois:2026-09", date(2026, 7, 27), date(2026, 9, 30))
+        assert (p.start, p.end, p.label) == (date(2026, 9, 1), date(2026, 10, 1), "septembre 2026")
+        assert (p.prev_start, p.prev_end, p.prev_label) == (date(2026, 8, 1), date(2026, 9, 1), "août 2026")
+        janvier = app_mod.resolve_period("mois:2027-01", date(2026, 1, 1), date(2027, 1, 20))
+        assert (janvier.prev_start, janvier.end) == (date(2026, 12, 1), date(2027, 2, 1))
+
+    def test_premier_mois_sans_comparaison(self):
+        from datetime import date
+
+        p = app_mod.resolve_period("mois:2026-07", date(2026, 7, 27), date(2026, 9, 30))
+        assert p.prev_start is None and p.prev_label is None
+
+    def test_jours_glissants_et_dates(self):
+        from datetime import date
+
+        p = app_mod.resolve_period("jours:7", date(2026, 7, 27), date(2026, 9, 30))
+        assert (p.start, p.end, p.prev_start, p.prev_end) == (
+            date(2026, 9, 24), date(2026, 10, 1), date(2026, 9, 17), date(2026, 9, 24))
+        assert p.prev_label == "les 7 jours précédents"
+        d = app_mod.resolve_period("dates", date(2026, 7, 27), date(2026, 9, 30), (date(2026, 9, 1), date(2026, 9, 10)))
+        assert (d.start, d.end, d.prev_start, d.label) == (
+            date(2026, 9, 1), date(2026, 9, 11), date(2026, 8, 22), "du 01/09/2026 au 10/09/2026")
+        tout = app_mod.resolve_period("tout", date(2026, 7, 27), date(2026, 9, 30))
+        assert (tout.start, tout.end, tout.prev_start) == (date(2026, 7, 27), date(2026, 10, 1), None)
+
+
+class TestDirectionDepuisUnArret:
+    def test_direction_ou_se_trouve_l_arret(self):
+        per_dir = {
+            0: {"profile": pd.DataFrame({"stop_id": ["a", "b"], "obs": [100, 90]})},
+            1: {"profile": pd.DataFrame({"stop_id": ["b", "c"], "obs": [300, 80]})},
+        }
+        assert app_mod.stop_direction_in(per_dir, "a") == 0
+        assert app_mod.stop_direction_in(per_dir, "b") == 1
+        assert app_mod.stop_direction_in(per_dir, "z") is None
+        assert app_mod.stop_direction_in(per_dir, None) is None

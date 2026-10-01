@@ -604,7 +604,7 @@ def slot_profile_chart(sp: pd.DataFrame, slot_label: str, highlight_stop_id: str
 
 
 def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = None,
-                       commune_label: str | None = None) -> dict:
+                       commune_label: str | None = None, highlight_stop_id: str | None = None) -> dict:
     """Taux d'arrêts sautés arrêt par arrêt le long d'une direction (palier « pourcent »)."""
     p = profile.sort_values("order").reset_index(drop=True)
     rates = (p["skipped"] / p["eligible"].where(p["eligible"] > 0) * 100).fillna(0.0)
@@ -614,7 +614,7 @@ def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = Non
         "legend": {"enabled": False},
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
-        "xAxis": _profile_axis(p, None, commune_stop_ids, commune_label),
+        "xAxis": _profile_axis(p, highlight_stop_id, commune_stop_ids, commune_label),
         "yAxis": {"title": {"text": "Arrêts sautés (%)"}, "min": 0},
         "series": [{"name": "Arrêts sautés", "data": data,
                     "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b> ({point.skipped} passages non desservis)"}}],

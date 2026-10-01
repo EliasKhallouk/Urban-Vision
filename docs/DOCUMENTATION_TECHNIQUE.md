@@ -179,6 +179,8 @@ Urban-Vision/
 │   └── urban-vision-logo-white.png # utilisé par le dashboard et les rapports
 ├── dashboard/
 │   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches)
+│   ├── carte.py                    # carte des arrêts : composant st.components.v2, données, icônes
+│   ├── carte_arrets.js             # JavaScript du composant (deck.gl + MapLibre)
 │   ├── diagnostic.py               # logique pure des fiches arrêt / ligne (verdicts, phrases)
 │   └── highcharts.py               # configs Highcharts (charte partagée)
 ├── data/                           # GITIGNORÉ (100 %)
@@ -211,7 +213,7 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 19 fichiers, 341 tests pytest
+└── tests/                          # 20 fichiers, 350 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -239,8 +241,10 @@ Urban-Vision/
 
 Dépendances directes du projet : `streamlit` (1.60.0), `pandas` (3.0.5),
 `numpy` (2.4.6), `requests` (2.34.2), `gtfs-realtime-bindings` (2.1.0) pour le
-décodage protobuf, `protobuf` (7.35.1), `pydeck` (0.9.3) pour la carte,
-`pyarrow` (24.0.0), `GitPython` (3.1.59). Le reste est des dépendances
+décodage protobuf, `protobuf` (7.35.1), `pyarrow` (24.0.0), `GitPython`
+(3.1.59), `pillow` (12.3.0) pour l'atlas d'icônes de la carte. `pydeck`
+(0.9.3) reste épinglé comme dépendance de Streamlit ; le dashboard ne l'utilise
+plus (carte : composant deck.gl, §11.3). Le reste est des dépendances
 transitives épinglées. La liste complète figure dans le fichier.
 
 **Système (apt — cf. `apt-requirement.txt`)**
@@ -329,7 +333,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 341 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 350 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -800,38 +804,49 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
 
 1. **Mon territoire** — verdict (score du réseau, ou de la commune comparé au
    réseau), bloc **À surveiller** (`diagnostic.watchlist` : la ligne dont la
-   baisse de score pèse le plus, baisse × passages, pour une baisse d'au moins
+   baisse de score par rapport à la période de comparaison pèse le plus,
+   baisse × passages, pour une baisse d'au moins
    5 points ; l'arrêt et la ligne qui cumulent le plus de passages > 5 min
    parmi ceux sous 80/100, les quais d'un même arrêt étant comptés ensemble ;
-   le texte donne ce critère ; bouton « Ouvrir la fiche »), liste « Chercher
-   un arrêt », carte pydeck (`pdk.IconLayer`, fond « light ») des arrêts
-   (`load_territorial`, depuis `agg_daily_stop`), **regroupés par quai**
-   (`group_stops`, via le loader en cache `grouped_territorial`) : les arrêts
-   de même nom et de même mode distants de moins de 150 m (`GROUP_RADIUS_M` :
-   les deux sens d'un arrêt, parfois d'autres lignes au même arrêt) forment
-   un seul marqueur, à la position moyenne, qui porte le sens **le moins
-   fiable** (couleur, fiche ouverte au clic) ; l'infobulle donne le score de
-   chaque sens ; les marqueurs les moins fiables sont dessinés au-dessus des
-   autres. Couleur = palier du score de
-   fiabilité de l'arrêt, toutes lignes confondues (ponctualité ≤ 5 min − 2 ×
-   arrêts sautés, borné 0–100) ; forme = mode de la ligne principale (la plus
-   fréquentée) ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m selon les
-   passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
-   (`STOP_SIZE_PIXELS`, props deck.gl `sizeMinPixels` / `sizeMaxPixels`) : 8 px
-   en vue réseau, une quinzaine de pixels en vue de quartier, 28 px au plus en
-   vue de rue. Couche construite par
-   `territorial_layer` : `pdk.IconLayer` sur un atlas PNG unique
-   (`marker_atlas`, 4 formes × 3 paliers, dessiné avec Pillow) ; chaque arrêt
-   ne porte qu'une clé `icon_key` (« forme|couleur »). **pydeck convertit toute
-   chaîne d'argument de couche en expression JavaScript** : les constantes texte
-   (`size_units`, `icon_atlas`) sont passées entre guillemets simples
-   (`"'meters'"`), sinon deck.gl reçoit une expression invalide (une unité de
-   taille invalide faisait retomber les icônes en unités « monde » : icônes de
-   plusieurs milliers de pixels, carte recouverte et navigateur saturé).
+   le texte et la légende sous le bloc (`watchlist_rule`) donnent ces
+   critères ; bouton « Ouvrir la fiche »), liste « Chercher un arrêt », puis
+   la **carte des arrêts** (`dashboard/carte.py` + `dashboard/carte_arrets.js`,
+   composant `st.components.v2` qui pilote deck.gl 9.1 sur un fond MapLibre,
+   style vectoriel « Positron » de Carto ; arrêts de `load_territorial`, depuis
+   `agg_daily_stop`) :
+   - **regroupement selon le zoom** : sous le zoom 14 (`SPLIT_ZOOM`), les quais
+     d'un même arrêt (même nom, même mode, à moins de 150 m : `group_stops`,
+     loader `grouped_territorial`) forment un seul marqueur, à leur position
+     moyenne, portant le quai **le moins fiable** (couleur, fiche ouverte au
+     clic) ; à partir du zoom 14, chaque quai a son marqueur, écarté de ses
+     voisins dans la direction réelle de sa position tant qu'ils sont à moins
+     de 30 px les uns des autres (`MIN_SEP_PX`), puis à sa place exacte ;
+   - couleur = palier du score de fiabilité du quai, toutes lignes confondues
+     (ponctualité ≤ 5 min − 2 × arrêts sautés, borné 0–100) ; forme = mode de
+     la ligne principale ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m
+     selon les passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
+     (`STOP_SIZE_PIXELS`) ; icônes tirées d'un atlas PNG unique
+     (`marker_atlas`, 4 formes × 3 paliers + halo de sélection, dessiné avec
+     Pillow ; clé `icon_key` « forme|couleur ») ; les moins fiables sont
+     dessinés au-dessus ;
+   - **infobulle** (HTML propre au composant) : nom, une ligne par quai
+     (pastille de couleur, direction, score, part > 5 min ; le quai survolé
+     ou le moins fiable en tête), lignes desservies, passages, « Cliquer pour
+     ouvrir la fiche » ;
+   - **arrêt sélectionné** : halo et icône agrandie, bandeau « Arrêt
+     sélectionné » avec un bouton « Centrer » ; la carte s'y déplace (zoom 15,
+     `FOCUS_ZOOM`) quand l'arrêt est choisi ailleurs que sur la carte
+     (recherche, « À surveiller », lien `?arret=`), pas après un clic sur la
+     carte ;
+   - le clic renvoie l'identifiant du quai à Python (`setTriggerValue`,
+     callback `_on_map_click`) ; `map_payload` prépare les données (listes
+     compactes de quais et de groupes) ; le composant est enregistré à
+     l'import de `carte.py` et réenregistré au premier affichage s'il a été
+     importé hors du serveur Streamlit.
    **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt
-   (`st.pydeck_chart(on_select=…, selection_mode="single-object")`), par la
-   liste de recherche, par le bloc « À surveiller » ou par une ligne du tableau
-   des arrêts (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
+   de la carte, par la liste de recherche, par le bloc « À surveiller » ou par
+   une ligne du tableau des arrêts (`st.dataframe(on_select=…)`) ; ces
+   entrées écrivent la même clé
    `st.session_state["stop_id"]` (la liste de recherche a sa propre clé
    `stop_search`, resynchronisée à chaque affichage : un widget dont les
    options changent avec la période serait sinon remis à zéro) et font
@@ -858,8 +873,8 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
      Soirée & nuit 20–06 (lundi–vendredi) et Week-end. Loaders
      `load_period_stats`, `load_period_mode`, `load_period_lines` sur
      `agg_hourly` ; les arrêts sautés n'y sont pas décomptés.
-   - *Dans le temps* : la période est partagée en deux moitiés de durée égale
-     (en jours de service), la plus récente est comparée à la précédente.
+   - *Dans le temps* : la période est comparée à sa période de comparaison
+     (le mois précédent pour un mois, voir le sélecteur de période ci-dessous).
      Verdict (ponctualité et arrêts sautés), ponctualité jour par jour
      (`engagement_trend_chart`, moyenne glissante 7 jours), autre indicateur au
      choix (repliable), lignes qui se dégradent ou s'améliorent
@@ -883,10 +898,20 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    §11.6) et *Suivi de la collecte* (totaux bruts, observations par minute sur
    7 jours glissants en Highcharts Stock, répartition horaire).
 
-Sélecteur de période : menu popover « Grafana-style »
-(`time_range_picker`) avec presets relatifs (1/7/30/90 jours, « tout »),
-périodes relatives personnalisées (jours/semaines/mois) et dates absolues
-`Du`/`Au`. Valeurs initiales : 7 jours par défaut.
+Sélecteur de période (`period_picker`, liste « Période » de la barre du
+haut) : les **mois complets** couverts par les données, du plus récent au
+plus ancien (« Septembre 2026 », « Octobre 2026 (jusqu'au 01/10) » pour le mois
+en cours), puis « 7 derniers jours », « 30 derniers jours », « Toute la période
+collectée » et « Dates précises… » (deux dates). Par défaut : le mois en cours
+s'il compte au moins 15 jours de données, sinon le mois précédent
+(`default_period_choice`). Chaque choix définit aussi sa **période de
+comparaison** (`resolve_period`, objet `Period`) : le mois précédent pour un
+mois, les N jours d'avant pour les jours glissants, la même durée juste avant
+pour des dates précises, aucune pour toute la période ; aucune non plus si
+elle tombe avant le premier jour de données. Cette période sert à toutes les
+évolutions : carte « Évolution » des fiches, ligne en baisse du bloc « À
+surveiller », vue *Dans le temps*. Bornes : jours de service, fin exclue
+(`load_service_days` donne le premier et le dernier jour disponibles).
 
 Top bar persistante : identité, filtre « Territoire » (communes issues de
 `stop_municipalities`), sélecteur de période.
@@ -948,9 +973,14 @@ médian de la classe (ex. `+1 à +2` → 90 s → palier « retard ») ; seules 
 ### 11.5 Dépendances externes du dashboard
 
 - CDN Highcharts (JS) — requiert un accès Internet coté navigateur.
-- Pydeck : fond de carte par défaut (fournisseur Carto/Mapbox via pydeck).
-  La carte territoriale (`_territorial_map`) est suivie d'une légende
-  textuelle (alternative de lecture pour lecteurs d'écran).
+- Carte des arrêts : deck.gl 9.1.14 et MapLibre GL 4.7.1 chargés depuis
+  jsDelivr par le navigateur, style vectoriel « Positron » de Carto
+  (`basemaps.cartocdn.com/gl/positron-gl-style/style.json`). Les tuiles raster
+  `light_all` de Carto renvoient désormais une image « API KEY REQUIRED » sans
+  clé : elles ne sont pas utilisées. Si les bibliothèques ne se chargent pas,
+  la carte affiche un message et la recherche et le tableau des arrêts restent
+  utilisables. La carte est suivie d'une légende textuelle (alternative de
+  lecture pour lecteurs d'écran).
 - Logo local `assets/logo/urban-vision-logo-white.png` (data-URI base64).
 - **Aucun appel API ni `os.getenv`** dans `app.py`.
 
@@ -1008,8 +1038,9 @@ affichage d'un lien partagé.
 **Fiche arrêt** — en-tête (nom, direction, lignes avec leur glyphe de mode),
 boutons vers les **autres quais du même arrêt** (autre sens ou autres lignes
 regroupés sur la carte, avec leur score) et « ↑ Revenir à la carte », 5
-indicateurs (score comparé au réseau, évolution entre les deux moitiés de la
-période, passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
+indicateurs (score comparé au réseau, **évolution** : score de la période
+moins celui de la période de comparaison, avec le score de comparaison ;
+passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
 « En bref », bloc « Pistes », bouton principal « Ouvrir la fiche de la ligne
 … » (ligne responsable ; la fiche ligne garde un bouton « ← Revenir à l'arrêt
 … »), puis 4 sous-vues :
@@ -1022,10 +1053,11 @@ période, passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
 | Contexte | alertes TBM des lignes de l'arrêt, avec mention de celles qui recoupent un jour dégradé |
 
 **Fiche ligne** — en-tête (glyphe, terminus, communes desservies, passages par
-jour), 5 indicateurs (score comparé au réseau et à la médiane du mode, évolution,
-points perdus par les retards, points perdus par les arrêts sautés, courses
-supprimées), « En bref », « Pistes », puis 4 sous-vues : **Retards : où ?**
-(profil de **tous les arrêts de la ligne sur le réseau**, par direction ; 3
+jour), 5 indicateurs (score comparé au réseau et à la médiane du mode, évolution
+par rapport à la période de comparaison, points perdus par les retards, points
+perdus par les arrêts sautés, courses supprimées), « En bref », « Pistes », puis
+4 sous-vues : **Retards : où ?**
+(profil de **tous les arrêts de la ligne sur le réseau**, par direction ; ouverte depuis une fiche arrêt, la fiche présélectionne la direction où se trouve l'arrêt (`stop_direction_in`, dans les trois sous-vues à choix de direction) et le marque d'un trait vertical sur les profils ; 3
 tronçons qui prennent le plus de retard avec leur commune), **Service non
 rendu** (courses supprimées par jour, arrêts sautés le long de la ligne),
 **Quand ?** (grille jour × heure, moment qui ressort, puis profil du créneau
@@ -1492,7 +1524,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 341 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 350 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -1667,8 +1699,9 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
    recalculs incrémentaux (degré de liberté).
 6. **Pas de sauvegarde automatisée, pas de rotation de logs** — non traité
    dans le dépôt.
-7. **Le dashboard.js** dépend de CDN externes (Highcharts, pydeck) : hors
-   ligne le site reste affiché mais certains graphiques/carte sont dégradés.
+7. **Le dashboard** dépend de CDN externes (Highcharts, deck.gl et MapLibre
+   via jsDelivr, fond de carte Carto) : hors ligne le site reste affiché mais
+   les graphiques et la carte sont dégradés.
 8. **Exécution directe** : `generate_monthly_report.py` est documenté comme
    « moteur interne » ; appelé directement, il fonctionne mais peu de garde-fous
    UX.
@@ -1759,8 +1792,8 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   lignes exacts fournis en annexe de la section 11).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
-  sous la carte pydeck.
-- Tests : 341, isolés (suite `pytest` complète : 341 passed), flux synthétiques
+  sous la carte des arrêts.
+- Tests : 350, isolés (suite `pytest` complète : 350 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1833,11 +1866,17 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 le 01
    + sauvegarde périodique + VACUUM, avec tests associés.
 4. Activer un lint/type-check minimal (`ruff`, `pyright`) et une CI GitHub
    Actions exécutant `pytest` — aucun des deux n'existe.
-5. **Décider du traitement des courses supprimées dans le score** : la plupart
+5. **Vérifier la carte de la veille des visiteurs** (`veille_visiteurs.py`,
+   §17.2) : elle utilise les tuiles raster Carto
+   `https://{s}.basemaps.cartocdn.com/light_all/...`, qui renvoyaient le
+   01/10/2026, depuis le poste de développement, une image « API KEY
+   REQUIRED ». Si c'est aussi le cas en production, passer au style
+   vectoriel Positron (comme la carte du dashboard) ou à une clé Carto.
+6. **Décider du traitement des courses supprimées dans le score** : la plupart
    n'ont aucune observation et n'y pèsent pas (§23, point 9). Les intégrer
    modifierait le score des lignes et celui des rapports ; la fiche ligne les
    affiche en attendant.
-6. **Mesurer sur `ek-hub` le coût de `refresh_segments`** après le premier
+7. **Mesurer sur `ek-hub` le coût de `refresh_segments`** après le premier
    déploiement de `agg_daily_segment` (durées journalisées dans `collect.log`,
    §9.1 et §9.3) ; si un cycle dépasse ~30 s, espacer ce rafraîchissement.
 

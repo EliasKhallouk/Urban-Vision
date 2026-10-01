@@ -159,19 +159,19 @@ class TestQuand:
         assert list(t["jour"]) == ["Lundi", "Mardi"]
         assert t.loc[0, "pct_gt300"] == 20.0
 
-    def test_tendance_par_moities(self):
-        daily = pd.DataFrame({
-            "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"]),
-            "obs": [100] * 4, "cnt_le300": [90, 90, 70, 70],
-            "skipped": [0, 0, 5, 5], "eligible": [100] * 4,
-        })
-        t = dg.half_trend(daily)
-        assert (t["previous"], t["recent"], t["delta"]) == (90.0, 60.0, -30.0)
+    def test_evolution_par_rapport_a_la_periode_precedente(self):
+        cols = ["obs", "cnt_le300", "skipped", "eligible"]
+        current = pd.DataFrame([[100, 70, 5, 100], [100, 70, 5, 100]], columns=cols)
+        previous = pd.DataFrame([[100, 90, 0, 100]], columns=cols)
+        assert dg.period_score(current) == 60.0
+        assert dg.score_change(current, previous) == {"current": 60.0, "previous": 90.0, "delta": -30.0}
 
-    def test_tendance_un_seul_jour(self):
-        daily = pd.DataFrame({"date_service": ["2026-09-01"], "obs": [10], "cnt_le300": [9],
-                              "skipped": [0], "eligible": [10]})
-        assert dg.half_trend(daily) is None
+    def test_evolution_sans_periode_precedente(self):
+        cols = ["obs", "cnt_le300", "skipped", "eligible"]
+        current = pd.DataFrame([[10, 9, 0, 10]], columns=cols)
+        assert dg.score_change(current, None) is None
+        assert dg.score_change(current, pd.DataFrame(columns=cols)) is None
+        assert dg.period_score(pd.DataFrame([[0, 0, 0, 0]], columns=cols)) is None
 
     def test_rang(self):
         assert dg.percentile_rank(50.0, pd.Series([10.0, 50.0, 90.0, 95.0])) == 50.0
@@ -326,9 +326,9 @@ class TestASurveiller:
                              "pct_retard_5min": [50.0, 5.0], "score_fiabilite": [50.0, 95.0]})
 
     def test_trois_signaux_distincts(self):
-        items = dg.watchlist(self._prog(-12.0), self._lines(), self._stops(), 50)
+        items = dg.watchlist(self._prog(-12.0), self._lines(), self._stops(), 50, prev_label="août 2026")
         assert [(i["kind"], i["id"]) for i in items] == [("ligne", "A"), ("arrêt", "s1"), ("ligne", "C")]
-        assert items[0]["reason"] == "score en baisse de 12.0 points (80.0 → 68.0)"
+        assert items[0]["reason"] == "score en baisse de 12.0 points par rapport à août 2026 (80.0 → 68.0)"
         assert items[1]["title"] == "Gare — vers Parc"
         assert items[1]["reason"] == "le plus de passages en retard du territoire : 200 à plus de 5 min ; score 50.0/100"
         assert items[2]["reason"].startswith("le plus de passages en retard des lignes : 500 à plus de 5 min")

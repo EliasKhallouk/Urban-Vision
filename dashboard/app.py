@@ -17,23 +17,20 @@ graphiques) et les loaders sont mis en cache 60 secondes.
 
 import base64
 import html
-import io
 import json
 import math
 import sqlite3
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, time as dtime, timedelta
-from functools import lru_cache
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-import pydeck as pdk
-from PIL import Image, ImageDraw
+from carte import carte_arrets, map_payload
 
 import diagnostic as dg
 
@@ -190,15 +187,10 @@ DIST_LABELS = [
 ]
 
 
-# Présélections du time picker, en JOURS de service (les agrégats sont journaliers).
-PRESET_RANGES = [
-    ("1 jour", 1),
-    ("7 jours", 7),
-    ("30 jours", 30),
-    ("90 jours", 90),
-    ("Tout l'historique", None),
-]
-DEFAULT_PRESET = "7 jours"
+MONTHS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
+             "octobre", "novembre", "décembre"]
+ROLLING_DAYS = (7, 30)
+MID_MONTH_DAY = 15
 
 # Index opportunistes : sans eux, chaque requête du dashboard scanne toute la
 # table observations (1,4 M de lignes). CREATE INDEX IF NOT EXISTS est idempotent,
@@ -326,86 +318,122 @@ def _day_midnight(d: datetime.date) -> datetime:
     return datetime.combine(d, dtime(0, 0))
 
 
-def time_range_picker(cutoff_ts: int) -> tuple[int | None, int | None, str]:
-    """Sélecteur de période dans l'esprit du time picker Grafana (popover).
+@dataclass(frozen=True)
+class Period:
+    """Période analysée (jours de service, fin exclue) et période de comparaison."""
+    start: date
+    end: date
+    label: str
+    prev_start: date | None
+    prev_end: date | None
+    prev_label: str | None
 
-    Bouton dans la barre supérieure affichant la plage active. Le popover
-    propose des plages rapides (« Aujourd'hui », « 7 derniers jours », …) et des
-    plages personnalisées, relatives (quantité + unité) ou absolues (Du → Au).
-    La période est exprimée en journées de service complètes. `end_ts` est la
-    borne exclusive (minuit du jour suivant le dernier jour inclus).
+
+def _month_start(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+
+def _next_month(d: date) -> date:
+    return date(d.year + d.month // 12, d.month % 12 + 1, 1)
+
+
+def _previous_month(d: date) -> date:
+    return _month_start(_month_start(d) - timedelta(days=1))
+
+
+def period_options(first_day: date, last_day: date) -> list[str]:
+    """Choix proposés : les mois couverts (du plus récent au plus ancien), puis les autres périodes."""
+    months, m = [], _month_start(last_day)
+    while m >= _month_start(first_day):
+        months.append(f"mois:{m:%Y-%m}")
+        m = _previous_month(m)
+    return months + [f"jours:{n}" for n in ROLLING_DAYS] + ["tout", "dates"]
+
+
+def default_period_choice(first_day: date, last_day: date) -> str:
+    """Mois en cours s'il a au moins MID_MONTH_DAY jours de données, sinon le mois précédent complet."""
+    current = _month_start(last_day)
+    if last_day.day >= MID_MONTH_DAY or _previous_month(current) < _month_start(first_day):
+        return f"mois:{current:%Y-%m}"
+    return f"mois:{_previous_month(current):%Y-%m}"
+
+
+def period_choice_label(choice: str, last_day: date) -> str:
+    if choice.startswith("mois:"):
+        m = date.fromisoformat(choice[5:] + "-01")
+        label = f"{MONTHS_FR[m.month - 1].capitalize()} {m.year}"
+        if _month_start(last_day) == m and _next_month(m) - timedelta(days=1) != last_day:
+            label += f" (jusqu'au {last_day:%d/%m})"
+        return label
+    if choice.startswith("jours:"):
+        return f"{choice[6:]} derniers jours"
+    return "Toute la période collectée" if choice == "tout" else "Dates précises…"
+
+
+def resolve_period(choice: str, first_day: date, last_day: date,
+                   custom: tuple[date, date] | None = None) -> Period:
+    """Bornes de la période choisie et de sa période de comparaison.
+
+    Mois : le mois civil, comparé au mois précédent. N derniers jours : jusqu'au
+    dernier jour de données, comparés aux N jours d'avant. Dates précises :
+    comparées à la même durée juste avant. Toute la période : sans comparaison.
+    La comparaison est omise si elle tombe avant le premier jour de données.
     """
-    today = datetime.fromtimestamp(cutoff_ts).date()
+    if choice.startswith("mois:"):
+        start = date.fromisoformat(choice[5:] + "-01")
+        end = _next_month(start)
+        prev_start, prev_end = _previous_month(start), start
+        label = f"{MONTHS_FR[start.month - 1]} {start.year}"
+        prev_label = f"{MONTHS_FR[prev_start.month - 1]} {prev_start.year}"
+    elif choice.startswith("jours:"):
+        n = int(choice[6:])
+        end = last_day + timedelta(days=1)
+        start = end - timedelta(days=n)
+        prev_start, prev_end = start - timedelta(days=n), start
+        label, prev_label = f"les {n} derniers jours", f"les {n} jours précédents"
+    elif choice == "dates" and custom:
+        start, end = custom[0], custom[-1] + timedelta(days=1)
+        n = (end - start).days
+        prev_start, prev_end = start - timedelta(days=n), start
+        label = f"du {start:%d/%m/%Y} au {custom[-1]:%d/%m/%Y}"
+        prev_label = f"les {n} jours précédents"
+    else:
+        return Period(first_day, last_day + timedelta(days=1), "toute la période collectée", None, None, None)
+    if prev_end <= first_day:
+        prev_start = prev_end = prev_label = None
+    return Period(start, end, label, prev_start, prev_end, prev_label)
 
-    # Bouton d'ouverture : affiche la plage active courante.
-    # Première visite : applique réellement la présélection par défaut ("7 jours"),
-    # sinon range_since/range_end resteraient None et la période serait illimitée.
-    if "range_key" not in st.session_state:
-        st.session_state["range_key"] = DEFAULT_PRESET
-        st.session_state["range_label"] = DEFAULT_PRESET
-        default_days = dict(PRESET_RANGES)[DEFAULT_PRESET]
-        st.session_state["range_since"] = int(
-            (_day_midnight(today) - timedelta(days=default_days - 1)).timestamp())
-        st.session_state["range_end"] = int(
-            (_day_midnight(today) + timedelta(days=1)).timestamp())
-    with st.popover(
-        f"🗓 Période : {st.session_state['range_label']}",
-        use_container_width=False,
-    ):
-        mode = st.radio("Type de plage", ("Plage relative", "Plage absolue"),
-                        horizontal=True, label_visibility="collapsed")
-        st.markdown("**Plages rapides**")
-        presets = st.columns(5)
-        preset_map = dict(PRESET_RANGES)
-        for col, label in zip(presets, [l for l, _ in PRESET_RANGES]):
-            if col.button(label, key=f"preset_{label}", use_container_width=True):
-                days = preset_map[label]
-                if days is None:
-                    st.session_state["range_key"] = label
-                    st.session_state["range_label"] = label
-                    st.session_state["range_since"] = None
-                    st.session_state["range_end"] = None
-                else:
-                    start = _day_midnight(today) - timedelta(days=days - 1)
-                    st.session_state["range_key"] = label
-                    st.session_state["range_label"] = label
-                    st.session_state["range_since"] = int(start.timestamp())
-                    st.session_state["range_end"] = int(
-                        (_day_midnight(today) + timedelta(days=1)).timestamp())
-                st.rerun()
-        st.markdown("---")
-        if mode == "Plage relative":
-            st.markdown("**Plage personnalisée (relative)**")
-            rc1, rc2, rc3 = st.columns([2, 3, 1])
-            qty = rc1.number_input("Quantité", min_value=1, max_value=3650, value=7, key="rel_qty")
-            unit = rc2.selectbox("Unité", ("Jours", "Semaines", "Mois"), key="rel_unit")
-            if rc3.button("Appliquer", key="rel_apply"):
-                days = qty * {"Jours": 1, "Semaines": 7, "Mois": 30}[unit]
-                start = _day_midnight(today) - timedelta(days=days - 1)
-                st.session_state["range_key"] = "custom"
-                st.session_state["range_label"] = f"Étendue ({qty} {unit.lower()})"
-                st.session_state["range_since"] = int(start.timestamp())
-                st.session_state["range_end"] = int(
-                    (_day_midnight(today) + timedelta(days=1)).timestamp())
-                st.rerun()
-        else:
-            st.markdown("**Plage personnalisée (absolue)**")
-            default_start = today - timedelta(days=6)
-            ac1, ac2 = st.columns(2)
-            start_date = ac1.date_input("Du", value=default_start, max_value=today, key="abs_start")
-            end_date = ac2.date_input("Au", value=today, max_value=today, key="abs_end")
-            if start_date > end_date:
-                st.error("La date de début doit précéder la fin.")
-            if st.button("Appliquer", key="abs_apply"):
-                end_day = end_date if start_date <= end_date else start_date
-                st.session_state["range_key"] = "custom"
-                st.session_state["range_label"] = f"{start_date:%d/%m} → {end_day:%d/%m}"
-                st.session_state["range_since"] = int(_day_midnight(start_date).timestamp())
-                st.session_state["range_end"] = int(
-                    (_day_midnight(end_day) + timedelta(days=1)).timestamp())
-                st.rerun()
 
-    return st.session_state.get("range_since"), st.session_state.get("range_end"), st.session_state["range_label"]
+def _ts(d: date | None) -> int | None:
+    return None if d is None else int(_day_midnight(d).timestamp())
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_service_days(_conn, cutoff_ts: int) -> tuple[date, date]:
+    """Premier jour de service agrégé et dernier jour stabilisé (jour du seuil de fraîcheur)."""
+    row = _conn.execute("SELECT MIN(date_service) FROM agg_daily").fetchone()
+    last_day = datetime.fromtimestamp(cutoff_ts).date()
+    first_day = date.fromisoformat(row[0]) if row and row[0] else last_day
+    return min(first_day, last_day), last_day
+
+
+def period_picker(conn, cutoff_ts: int) -> Period:
+    """Choix de la période : un mois complet par défaut, ou une autre période."""
+    first_day, last_day = load_service_days(conn, cutoff_ts)
+    options = period_options(first_day, last_day)
+    if st.session_state.get("period_choice") not in options:
+        st.session_state["period_choice"] = default_period_choice(first_day, last_day)
+    choice = st.selectbox("Période", options, key="period_choice",
+                          format_func=lambda c: period_choice_label(c, last_day),
+                          help="Un mois complet est comparé au mois précédent ; les autres périodes, à la "
+                               "même durée juste avant.")
+    custom = None
+    if choice == "dates":
+        picked = st.date_input("Du … au …", value=(max(first_day, last_day - timedelta(days=13)), last_day),
+                               min_value=first_day, max_value=last_day, format="DD/MM/YYYY", key="period_dates")
+        picked = picked if isinstance(picked, (list, tuple)) else (picked,)
+        custom = (picked[0], picked[-1]) if picked else None
+    return resolve_period(choice, first_day, last_day, custom)
 
 
 def inject_style() -> None:
@@ -730,27 +758,27 @@ def load_engagement_trend(_conn, cutoff_ts: int, since_ts: int | None, end_ts: i
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
-def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+def load_engagement_progression(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                                prev_since_ts: int | None, prev_end_ts: int | None,
                                 commune: str | None = None) -> pd.DataFrame:
-    """Tendance ligne par ligne : la période est coupée en deux moitiés égales
-    (par nombre de jours de service) et la plus récente est comparée à la
-    précédente. Seules les lignes atteignant MIN_OBSERVATIONS dans les deux
-    moitiés sont retenues. Triée par évolution du score croissante (déclin d'abord).
+    """Tendance ligne par ligne : la période comparée à sa période de comparaison
+    (le mois précédent pour un mois). Seules les lignes atteignant
+    MIN_OBSERVATIONS sur les deux périodes sont retenues. Triée par évolution du
+    score croissante (déclin d'abord).
     """
     empty = pd.DataFrame(columns=[
         "ligne", "route_id", "route_type", "mode", "observations", "observations_prev",
         "pct_a_l_heure", "pct_a_l_heure_prev", "pct_arrets_sautes", "score_fiabilite",
         "score_fiabilite_prev", "delta_score", "delta_pct_a_l_heure",
     ])
-    core = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
-    if core.empty:
+    if prev_since_ts is None or prev_end_ts is None:
         return empty
-    dates = list(dict.fromkeys(core["date_service"].sort_values().tolist()))
-    if len(dates) < 2:
+    current = _load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
+    previous = _load_daily_core(_conn, cutoff_ts, prev_since_ts, prev_end_ts, commune=commune)
+    if current.empty or previous.empty:
         return empty
-    mid = dates[len(dates) // 2]
-    prev_half = _daily_to_network(core[core["date_service"] < mid])
-    recent = _daily_to_network(core[core["date_service"] >= mid])
+    prev_half = _daily_to_network(previous)
+    recent = _daily_to_network(current)
     prev_rank = make_ranking(*prev_half)[["route_id", "observations", "pct_a_l_heure",
                                           "pct_arrets_sautes", "score_fiabilite"]]
     prev_rank = prev_rank.rename(columns={c: f"{c}_prev" for c in prev_rank.columns if c != "route_id"})
@@ -1067,51 +1095,6 @@ def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
     ].sort_values("score_fiabilite", ascending=True).reset_index(drop=True)
 
 
-MARKER_SHAPES = ("circle", "square", "triangle", "diamond")
-MARKER_CELL = 48
-STOP_SIZE_METERS = (120.0, 240.0)
-STOP_SIZE_PIXELS = (8, 28)
-
-
-@lru_cache(maxsize=1)
-def marker_atlas() -> tuple[str, dict]:
-    """Atlas PNG des icônes de la carte (forme du mode × couleur de palier) et son index.
-
-    Une seule image pour toutes les icônes : chaque arrêt ne porte qu'une clé
-    courte (`icon_key`), au lieu d'une image par arrêt.
-    """
-    colors = (OLIVE_LEAF, SUNLIT_CLAY, COPPERWOOD)
-    scale, cell = 4, MARKER_CELL
-    atlas = Image.new("RGBA", (cell * len(MARKER_SHAPES), cell * len(colors)), (0, 0, 0, 0))
-    mapping = {}
-    n, m, w = cell * scale, 5 * scale, 3 * scale
-    for j, color in enumerate(colors):
-        for i, shape in enumerate(MARKER_SHAPES):
-            big = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(big)
-            if shape == "circle":
-                draw.ellipse([m, m, n - m, n - m], fill=color, outline="white", width=w)
-            elif shape == "square":
-                draw.rectangle([m + 2 * scale, m + 2 * scale, n - m - 2 * scale, n - m - 2 * scale],
-                               fill=color, outline="white", width=w)
-            elif shape == "triangle":
-                draw.polygon([(n / 2, m), (n - m, n - m), (m, n - m)], fill=color, outline="white", width=w)
-            else:
-                draw.polygon([(n / 2, m), (n - m, n / 2), (n / 2, n - m), (m, n / 2)],
-                             fill=color, outline="white", width=w)
-            atlas.paste(big.resize((cell, cell), Image.LANCZOS), (i * cell, j * cell))
-            mapping[f"{shape}|{color}"] = {"x": i * cell, "y": j * cell, "width": cell, "height": cell,
-                                           "anchorY": cell // 2}
-    buffer = io.BytesIO()
-    atlas.save(buffer, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"), mapping
-
-
-def icon_key(route_type, score: float) -> str:
-    """Clé d'icône de l'atlas : forme du mode et couleur du palier de score."""
-    return f"{mode_marker(route_type)}|{palette_hex(score, 'score')}"
-
-
 GROUP_RADIUS_M = 150.0
 
 
@@ -1217,41 +1200,6 @@ def week_hour_grid_html(table: pd.DataFrame, peak: dict | None = None) -> str:
     tds.append(td(float(table["obs"].sum()), float(table["cnt_gt300"].sum()), "Toute la semaine", "wh-total"))
     body.append(f"<tr><th>Tous</th>{''.join(tds)}</tr>")
     return f'<div class="wh-wrap"><table class="wh-grid">{header}{"".join(body)}</table></div>'
-
-
-def territorial_layer(df: pd.DataFrame) -> pdk.Layer:
-    """Couche pydeck des arrêts (icônes de l'atlas).
-
-    Les arrêts les moins fiables sont dessinés en dernier, donc au-dessus des
-    autres quand des marqueurs se chevauchent.
-
-    La taille est exprimée en mètres (STOP_SIZE_METERS, selon les passages) :
-    les marqueurs grandissent avec le zoom, bornés entre STOP_SIZE_PIXELS pixels
-    pour rester lisibles en vue réseau sans masquer les rues en vue rapprochée.
-
-    pydeck convertit toute chaîne d'argument en expression JavaScript : les
-    constantes texte (`size_units`, `icon_atlas`) sont donc passées entre
-    guillemets simples, sinon deck.gl reçoit une expression invalide.
-    """
-    uri, mapping = marker_atlas()
-    data = df.sort_values("score_fiabilite", ascending=False).reset_index(drop=True)
-    data["icon"] = [icon_key(rt, v) for rt, v in zip(data["route_type"], data["score_fiabilite"])]
-    low, high = STOP_SIZE_METERS
-    data["size"] = low + (data["observations"].clip(50, 400) - 50) / 350 * (high - low)
-    return pdk.Layer(
-        "IconLayer",
-        data=data,
-        id="arrets",
-        get_position=["lon", "lat"],
-        icon_atlas=f"'{uri}'",
-        icon_mapping=mapping,
-        get_icon="icon",
-        get_size="size",
-        size_units="'meters'",
-        size_min_pixels=STOP_SIZE_PIXELS[0],
-        size_max_pixels=STOP_SIZE_PIXELS[1],
-        pickable=True,
-    )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1684,43 +1632,35 @@ def _territorial_score(df: pd.DataFrame) -> float:
     return round(float((df["score_fiabilite"] * df["observations"]).sum() / total), 1)
 
 
-def _territorial_map(df: pd.DataFrame, commune: str | None = None) -> None:
-    """Carte géographique interactive (pydeck) des arrêts.
+def _on_map_click() -> None:
+    state = st.session_state.get("carte_arrets") or {}
+    clicked = state.get("clicked") if hasattr(state, "get") else getattr(state, "clicked", None)
+    if clicked:
+        show_stop(clicked)
+
+
+def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | None,
+                     selected_id: str | None) -> None:
+    """Carte des arrêts (composant `carte.carte_arrets`, deck.gl).
 
     Couleur = palier du score de fiabilité de l'arrêt (Olive Leaf ≥ 80/100,
     Sunlit Clay 50–80, Copperwood < 50) ; forme = mode de la ligne principale
     (● tram, ■ bus, ▲ ferry) ; taille = nombre de passages analysés, qui suit
-    le zoom.
+    le zoom. Les quais d'un même arrêt sont regroupés en vue éloignée et
+    séparés en vue rapprochée ; l'arrêt sélectionné est entouré d'un halo.
     """
-    if df.empty:
+    if stops.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
-    layer = territorial_layer(df)
-    tooltip = {
-        "html": "<b>{stop_name}</b><br/>{detail}<br/>"
-                "Ligne(s) : {lignes}<br/>"
-                "Passages analysés : {observations}<br/><i>Cliquez pour ouvrir la fiche</i>",
-        "style": {"backgroundColor": "#FFFFFF", "color": BLACK_FOREST},
-    }
-    if commune is not None:
-        view = pdk.ViewState(longitude=df["lon"].mean(), latitude=df["lat"].mean(),
-                             zoom=11.5, min_zoom=9)
-    else:
-        view = pdk.ViewState(longitude=-0.579, latitude=44.838, zoom=10, min_zoom=8)
-    st.pydeck_chart(
-        pdk.Deck(layers=[layer], tooltip=tooltip, initial_view_state=view,
-                 map_style="light", height=420),
-        width="stretch", height=420, key="map_arrets",
-        on_select=_on_map_select, selection_mode="single-object",
-    )
+    carte_arrets(map_payload(stops, groups, selected_id, commune, focus_on_load=selected_id is not None),
+                 key="carte_arrets", on_click=_on_map_click)
     st.caption(
-        "Cliquez sur un arrêt pour ouvrir sa fiche diagnostic. Les deux sens d'un même arrêt forment un seul "
-        "marqueur, à la couleur du sens le moins fiable ; l'infobulle et la fiche donnent chaque sens. "
-        f"Lecture non visuelle de la carte : {len(df)} arrêts affichés, "
-        f"score de fiabilité de {df['score_fiabilite'].min():.0f} à "
-        f"{df['score_fiabilite'].max():.0f}/100 "
-        "(Olive Leaf ≥ 80 = bon, Sunlit Clay 50–80 = moyen, Copperwood < 50 = à surveiller ; "
-        "● tram, ■ bus, ▲ ferry)."
+        "Cliquez sur un arrêt pour ouvrir sa fiche. En vue éloignée, les quais d'un même arrêt (les deux sens, "
+        "parfois d'autres lignes) forment un seul marqueur, à la couleur du quai le moins fiable ; en zoomant, "
+        "chaque quai apparaît séparément. Lecture non visuelle de la carte : "
+        f"{len(stops)} quais ({len(groups)} arrêts), score de fiabilité de {stops['score_fiabilite'].min():.0f} à "
+        f"{stops['score_fiabilite'].max():.0f}/100 (Olive Leaf ≥ 80 = bon, Sunlit Clay 50–80 = moyen, "
+        "Copperwood < 50 = à surveiller ; ● tram, ■ bus, ▲ ferry)."
     )
 
 
@@ -1826,6 +1766,7 @@ def show_line(route_id: str) -> None:
     """Ouvre la fiche d'une ligne sur la page « Lignes » et y amène l'utilisateur."""
     st.session_state["line_id"] = route_id
     st.session_state.pop("_from_stop", None)
+    st.session_state.pop("_dir_from_stop", None)
     request_scroll("fiche-ligne")
 
 
@@ -1838,14 +1779,7 @@ def line_from_stop(route_id: str, stop_id: str, stop_name: str) -> None:
     """Depuis une fiche arrêt : ouvre la fiche de la ligne en gardant le chemin du retour."""
     open_line(route_id)
     st.session_state["_from_stop"] = (stop_id, stop_name)
-
-
-def _on_map_select() -> None:
-    state = st.session_state.get("map_arrets") or {}
-    objects = (state.get("selection") or {}).get("objects") or {}
-    picked = objects.get("arrets") or []
-    if picked:
-        show_stop(picked[0].get("stop_id"))
+    st.session_state["_dir_from_stop"] = stop_id
 
 
 def _on_line_pick() -> None:
@@ -2055,9 +1989,18 @@ def _render_stop_when(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         hc_render(daily_status_chart(daily, RISK_PCT_GT300), height=240)
 
 
+def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
+    if prev_label is None:
+        return ("Évolution", "—", "pas de période de comparaison", "neutral")
+    if change is None:
+        return ("Évolution", "—", f"pas de données sur {prev_label}", "neutral")
+    return ("Évolution", f"{change['delta']:+.1f} pts", f"vs {prev_label} ({change['previous']:.0f} / 100)",
+            _delta_polarity(change["delta"]))
+
+
 def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
                       territorial_network: pd.DataFrame, groups: pd.DataFrame, reference_score: float,
-                      commune: str | None = None) -> None:
+                      commune: str | None = None, prev: tuple = (None, None, None)) -> None:
     """Fiche diagnostic d'un arrêt : d'où vient le problème, quand, de quel type, et quelles pistes."""
     daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
     if daily.empty:
@@ -2106,7 +2049,9 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         if not in_slot.empty:
             peak_line = dict(zip(lines["route_id"], lines["ligne"].astype(str))).get(in_slot["route_id"].iloc[0])
     zone = risk_zone(median, pct_gt300) if median is not None else None
-    trend = dg.half_trend(daily)
+    prev_since, prev_end, prev_label = prev
+    change = (dg.score_change(daily, load_stop_daily(conn, cutoff, prev_since, prev_end, stop_id))
+              if prev_since is not None else None)
     peers = territorial_network.loc[territorial_network["observations"] >= MIN_OBSERVATIONS, "score_fiabilite"]
     rank = dg.percentile_rank(score, peers)
     alerts = _alerts_overlapping(load_perturbation_history(conn, since_ts, end_ts, cutoff),
@@ -2146,12 +2091,10 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                    width="stretch")
     cols[-1 if siblings else 0].button("↑ Revenir à la carte", key="back_to_map", on_click=request_scroll,
                                        args=("carte",))
-    delta = trend["delta"] if trend else None
     render_kpis([
         ("Score de fiabilité", f"{score:.0f} / 100", f"réseau : {reference_score:.0f} / 100",
          palette_kpi_tier({"fiability": score}, "fiability")),
-        ("Évolution", f"{delta:+.1f} pts" if delta is not None else "—", "moitié récente vs précédente",
-         _delta_polarity(delta)),
+        _evolution_kpi(change, prev_label),
         ("Passages à plus de 5 min", f"{pct_gt300:.1f} %", f"{cnt_gt300 / max(days, 1):.0f} par jour en moyenne",
          palette_kpi_tier({"retard_5min": pct_gt300}, "retard_5min")),
         ("Arrêts sautés", f"{pct_skip:.1f} %", f"{skipped:,} passages non desservis".replace(",", " "),
@@ -2209,9 +2152,31 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         _render_alerts(alerts)
 
 
+LINE_DIRECTION_KEYS = ("line_dir_Retards : où ?", "line_dir_Service non rendu", "line_when_dir")
+
+
+def stop_direction_in(per_dir: dict, stop_id: str | None):
+    """Direction de la ligne dans laquelle se trouve l'arrêt (la plus observée s'il est dans les deux)."""
+    if not stop_id:
+        return None
+    best, best_obs = None, -1
+    for d, info in per_dir.items():
+        rows = info["profile"][info["profile"]["stop_id"] == stop_id]
+        if not rows.empty and int(rows["obs"].iloc[0]) > best_obs:
+            best, best_obs = d, int(rows["obs"].iloc[0])
+    return best
+
+
+def _direction_choice(per_dir: dict, default, key: str):
+    dirs = list(per_dir)
+    if st.session_state.get(key) not in dirs:
+        st.session_state[key] = default
+    return st.radio("Direction", dirs, horizontal=True, format_func=lambda d: per_dir[d]["terminus"], key=key)
+
+
 def _render_line_when(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
                       core: pd.DataFrame, hourly: pd.DataFrame, peak: dict, per_dir: dict, main_dir,
-                      commune: str | None) -> None:
+                      commune: str | None, focus_stop: str | None = None) -> None:
     st.markdown("#### À quel moment de la semaine ?")
     table = dg.week_hour_table(hourly)
     if table.empty:
@@ -2223,15 +2188,14 @@ def _render_line_when(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         _verdict(html.escape(sentence))
     if per_dir:
         st.markdown("#### À ce moment-là, où le retard s'aggrave-t-il le long de la ligne ?")
-        dirs = list(per_dir)
-        chosen = st.radio("Direction", dirs, index=dirs.index(main_dir), horizontal=True,
-                          format_func=lambda d: per_dir[d]["terminus"], key="line_when_dir")
+        chosen = _direction_choice(per_dir, main_dir, "line_when_dir")
         choice = _slot_selectors(table, peak, f"slot_line_{route_id}")
         if choice:
             wd, hr = choice
             profile = per_dir[chosen]["profile"]
             sp = dg.slot_profile(load_route_hourly_stops(conn, cutoff, since_ts, end_ts, route_id), profile, wd, hr)
-            hc_render(slot_profile_chart(sp, dg.slot_label(wd, hr), commune_stop_ids=_commune_ids(profile, commune),
+            hc_render(slot_profile_chart(sp, dg.slot_label(wd, hr), highlight_stop_id=focus_stop,
+                                         commune_stop_ids=_commune_ids(profile, commune),
                                          commune_label=commune), height=340)
             st.markdown(dg.slot_hotspot_sentence(dg.slot_hotspot(sp)))
             st.caption("Courbe pleine : retard moyen des passages de chaque arrêt à ce moment-là ; tirets : le "
@@ -2243,7 +2207,8 @@ def _render_line_when(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
 
 
 def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
-                      ranking_net: pd.DataFrame, disturbed: set, commune: str | None = None) -> None:
+                      ranking_net: pd.DataFrame, disturbed: set, commune: str | None = None,
+                      prev: tuple = (None, None, None)) -> None:
     """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
     row = ranking_net[ranking_net["route_id"] == route_id]
     if row.empty:
@@ -2255,7 +2220,9 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                             & (ranking_net["observations"] >= MIN_OBSERVATIONS)]
     mode_median = float(same_mode["score_fiabilite"].median()) if not same_mode.empty else None
     core = _load_daily_core(conn, cutoff, since_ts, end_ts, route_id=route_id)
-    trend = dg.half_trend(core) if not core.empty else None
+    prev_since, prev_end, prev_label = prev
+    change = (dg.score_change(core, _load_daily_core(conn, cutoff, prev_since, prev_end, route_id=route_id))
+              if prev_since is not None and not core.empty else None)
     hourly = _load_hourly_core(conn, cutoff, since_ts, end_ts, route_id=route_id)
     periods = dg.period_table(hourly)
     weekdays = dg.weekday_table(core)
@@ -2304,19 +2271,22 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     )
     scroll_if_requested("fiche-ligne")
     back = st.session_state.get("_from_stop")
+    focus_stop = back[0] if back else None
+    from_dir = stop_direction_in(per_dir, focus_stop)
+    if st.session_state.pop("_dir_from_stop", None) and from_dir is not None:
+        for key in LINE_DIRECTION_KEYS:
+            st.session_state[key] = from_dir
     if back:
         st.button(f"← Revenir à l'arrêt {back[1]}", key="back_to_stop", on_click=open_stop, args=(back[0],))
     if route_id in disturbed:
         st.warning(CAUTION_TEXT)
-    delta = trend["delta"] if trend else None
     ref = f"réseau : {network_score(ranking_net):.0f}"
     if mode_median is not None:
         ref += f" · médiane {str(line['mode']).lower()} : {mode_median:.0f}"
     render_kpis([
         ("Score de fiabilité", f"{line['score_fiabilite']:.0f} / 100", ref,
          palette_kpi_tier({"fiability": line["score_fiabilite"]}, "fiability")),
-        ("Évolution", f"{delta:+.1f} pts" if delta is not None else "—", "moitié récente vs précédente",
-         _delta_polarity(delta)),
+        _evolution_kpi(change, prev_label),
         ("Points perdus : retards", f"{breakdown['lost_delay']:.0f}",
          f"{line['pct_retard_5min']:.1f} % de passages à plus de 5 min",
          palette_kpi_tier({"retard_5min": line["pct_retard_5min"]}, "retard_5min")),
@@ -2336,16 +2306,14 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         st.info("L'analyse tronçon par tronçon est en cours de constitution par le collecteur."
                 if not seg_ok else "Pas de données de tronçon pour cette ligne sur la période.")
     elif view in ("Retards : où ?", "Service non rendu"):
-        dirs = list(per_dir)
         default = main_dir if view == "Retards : où ?" else skip_dir
-        chosen = st.radio("Direction", dirs, index=dirs.index(default), horizontal=True,
-                          format_func=lambda d: per_dir[d]["terminus"], key=f"line_dir_{view}")
+        chosen = _direction_choice(per_dir, default, f"line_dir_{view}")
         d = per_dir[chosen]
         ids = _commune_ids(d["profile"], commune)
         if view == "Retards : où ?":
             hot = {h["stop_id"] for h in d["origin"]["hotspots"]}
-            hc_render(line_profile_chart(d["profile"], hotspot_stop_ids=hot, commune_stop_ids=ids,
-                                         commune_label=commune), height=360)
+            hc_render(line_profile_chart(d["profile"], highlight_stop_id=focus_stop, hotspot_stop_ids=hot,
+                                         commune_stop_ids=ids, commune_label=commune), height=360)
             labels = {"départ": "retard déjà présent dès le départ", "localisé": "retard formé sur quelques tronçons",
                       "diffus": "retard réparti sur tout le parcours", "aucun": "pas de retard notable"}
             st.caption(f"Tous les arrêts de la ligne, sur tout le réseau. {d['terminus'].capitalize()} : "
@@ -2363,13 +2331,15 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                 hc_render(cancellations_chart(canc[canc["cancelled"] > 0]), height=240)
             st.markdown("#### Arrêts sautés le long de la ligne")
             render_tier_legend("Arrêts sautés", "bon", "à surveiller", invert=True)
-            hc_render(skip_profile_chart(d["profile"], commune_stop_ids=ids, commune_label=commune), height=300)
+            hc_render(skip_profile_chart(d["profile"], commune_stop_ids=ids, commune_label=commune,
+                                         highlight_stop_id=focus_stop), height=300)
             labels = {"extrémités": "surtout aux extrémités (prises ou fins de service en cours de ligne)",
                       "bloc": "en bloc sur une section (déviation probable)",
                       "dispersé": "dispersés le long de la ligne", "aucun": "rares"}
             st.caption(f"{d['terminus'].capitalize()} : arrêts sautés {labels[d['skips']['verdict']]}.{commune_note}")
     elif view == "Quand ?":
-        _render_line_when(conn, cutoff, since_ts, end_ts, route_id, core, hourly, peak, per_dir, main_dir, commune)
+        _render_line_when(conn, cutoff, since_ts, end_ts, route_id, core, hourly, peak, per_dir, main_dir, commune,
+                          focus_stop)
     else:
         _render_zone(line["retard_median_s"], float(line["pct_retard_5min"]), None)
         st.markdown("#### Perturbations signalées")
@@ -2407,6 +2377,9 @@ class PageContext:
     ranking_net: pd.DataFrame
     disturbed: set
     total: int
+    period: Period
+    prev_since_ts: int | None
+    prev_end_ts: int | None
 
 
 def _verdict(text: str) -> None:
@@ -2418,7 +2391,18 @@ def _tier_word(score: float) -> str:
         palette_kpi_tier({"fiability": score}, "fiability")]
 
 
-def _render_watchlist(items: list[dict]) -> None:
+def watchlist_rule(prev_label: str | None) -> str:
+    """Règle de choix du bloc « À surveiller », affichée sous les cartes et dans la méthode."""
+    decline = (f"la ligne dont la baisse de score par rapport à {prev_label} pèse le plus (baisse d'au moins "
+               "5 points, pondérée par les passages)" if prev_label else
+               "la ligne dont la baisse de score pèse le plus (seulement si une période de comparaison existe)")
+    return ("Comment ces éléments sont choisis : **ligne en baisse** = " + decline + " ; **arrêt** = l'arrêt "
+            "qui a le plus de passages à plus de 5 min parmi ceux dont le score est inférieur à 80/100 (les "
+            "quais d'un même arrêt sont comptés ensemble) ; **ligne** = la ligne qui a le plus de passages à "
+            "plus de 5 min parmi celles sous 80/100.")
+
+
+def _render_watchlist(items: list[dict], prev_label: str | None = None) -> None:
     if not items:
         return
     st.markdown("#### À surveiller")
@@ -2434,6 +2418,7 @@ def _render_watchlist(items: list[dict]) -> None:
             )
             opener = open_line if item["kind"] == "ligne" else show_stop
             st.button("Ouvrir la fiche", key=f"watch_{i}", on_click=opener, args=(item["id"],))
+    st.caption(watchlist_rule(prev_label))
 
 
 def render_page_territory(c: PageContext) -> None:
@@ -2454,8 +2439,10 @@ def render_page_territory(c: PageContext) -> None:
                  f'({_tier_word(reference)}). Les points ci-dessous méritent une attention en priorité ; '
                  f'cliquez sur un arrêt de la carte pour comprendre d’où vient son problème.')
     groups = grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
-    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
-    _render_watchlist(dg.watchlist(prog, c.visible_ranking, groups, MIN_OBSERVATIONS))
+    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts,
+                                       commune=c.commune)
+    _render_watchlist(dg.watchlist(prog, c.visible_ranking, groups, MIN_OBSERVATIONS, prev_label=c.period.prev_label),
+                      c.period.prev_label)
 
     st.markdown('<div class="carte-anchor"></div>', unsafe_allow_html=True)
     scroll_if_requested("carte")
@@ -2473,12 +2460,12 @@ def render_page_territory(c: PageContext) -> None:
     st.session_state["stop_search"] = current
     st.selectbox("Chercher un arrêt", options, key="stop_search", placeholder="Nom de l'arrêt…",
                  format_func=lambda sid: labels.get(sid, sid), on_change=_on_stop_search)
-    _territorial_map(groups, c.commune)
+    _territorial_map(territorial, groups, c.commune, st.session_state.get("stop_id"))
     if st.session_state.get("stop_id"):
         render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
                           territorial_network,
                           grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None),
-                          reference, c.commune)
+                          reference, c.commune, (c.prev_since_ts, c.prev_end_ts, c.period.prev_label))
 
     if c.commune is None:
         with st.expander("Comparer les communes"):
@@ -2582,7 +2569,8 @@ def render_page_lines(c: PageContext) -> None:
                  format_func=lambda rid: line_labels.get(rid, rid), on_change=_on_line_pick)
     if st.session_state.get("line_id"):
         render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["line_id"],
-                          c.ranking_net, c.disturbed, c.commune)
+                          c.ranking_net, c.disturbed, c.commune,
+                          (c.prev_since_ts, c.prev_end_ts, c.period.prev_label))
 
 
 def _period_verdict(period: pd.DataFrame) -> str | None:
@@ -2645,27 +2633,28 @@ def render_page_when(c: PageContext) -> None:
     if trend.empty:
         st.info("Aucune donnée quotidienne sur ce périmètre pour la période.")
         return
-    dates = list(dict.fromkeys(trend["date_service"].sort_values().tolist()))
-    if len(dates) >= 2:
-        mid = dates[len(dates) // 2]
-        recent, prev = trend[trend["date_service"] >= mid], trend[trend["date_service"] < mid]
+    previous = (load_engagement_trend(c.conn, c.cutoff, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
+                if c.prev_since_ts is not None else pd.DataFrame())
 
-        def _weighted_mean(w: pd.Series, v: pd.Series) -> float:
-            return float((w * v).sum()) / max(float(w.sum()), 1)
+    def _weighted_mean(part: pd.DataFrame, col: str) -> float:
+        return float((part["observations"] * part[col]).sum()) / max(float(part["observations"].sum()), 1)
 
-        r_ponct = _weighted_mean(recent["observations"], recent["pct_a_l_heure"])
-        p_ponct = _weighted_mean(prev["observations"], prev["pct_a_l_heure"])
-        delta_ponct = r_ponct - p_ponct
-        r_skip = _weighted_mean(recent["observations"], recent["pct_arrets_sautes"])
-        p_skip = _weighted_mean(prev["observations"], prev["pct_arrets_sautes"])
+    ponct = _weighted_mean(trend, "pct_a_l_heure")
+    skip = _weighted_mean(trend, "pct_arrets_sautes")
+    if previous.empty:
+        missing = (f"pas de données sur {c.period.prev_label}" if c.period.prev_label
+                   else "pas de période de comparaison")
+        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{ponct:.1f} %</b> et '
+                 f'les arrêts sautés de <b>{skip:.2f} %</b> ({missing}).')
+    else:
+        p_ponct, p_skip = _weighted_mean(previous, "pct_a_l_heure"), _weighted_mean(previous, "pct_arrets_sautes")
+        delta_ponct = ponct - p_ponct
         arrow = "▲" if delta_ponct >= 0 else "▼"
         delta_color = OLIVE_LEAF if delta_ponct >= 0 else COPPERWOOD
-        _verdict(f'Sur la moitié la plus récente de la période, la ponctualité (≤ 5 min) est de '
-                 f'<b>{r_ponct:.1f} %</b>, soit <span style="color:{delta_color}"><b>{arrow}'
-                 f'{abs(delta_ponct):.1f} point(s)</b></span> par rapport à la moitié précédente. Les arrêts '
-                 f'sautés passent de <b>{p_skip:.2f} %</b> à <b>{r_skip:.2f} %</b>.')
-    else:
-        st.caption("La comparaison récent / précédent apparaîtra dès que plusieurs jours de service seront couverts.")
+        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{ponct:.1f} %</b>, soit '
+                 f'<span style="color:{delta_color}"><b>{arrow}{abs(delta_ponct):.1f} point(s)</b></span> par '
+                 f'rapport à {html.escape(c.period.prev_label)}. Les arrêts sautés passent de '
+                 f'<b>{p_skip:.2f} %</b> à <b>{skip:.2f} %</b>.')
     st.markdown("#### Ponctualité jour par jour")
     hc_render(engagement_trend_chart(trend, "pct_a_l_heure"), height=340)
     with st.expander("Suivre un autre indicateur"):
@@ -2674,27 +2663,29 @@ def render_page_when(c: PageContext) -> None:
         metric_label = st.selectbox("Indicateur", [label for label, _ in trend_metrics], key="trend_metric")
         hc_render(engagement_trend_chart(trend, dict(trend_metrics)[metric_label]), height=340)
     st.markdown("#### Lignes qui se dégradent ou s'améliorent")
-    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts,
+                                       commune=c.commune)
     if prog.empty:
-        st.info(f"Aucune ligne ne cumule au moins {MIN_OBSERVATIONS} passages sur chacune des deux moitiés "
-                "de la période.")
+        st.info(f"Comparaison impossible : aucune ligne ne cumule au moins {MIN_OBSERVATIONS} passages sur "
+                f"{c.period.label} et sur {c.period.prev_label or 'une période précédente'}.")
         return
     worst, best = prog.iloc[0], prog.iloc[-1]
-    st.markdown(f"La plus forte dégradation concerne la **ligne {worst['ligne']}** "
-                f"({worst['delta_score']:+.1f} points de score), la meilleure progression la **ligne "
-                f"{best['ligne']}** ({best['delta_score']:+.1f} points).")
+    st.markdown(f"Par rapport à {c.period.prev_label}, la plus forte dégradation concerne la **ligne "
+                f"{worst['ligne']}** ({worst['delta_score']:+.1f} points de score), la meilleure progression la "
+                f"**ligne {best['ligne']}** ({best['delta_score']:+.1f} points).")
     hc_render(engagement_progression_chart(prog), height=330)
     with st.expander("Détail par ligne"):
         table = prog[["ligne", "mode", "score_fiabilite_prev", "score_fiabilite", "delta_score",
                       "pct_a_l_heure", "pct_arrets_sautes", "observations"]].copy()
-        table.columns = ["Ligne", "Mode", "Score précédent", "Score récent", "Évolution",
-                         "Ponctualité récente", "Arrêts sautés récents", "Passages récents"]
+        table.columns = ["Ligne", "Mode", "Score avant", "Score", "Évolution", "Ponctualité", "Arrêts sautés",
+                         "Passages"]
         st.dataframe(table.style.map(_delta_style, subset=["Évolution"]).format({
-            "Score précédent": "{:.1f}", "Score récent": "{:.1f}", "Évolution": lambda x: f"{x:+.1f} pts",
-            "Ponctualité récente": "{:.1f} %", "Arrêts sautés récents": "{:.2f} %",
-            "Passages récents": fmt_int}), width="stretch", hide_index=True, height=330)
-        st.caption(f"Score de fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil : "
-                   f"{MIN_OBSERVATIONS} passages dans chacune des deux moitiés.")
+            "Score avant": "{:.1f}", "Score": "{:.1f}", "Évolution": lambda x: f"{x:+.1f} pts",
+            "Ponctualité": "{:.1f} %", "Arrêts sautés": "{:.2f} %",
+            "Passages": fmt_int}), width="stretch", hide_index=True, height=330)
+        st.caption(f"« Score avant » : {c.period.prev_label} ; les autres colonnes : {c.period.label}. Score de "
+                   f"fiabilité = ponctualité ≤ 5 min − 2 × arrêts sautés (borné 0–100). Seuil : "
+                   f"{MIN_OBSERVATIONS} passages sur chacune des deux périodes.")
 
 
 def render_page_network(c: PageContext) -> None:
@@ -2884,6 +2875,9 @@ def _render_method(c: PageContext) -> None:
         "la moitié.\n"
         "- **Points perdus** : le score part de 100 ; les retards de plus de 5 min et les arrêts sautés "
         "(comptés double) en retirent. La fiche ligne dit lequel des deux pèse le plus.\n"
+        "- **Évolution** : le score de la période comparé à celui de la période précédente (le mois précédent "
+        "pour un mois, la même durée juste avant pour les autres périodes).\n"
+        "- **À surveiller** : " + watchlist_rule(c.period.prev_label).split(" : ", 1)[1] + "\n"
         "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions. Les courses "
         "supprimées absentes du flux ne sont pas comptées dans le score ; la fiche ligne les montre à part."
     )
@@ -3000,7 +2994,7 @@ def main() -> None:
         st.session_state.setdefault("commune_idx", 0)
 
         # ---- Barre supérieure persistante : identité (sidebar) + commune + plage.
-        tb = st.columns([0.42, 0.02, 1.0, 0.02, 0.8])
+        tb = st.columns([0.62, 0.04, 1.0, 0.04, 0.8])
         with tb[0]:
             st.markdown(
                 '<div class="topbar-logo"><span class="dot"></span>Observatoire de la fiabilité</div>',
@@ -3019,7 +3013,8 @@ def main() -> None:
         commune = None if selected_commune_label.startswith("Réseau complet") else selected_commune_label
 
         with tb[4]:
-            since_ts, end_ts, range_label = time_range_picker(cutoff)
+            period = period_picker(conn, cutoff)
+        since_ts, end_ts = _ts(period.start), _ts(period.end)
 
         scheduled, skipped = load_network_data(conn, cutoff, since_ts, end_ts, commune=commune)
         if scheduled.empty:
@@ -3062,7 +3057,7 @@ def main() -> None:
         ranking_net = ranking if commune is None else make_ranking(
             *load_network_data(conn, cutoff, since_ts, end_ts, commune=None))
         ctx = PageContext(conn, cutoff, since_ts, end_ts, commune, ranking, visible_ranking,
-                          ranking_net, disturbed, total)
+                          ranking_net, disturbed, total, period, _ts(period.prev_start), _ts(period.prev_end))
         PAGES[page](ctx)
     finally:
         conn.close()

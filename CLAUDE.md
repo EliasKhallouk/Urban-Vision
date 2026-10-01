@@ -38,7 +38,9 @@ Pipeline (doc § 2, § 8): TBM GTFS-RT feeds → collectors → one SQLite DB (W
 - `analyze.py` / `daily_line_stats` is a legacy chain that neither the dashboard nor the reports read.
 - `veille_visiteurs.py` is stdlib-only and runs from root cron on the VM over nginx logs (doc § 17.2); unrelated to the transit pipeline.
 
-pydeck gotcha: every string passed to `pdk.Layer(...)` is turned into a JavaScript expression (`"@@=..."`), so string constants such as `size_units` or `icon_atlas` must be wrapped in single quotes (`"'meters'"`); `tests/test_app_helpers.py` checks the serialized layer.
+Stop map: `dashboard/carte.py` registers an `st.components.v2` component whose JavaScript (`dashboard/carte_arrets.js`) loads deck.gl and MapLibre from jsDelivr on Carto's vector Positron style (Carto raster tiles now require an API key). Zoom-dependent grouping, tooltip, selection halo and fly-to live in the JS; Python only builds the payload (`map_payload`, unit-tested in `tests/test_carte.py`) and receives the clicked stop through `on_clicked_change`. After editing the `.js`, restart Streamlit: the module keeps the old script in memory.
+
+Periods: `period_picker` (month by default) returns a `Period` with a comparison period (previous month, or the same length just before); every "évolution" (panel KPIs, watchlist, "Dans le temps") compares against it.
 
 Modules are not a package: `dashboard/`, `reports/` and `src/scripts/` import each other by inserting their directories into `sys.path` (same in `tests/conftest.py`), so imports look like `import db`, `import app`, `from palette import ...`.
 

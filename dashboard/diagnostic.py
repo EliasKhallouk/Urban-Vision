@@ -282,32 +282,24 @@ def concentration(table: pd.DataFrame, label_col: str) -> dict | None:
     return {"label": worst[label_col], "pct": worst_pct, "rest_pct": rest_pct}
 
 
-def half_trend(daily: pd.DataFrame) -> dict | None:
-    """Score de la moitié récente de la période comparé à la moitié précédente.
-
-    Même découpage que la page « Évolution » (moitiés égales en jours de
-    service). Colonnes attendues : date_service, obs, cnt_le300, skipped, eligible.
-    """
+def period_score(daily: pd.DataFrame | None) -> float | None:
+    """Score de fiabilité d'un ensemble d'agrégats (colonnes obs, cnt_le300, skipped, eligible)."""
     if daily is None or daily.empty:
         return None
-    dates = sorted(daily["date_service"].unique())
-    if len(dates) < 2:
+    obs = float(daily["obs"].sum())
+    if obs <= 0:
         return None
-    mid = dates[len(dates) // 2]
+    eligible = float(daily["eligible"].sum())
+    skip = float(daily["skipped"].sum()) / eligible * 100 if eligible else 0.0
+    return reliability_score(float(daily["cnt_le300"].sum()) / obs * 100, skip)
 
-    def _score(part: pd.DataFrame) -> float | None:
-        obs = float(part["obs"].sum())
-        if obs <= 0:
-            return None
-        eligible = float(part["eligible"].sum())
-        skip = float(part["skipped"].sum()) / eligible * 100 if eligible else 0.0
-        return reliability_score(float(part["cnt_le300"].sum()) / obs * 100, skip)
 
-    recent = _score(daily[daily["date_service"] >= mid])
-    previous = _score(daily[daily["date_service"] < mid])
-    if recent is None or previous is None:
+def score_change(current: pd.DataFrame | None, previous: pd.DataFrame | None) -> dict | None:
+    """Score de la période comparé à celui de sa période de comparaison (mois précédent pour un mois)."""
+    now, before = period_score(current), period_score(previous)
+    if now is None or before is None:
         return None
-    return {"recent": recent, "previous": previous, "delta": recent - previous}
+    return {"current": now, "previous": before, "delta": now - before}
 
 
 def percentile_rank(value: float, values: pd.Series) -> float | None:
@@ -601,12 +593,13 @@ WATCH_SCORE_BELOW = 80.0
 
 
 def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
-              stops: pd.DataFrame | None, min_obs: int, limit: int = 3) -> list[dict]:
+              stops: pd.DataFrame | None, min_obs: int, limit: int = 3,
+              prev_label: str | None = None) -> list[dict]:
     """Points à surveiller en priorité, sans notification : au plus `limit` éléments.
 
     1. parmi les lignes dont le score baisse d'au moins WATCH_DECLINE_POINTS points
-       entre les deux moitiés de la période, celle dont la baisse pèse le plus
-       (baisse × passages récents) ;
+       par rapport à la période de comparaison (`prev_label`), celle dont la baisse
+       pèse le plus (baisse × passages de la période) ;
     2. l'arrêt qui cumule le plus de passages > 5 min parmi ceux sous
        WATCH_SCORE_BELOW (avec `n_sens`, un arrêt regroupé sur plusieurs sens est
        cité une fois, avec son sens le moins fiable) ;
@@ -621,7 +614,8 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
             worst = declining.loc[weight.idxmax()]
             items.append({
                 "kind": "ligne", "id": worst["route_id"], "title": f"Ligne {worst['ligne']}",
-                "reason": (f"score en baisse de {abs(float(worst['delta_score'])):.1f} points "
+                "reason": (f"score en baisse de {abs(float(worst['delta_score'])):.1f} points"
+                           f"{' par rapport à ' + prev_label if prev_label else ''} "
                            f"({float(worst['score_fiabilite_prev']):.1f} → {float(worst['score_fiabilite']):.1f})"),
             })
     if stops is not None and not stops.empty:
