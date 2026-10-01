@@ -22,7 +22,7 @@ import math
 import sqlite3
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
@@ -1047,6 +1047,53 @@ def load_open_dataset(_conn, name: str, cutoff_ts: int, since_ts: int | None,
     import export_open_data as _open_data
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
     return pd.DataFrame(_open_data.dataset_rows(_conn, name, since=since_day, end=end_day))
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_method_v2(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
+                   commune: str | None = None, route_id: str | None = None) -> dict:
+    """Indicateurs de la méthode 2.0 (en test) pour la période, via src/scripts/indicateurs."""
+    src_dir = Path(__file__).resolve().parents[1] / "src" / "scripts"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    import indicateurs as _ind
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    communes = [commune] if commune else None
+    routes = [route_id] if route_id else None
+    result = _ind.indicators(_conn, since_day, end_day, routes=routes, communes=communes)
+    flags = _ind.quality_flags(_conn, since_day, end_day)
+    regularity = _ind.route_regularity(_conn, since_day, end_day, communes=communes, routes=routes)
+    return {
+        **asdict(result),
+        "disponible": result.disponible,
+        "jours_degrades": sorted(d for d, flag in flags.items() if flag == "degrade"),
+        "attente_excedentaire": regularity[route_id]["attente_excedentaire"] if route_id in regularity else None,
+    }
+
+
+def _short_days(days: list[str]) -> str:
+    return ", ".join(datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m") for d in days) or "aucun"
+
+
+def _with_margin(value: float, margin: float | None) -> str:
+    return f"{value:.1f}" if margin is None else f"{value:.1f} ± {margin:.1f}"
+
+
+def method_v2_caption(v2: dict | None, route_id: str | None = None) -> str | None:
+    """Phrase de la fiche ligne sur la méthode 2.0 (en test), ou None si rien à dire."""
+    if not v2:
+        return None
+    if route_id is not None and route_id in v2["lignes_ecartees"]:
+        return (f"Méthode 2.0 (en test) : ligne non évaluée, temps réel douteux "
+                f"({v2['lignes_ecartees'][route_id]:.0f} % de retards exactement nuls).")
+    if not v2["disponible"]:
+        return None
+    parts = [f"score {_with_margin(v2['score'], v2['marge'])} / 100",
+             f"ponctualité stricte (de −1 à +5 min) {v2['ponctualite']:.1f} %",
+             f"service assuré {v2['service']:.1f} %"]
+    if v2["attente_excedentaire"] is not None:
+        parts.append(f"attente excédentaire {format_seconds(v2['attente_excedentaire'], signed=True)}")
+    return "Méthode 2.0 (en test) : " + " · ".join(parts) + "."
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -2288,6 +2335,9 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "),
          "neutral"),
     ])
+    v2_text = method_v2_caption(load_method_v2(conn, cutoff, since_ts, end_ts, route_id=route_id), route_id)
+    if v2_text:
+        st.caption(v2_text + " Voir « Données & méthode ».")
     _render_brief(summary, hints)
 
     view = st.segmented_control("Détail", LINE_VIEWS, default=LINE_VIEWS[0], key="line_view",
@@ -2843,6 +2893,36 @@ def render_page_perturbations(c: PageContext) -> None:
     st.markdown(f'<div class="section-note">{CAUTION_TEXT}</div>', unsafe_allow_html=True)
 
 
+def _render_method_v2(c: PageContext) -> None:
+    st.markdown("#### Méthode 2.0 (en test)")
+    st.markdown(
+        "Une mesure plus exigeante est calculée en parallèle du score de fiabilité, sans le remplacer : "
+        "un passage n'est **à l'heure** qu'entre 1 min d'avance et 5 min de retard, les **courses "
+        "supprimées** (nettes des courses ajoutées le même jour sur la ligne) comptent comme des passages "
+        "non assurés, et chaque résultat a une **marge** à 95 % (variabilité d'un jour à l'autre). Les jours "
+        "où la collecte est incomplète et les lignes au temps réel douteux sont écartés. Les rapports "
+        "mensuels l'affichent à côté du score actuel ; le choix de la méthode de référence viendra après "
+        "plusieurs mois de comparaison."
+    )
+    v2 = load_method_v2(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    if not v2["disponible"]:
+        st.info("Indicateurs 2.0 indisponibles pour cette période (historique en cours de calcul ou aucun "
+                "jour complet).")
+        return
+    render_kpis([
+        ("Score 2.0 (test)", _with_margin(v2["score"], v2["marge"]), "assurés et à l'heure / attendus",
+         palette_kpi_tier({"fiability": v2["score"]}, "fiability")),
+        ("Ponctualité stricte", f"{_with_margin(v2['ponctualite'], v2['marge_ponctualite'])} %",
+         "de −1 à +5 min", palette_kpi_tier({"ponctualite": v2["ponctualite"]}, "ponctualite")),
+        ("Service assuré", f"{v2['service']:.1f} %", "ni course supprimée, ni arrêt sauté", "neutral"),
+        ("Départs en avance", f"{v2['avance']:.1f} %", "plus d'une minute", "neutral"),
+    ])
+    discarded = ", ".join(f"{r} ({z:.0f} % de retards nuls)" for r, z in sorted(v2["lignes_ecartees"].items()))
+    st.caption(f"{v2['jours']} jour(s) évalué(s). Jours exclus (collecte incomplète) : {_short_days(v2['jours_exclus'])}. "
+               f"Jours à collecte dégradée (conservés) : {_short_days(v2['jours_degrades'])}. "
+               f"Lignes écartées (temps réel douteux) : {discarded or 'aucune'}.")
+
+
 def _render_method(c: PageContext) -> None:
     st.markdown("### Ce que mesure ce tableau de bord")
     st.markdown("Les données viennent des flux GTFS-RT **TripUpdates** TBM. Une observation est considérée "
@@ -2873,6 +2953,7 @@ def _render_method(c: PageContext) -> None:
         "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions. Les courses "
         "supprimées absentes du flux ne sont pas comptées dans le score ; la fiche ligne les montre à part."
     )
+    _render_method_v2(c)
     st.markdown(
         "<div class='section-note'><b>Pourquoi un tram peut-il avoir des arrêts sautés ?</b> "
         "Un événement <code>SKIPPED</code> signifie que le véhicule ne dessert pas un arrêt alors "

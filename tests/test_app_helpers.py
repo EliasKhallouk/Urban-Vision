@@ -438,3 +438,25 @@ class TestDirectionDepuisUnArret:
         assert app_mod.stop_direction_in(per_dir, "b") == 1
         assert app_mod.stop_direction_in(per_dir, "z") is None
         assert app_mod.stop_direction_in(per_dir, None) is None
+
+
+class TestMethodV2Caption:
+    def _v2(self, **kw):
+        base = {"disponible": True, "score": 72.34, "marge": 2.1, "ponctualite": 80.0, "service": 93.25,
+                "attente_excedentaire": 45.0, "lignes_ecartees": {}}
+        return {**base, **kw}
+
+    def test_phrase_complete(self):
+        assert app_mod.method_v2_caption(self._v2(), "A") == (
+            "Méthode 2.0 (en test) : score 72.3 ± 2.1 / 100 · ponctualité stricte (de −1 à +5 min) 80.0 % · "
+            "service assuré 93.2 % · attente excédentaire +45 s.")
+
+    def test_sans_marge_ni_regularite(self):
+        text = app_mod.method_v2_caption(self._v2(marge=None, attente_excedentaire=None), "A")
+        assert "score 72.3 / 100" in text
+        assert "attente" not in text
+
+    def test_ligne_ecartee_et_indisponible(self):
+        assert "non évaluée" in app_mod.method_v2_caption(self._v2(disponible=False, lignes_ecartees={"A": 31.0}), "A")
+        assert app_mod.method_v2_caption(self._v2(disponible=False), "A") is None
+        assert app_mod.method_v2_caption(None) is None

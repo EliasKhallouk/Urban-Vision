@@ -238,7 +238,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 26 fichiers, 470 tests pytest
+└── tests/                          # 26 fichiers, 474 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1043,7 +1043,8 @@ Score de fiabilité = max(0 ; Ponctualité − 2 × Taux d'arrêts sautés)
 ### 10.4 Méthode 2.0 (indicateurs en test, `indicateurs.py`)
 
 La méthode 2.0 est publiée **à côté** du score de fiabilité dans le rapport
-mensuel (section 12.3), sans le remplacer. Le choix de la méthode de
+mensuel (section 12.3) et dans le dashboard (« Données & méthode », fiche
+ligne, section 11), sans le remplacer. Le choix de la méthode de
 référence se fera après plusieurs mois de double affichage. Elle corrige trois
 limites de la formule de la section 10.3 : un départ en avance y était compté
 « à l'heure », les courses supprimées n'entraient pas dans le calcul et aucun
@@ -1227,7 +1228,10 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
 6. **Données & méthode** — trois vues : *Méthode* (définitions, seuils,
-   stabilisation 20 min, lecture des fiches, arrêts sautés), *Données
+   stabilisation 20 min, lecture des fiches, arrêts sautés, bloc « Méthode 2.0
+   (en test) » : score 2.0 ± marge, ponctualité stricte ± marge, service
+   assuré, départs en avance, jours exclus ou dégradés et lignes écartées de
+   la période et du territoire, loader `load_method_v2`), *Données
    ouvertes* (boutons de téléchargement CSV de la période, loader
    `load_open_dataset`, qui passe par `src/scripts/export_open_data.py` — voir
    §11.6) et *Suivi de la collecte* (observations brutes, passages analysés,
@@ -1359,13 +1363,19 @@ existe. La logique est dans `dashboard/diagnostic.py` (fonctions pures, testées
 par `tests/test_diagnostic.py`) ; `app.py` charge les données
 (`load_stop_daily`, `load_stop_hourly`, `load_route_segments`,
 `load_route_hourly_stops`, `load_line_cancellations`, `load_line_stops`,
-`segments_available`, tous en cache 60 s) et met en page (`render_stop_panel`,
-`render_line_panel`). Les profils de ligne écartent les arrêts desservis par
+`segments_available`, `load_method_v2`, tous en cache 60 s) et met en page
+(`render_stop_panel`, `render_line_panel`). Les profils de ligne écartent les arrêts desservis par
 moins de 5 % des passages de leur direction (`keep_served_stops`) : une
 variante de course marginale ajouterait sinon des arrêts intercalés et un faux
 terminus. Les
 sous-vues passent par `st.segmented_control` : seule la sous-vue affichée est
 calculée.
+
+**Méthode 2.0** : sous les cartes de la fiche ligne, une ligne de texte
+(`method_v2_caption`) donne le score 2.0 ± marge, la ponctualité stricte, le
+service assuré et, pour une ligne fréquente, l'attente excédentaire
+(`load_method_v2`, section 10.4) ; une ligne au temps réel douteux est
+signalée comme non évaluée.
 
 **Lien direct** : la fiche affichée est reflétée dans l'URL (`?arret=<stop_id>`
 ou `?ligne=<route_id>`) ; `apply_query_params` rouvre la fiche au premier
@@ -2253,7 +2263,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 470, isolés (suite `pytest` complète : 470 passed), flux synthétiques
+- Tests : 474, isolés (suite `pytest` complète : 474 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

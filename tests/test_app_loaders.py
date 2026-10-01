@@ -5,6 +5,7 @@ les agrégats sont recalculés par le collecteur ; ici on les insère directemen
 requêtes SQL du dashboard sans grosse base réelle.
 """
 
+import json
 from datetime import datetime
 
 import pandas as pd
@@ -645,3 +646,36 @@ class TestLoadRouteHourlyStops:
         df = app_mod.load_route_hourly_stops(conn, _epoch_local(2026, 9, 12), _epoch_local(2026, 9, 1),
                                              _epoch_local(2026, 9, 12), "A")
         assert df[["stop_id", "heure", "obs", "sum_delay", "cnt_gt300"]].values.tolist() == [["s1", 13, 4, 800, 2]]
+
+
+class TestLoadMethodV2:
+    def _seed(self, conn):
+        gtfs_static.create_static_tables(conn)
+        conn.executemany("INSERT INTO routes VALUES (?, ?, ?, 3)", [("A", "1", "Ligne 1"), ("D", "9", "Ligne 9")])
+        rows = [
+            ("2026-09-14", "A", 100, 90, 10, 110, 10, {"30": 100}),
+            ("2026-09-15", "A", 100, 80, 0, 100, 0, {"30": 100}),
+            ("2026-09-14", "D", 300, 300, 0, 300, 0, {"0": 300}),
+        ]
+        for day, route, obs, le300, lt60, eligible, skipped, hist in rows:
+            conn.execute(
+                "INSERT INTO agg_daily (date_service, route_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60, "
+                "skipped, eligible, histogram) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
+                (day, route, obs, le300, obs - le300, lt60, skipped, eligible, json.dumps(hist)))
+        conn.execute("INSERT INTO quality_days VALUES ('2026-09-15', 0, '[8, 9, 10]', 'incomplet', 0)")
+        conn.execute("INSERT INTO agg_hourly_regularity VALUES ('2026-09-14', 'A', 0, 's1', 8, 5, 3000, 2000000, 5, 3000, 1800000)")
+        conn.commit()
+
+    def test_reseau_et_ligne(self, conn):
+        self._seed(conn)
+        since, end = _epoch_local(2026, 9, 14), _epoch_local(2026, 9, 16)
+        network = app_mod.load_method_v2(conn, end, since, end)
+        assert network["disponible"] is True
+        assert network["jours_exclus"] == ["2026-09-15"]
+        assert network["lignes_ecartees"] == {"D": 100.0}
+        assert network["score"] == pytest.approx(100 * 80 / 110)
+        line = app_mod.load_method_v2(conn, end, since, end, route_id="A")
+        assert line["attente_excedentaire"] == pytest.approx(2_000_000 / 6000 - 300)
+        doubtful = app_mod.load_method_v2(conn, end, since, end, route_id="D")
+        assert doubtful["disponible"] is False
+        assert "temps réel douteux" in app_mod.method_v2_caption(doubtful, "D")
