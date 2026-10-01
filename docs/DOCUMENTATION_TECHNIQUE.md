@@ -5,7 +5,7 @@
 | **Projet** | Urban Vision |
 | **Version du document** | 1.1 |
 | **Date** | 2026-10-01 |
-| **Commit de référence** | `81eb95b` (branche `main`) + branche `refonte-ux-dashboard` |
+| **Commit de référence** | `3afe0d3` (branche `main`) + branche `refonte-ux-dashboard` |
 | **Auteur d'origine** | Elias Khallouk (eliaskhallouk@gmail.com) |
 | **Licence / dépôt** | https://github.com/EliasKhallouk/Urban-Vision |
 | **Périmètre** | Dépôt local **ET** environnement de production (VM Oracle Cloud) |
@@ -2098,8 +2098,10 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
   (gitignoré).
-- Git : branche `main`, remote GitHub ; production sur le commit `81eb95b`
-  (déployé le 01/10/2026 ; veille email et rapports automatiques installés).
+- Git : branche `main`, remote GitHub ; production sur le commit `3afe0d3`
+  (déployé le 01/10/2026 à 22 h 20 par `deploy/deployer.sh` : sauvegardes,
+  archive du GTFS, journal de collecte, recalcul par timer, configuration
+  versionnée).
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -2121,17 +2123,19 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U2 | Configuration nginx | Vhost `urban-vision` : 443 ssl → `proxy_pass 127.0.0.1:8501` (headers WebSocket), bloc :80 = 301 HTTPS (`$host` exact) sinon 404 ; vhost `default` de stock présent (page par défaut) |
 | U3 | Sauvegarde / rotation | Aucune sauvegarde (snapshots OCI non accessibles depuis le système) ; aucune règle logrotate dédiée ; `crontab` root (ajouté le 16/09/2026) : génération GoAccess toutes les 5 min (§17.1) et veille des visiteurs toutes les 5 min (§17.2) |
 | U4 | Version Python | venv **3.12.14**, Python système **3.10.12** (dev local : 3.11.2) |
-| U5 | URL de geocoding | Code prod sur `81eb95b` (01/10/2026) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
+| U5 | URL de geocoding | Code prod sur `3afe0d3` (01/10/2026) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
 | U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** (tuiles **CARTO**, remplacées suite au blocage tile.openstreetmap.org 16/09) ; BigDataCloud actif depuis le 17/09 (clé `root:600`), localité + CP dans la colonne « Ville » ; **bannière « Dernier visiteur en France »** (toutes régions) ajoutée en tête le 17/09 ; ré-essai BigDataCloud 2 h après erreur transitoire (403) ; les IP « probable bot » (profil `p-bot`, orange) sont exclues de la passe BigDataCloud |
-| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus du 22/09/2026 au 01/10/2026 à 12 h 01 (I8, 26.3). Correctif déployé le 01/10/2026 à 12 h 09 (seul `urban-vision-collect` redémarré) : de 12 h 09 à 14 h 16, 128 relevés, aucun trou, aucun warning, plus grand écart entre deux relevés 80 s, rafraîchissement des agrégats 16,8 à 19,0 s ; agrégats du 30/09 identiques au comptage direct dans `observations` (251 591 passages) ; dashboard HTTPS 200 |
-| U10 | Veille de la collecte | Installée le 01/10/2026 : `urban-vision-veille-collecte.timer` toutes les 5 min, identifiants dans `/etc/urban-vision/alertes.env` (`root:600`, `UV_SMTP_USER` et `UV_SMTP_PASSWORD`, serveur Gmail par défaut) ; premier passage : 4 conditions `ok` ; email de test envoyé le 01/10/2026. Deux copies laissées par l'éditeur (`alertes.env.save`, `alertes.env.save.1`) restent dans le dossier : à supprimer. Sortie SMTP vers `smtp.gmail.com` ouverte sur 465 et 587 |
-| U11 | Tests et rapports sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed tant que `matplotlib` manquait (`test_monthly_report.py` non importable), 262 passed après son installation (`81eb95b`). Rapports d'août et de septembre générés le 01/10/2026 sur la VM (`--compile --pdf-only`, 34 PDF chacun) : 40 min pour août, 78 min pour septembre, 1 h 35 min de CPU au total, aucun trou de collecte pendant la génération ; les 6 anciens PDF d'août sont dans `reports/output/corbeille/2026-08-ancien/`. Timer `urban-vision-rapports.timer` installé, prochain lancement le 01/11/2026 à 3 h |
+| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus du 22/09/2026 au 01/10/2026 à 12 h 01 (I8, 26.3). Correctif déployé le 01/10/2026 à 12 h 09 (seul `urban-vision-collect` redémarré) : de 12 h 09 à 14 h 16, 128 relevés, aucun trou, aucun warning, plus grand écart entre deux relevés 80 s, rafraîchissement des agrégats 16,8 à 19,0 s ; agrégats du 30/09 identiques au comptage direct dans `observations` (251 591 passages) ; dashboard HTTPS 200 Depuis le déploiement de `3afe0d3` (01/10/2026, 22 h 20) : une ligne de `collection_runs` par relevé (écriture moyenne ≈ 0,8 s, aucune erreur ni écart supérieur à 60 s sur les 20 premières minutes), prévisions retenues aux horizons 10, 5 et 2 min, recalcul des agrégats dans `urban-vision-rafraichir` (19,3 s au premier passage), collecteur sans recalcul |
+| U10 | Veille de la collecte | Installée le 01/10/2026 : `urban-vision-veille-collecte.timer` toutes les 5 min, identifiants dans `/etc/urban-vision/alertes.env` (`root:600`, `UV_SMTP_USER` et `UV_SMTP_PASSWORD`, serveur Gmail par défaut) ; premier passage : 4 conditions `ok` ; email de test envoyé le 01/10/2026. Deux copies laissées par l'éditeur (`alertes.env.save`, `alertes.env.save.1`) restent dans le dossier : à supprimer. Sortie SMTP vers `smtp.gmail.com` ouverte sur 465 et 587 Depuis `3afe0d3` : 7 conditions (journal de collecte, flux figé, sauvegarde, tâches planifiées en plus), unité autorisée en `AF_UNIX` pour interroger systemd ; toutes `ok` au premier passage. `UV_HEARTBEAT_URL` non défini (pas de sonde externe) |
+| U11 | Tests et rapports sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed tant que `matplotlib` manquait (`test_monthly_report.py` non importable), 262 passed après son installation (`81eb95b`). Rapports d'août et de septembre générés le 01/10/2026 sur la VM (`--compile --pdf-only`, 34 PDF chacun) : 40 min pour août, 78 min pour septembre, 1 h 35 min de CPU au total, aucun trou de collecte pendant la génération ; les 6 anciens PDF d'août sont dans `reports/output/corbeille/2026-08-ancien/`. Timer `urban-vision-rapports.timer` installé, prochain lancement le 01/11/2026 à 3 h Rapports d'août et de septembre relancés le 01/10/2026 à 22 h 22 (unité transitoire `urban-vision-rapports-regeneration`) pour la ligne « trous de collecte » corrigée |
+| U12 | Protection des données | Première sauvegarde le 01/10/2026 à 22 h 11 : 3 628 Mo compressés en 955 Mo (zstd) en 5 min 33 s, restauration contrôlée en 3 min 13 s (12 983 514 observations) ; timers `urban-vision-sauvegarde` (2 h 30) et `urban-vision-archive-gtfs` (6 h 15) actifs ; première version du GTFS archivée (`gtfs_2026-10-01_3ea3193653b8.zip`, valide du 01/10 au 30/12/2026). Copie hors VM non configurée (`/etc/urban-vision/sauvegarde.env` absent) |
+| U13 | Configuration versionnée | Unités, vhost et rotation installés le 01/10/2026 par `deploy/deployer.sh` ; en-têtes HTTP actifs (HSTS, `nosniff`, `SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`) ; rotation hebdomadaire de `collect.log` et `alerts.log` ; crontab root identique à `deploy/cron/root.crontab` ; copie de l'ancien vhost conservée en `urban-vision.avant-<date>` |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 et I8 le 01/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I10 le 01/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2142,6 +2146,8 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 et I8
 | I6 | Charte : fond de page Cornsilk (`.streamlit/config.toml`, `.stApp`) alors que la charte impose un fond blanc ; modes codés par couleur (tram en Copperwood, couleur du palier négatif) ; seuils KPI codés en dur dans « Analyse d'une ligne » | fond blanc ; modes codés par forme (§6.4) ; KPI par `palette.kpi_tier` |
 | I7 | Infobulles Highcharts : format `{point.z:,}` / `{point.passages:,}` (sans `f`, donc traité comme un format de date) — le nombre de passages ne s'affichait pas | `{…:,.0f}` partout, test de non-régression dans `tests/test_highcharts.py` |
 | I8 | Trous de collecte presque continus depuis le 22/09/2026 alors que le collecteur tournait : le rafraîchissement incrémental des agrégats (`db.py`) lisait tout l'historique (index `idx_observations_sched_delay`, filtre `start_date` sans index, jointure quadratique de `_DAILY_STOP_SQL`) ; sa durée (≈ 200 s) dépassait le seuil de trou (180 s) | Requêtes bornées par `idx_observations_departure_time` et `idx_observations_last_seen_at`, `+o.schedule_relationship`, `UNION ALL` + `GROUP BY` (section 9.3) ; durée du rafraîchissement journalisée par `collect.py` (warning au-delà de 60 s) ; veille email `veille_collecte.py` (section 9.4) ; tests `TestRefreshIncrementalBorne`. Déployé en production le 01/10/2026 à 12 h 09 ; aucun trou depuis |
+| I9 | Après un redémarrage du collecteur la nuit, le dernier succès était lu dans `MAX(last_seen_at)`, qui n'avance plus quand le flux est vide : un redémarrage à 4 h enregistrait un faux trou de plusieurs heures | Le dernier succès est lu dans `collection_runs` (repli sur `MAX(last_seen_at)`), test `TestJournalDeCollecte` |
+| I10 | Méthode des rapports : « les données produites pendant l'intervalle sont exclues de l'analyse » et « N observations exclues », alors que le rapport n'exclut rien et que N mêlait arrêts non desservis et passages sans retard | Texte de méthode réécrit, seules les interruptions d'au moins 10 min sont présentées comme pouvant faire perdre des passages (`gap_methodology_line`), tests `TestLigneTrousDeCollecte` |
 
 ### 26.4 Dette documentaire
 
