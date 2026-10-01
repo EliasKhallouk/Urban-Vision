@@ -1,0 +1,23 @@
+[Unit]
+Description=Urban Vision - Dashboard Streamlit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python -m streamlit run dashboard/app.py --server.address=127.0.0.1 --server.port=8501
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

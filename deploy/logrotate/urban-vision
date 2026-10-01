@@ -1,0 +1,10 @@
+/home/ubuntu/Urban-Vision/data/collect.log /home/ubuntu/Urban-Vision/data/alerts.log {
+    su ubuntu ubuntu
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

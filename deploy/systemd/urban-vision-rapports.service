@@ -1,0 +1,19 @@
+[Unit]
+Description=Urban Vision - Rapports mensuels du mois precedent
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python reports/generate_all_reports.py --previous-month --compile --pdf-only
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true

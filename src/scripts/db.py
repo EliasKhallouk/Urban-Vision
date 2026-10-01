@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS observations (
     departure_delay INTEGER,
     departure_time INTEGER,
     last_seen_at INTEGER NOT NULL,
+    pred_dep_10 INTEGER,
+    pred_dep_5 INTEGER,
+    pred_dep_2 INTEGER,
     PRIMARY KEY (trip_id, start_date, stop_sequence)
 );
 
@@ -38,6 +41,16 @@ CREATE TABLE IF NOT EXISTS daily_line_stats (
 CREATE TABLE IF NOT EXISTS collection_gaps (
     gap_start INTEGER NOT NULL,
     gap_end INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_runs (
+    started_at INTEGER PRIMARY KEY,
+    feed_ts INTEGER,
+    entities INTEGER,
+    rows_written INTEGER,
+    fetch_ms INTEGER,
+    write_ms INTEGER,
+    error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS trip_status (
@@ -153,8 +166,21 @@ CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_
 """
 
 
+OBSERVATION_COLUMNS_ADDED = (
+    ("departure_time", "INTEGER"),
+    ("pred_dep_10", "INTEGER"),
+    ("pred_dep_5", "INTEGER"),
+    ("pred_dep_2", "INTEGER"),
+)
+
+
 def init_db(conn) -> None:
-    """Applique le schéma complet (idempotent) puis valide la transaction."""
+    """Migre les colonnes ajoutées depuis, applique le schéma complet (idempotent), puis valide."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(observations)")}
+    if columns:
+        for name, sql_type in OBSERVATION_COLUMNS_ADDED:
+            if name not in columns:
+                conn.execute(f"ALTER TABLE observations ADD COLUMN {name} {sql_type}")
     conn.executescript(SCHEMA_DDL)
     conn.commit()
 
@@ -162,14 +188,6 @@ def init_db(conn) -> None:
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "urban_vision.db"
 conn = sqlite3.connect(DB_PATH)
 init_db(conn)
-
-
-columns = {
-    row[1]
-    for row in conn.execute("PRAGMA table_info(observations)")
-}
-if "departure_time" not in columns:
-    conn.execute("ALTER TABLE observations ADD COLUMN departure_time INTEGER")
 
 
 from datetime import datetime, timedelta

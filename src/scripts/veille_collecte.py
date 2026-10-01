@@ -6,8 +6,10 @@ import smtplib
 import socket
 import sqlite3
 import statistics
+import subprocess
 import sys
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -17,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "urban_vision.db"
 STATE_PATH = DATA_DIR / "veille_collecte.json"
+BACKUP_DIR = DATA_DIR / "sauvegardes"
 ENV_FILE = Path("/etc/urban-vision/alertes.env")
 LOG_FILES = ("collect.log", "alerts.log")
 
@@ -32,6 +35,17 @@ VOLUME_MIN_RATIO = 0.2
 REMINDER_SECONDS = 12 * 3600
 LOG_TAIL_BYTES = 512 * 1024
 SMTP_TIMEOUT_SECONDS = 30
+FROZEN_WINDOW_SECONDS = 900
+FROZEN_MIN_RUNS = 5
+BACKUP_MAX_AGE_SECONDS = 26 * 3600
+HEARTBEAT_TIMEOUT_SECONDS = 10
+WATCHED_UNITS = (
+    "urban-vision-rafraichir.service",
+    "urban-vision-sauvegarde.service",
+    "urban-vision-archive-gtfs.service",
+    "urban-vision-rapports.service",
+)
+FAILED_RESULTS = {"exit-code", "signal", "core-dump", "timeout", "watchdog", "oom-kill", "resources"}
 
 LOG_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ \[(\w+)\] (.*)$")
 NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
@@ -101,6 +115,92 @@ def check_heartbeat(entries, now):
     )
 
 
+def check_runs(conn, now):
+    try:
+        last_ok = conn.execute(
+            "SELECT MAX(started_at) FROM collection_runs WHERE error IS NULL"
+        ).fetchone()[0]
+        last = conn.execute(
+            "SELECT started_at, error FROM collection_runs ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if last is None:
+        return None
+    if last_ok is None:
+        return Condition("collecte_arretee", "Collecte arrêtée", True,
+                         f"Aucun relevé réussi dans le journal de collecte. Dernière erreur : {last[1]}")
+    age = now - last_ok
+    details = f"Dernier relevé réussi le {day_hm(last_ok)} (il y a {duration(age)})."
+    if last[1]:
+        details += f" Dernière erreur : {last[1]}"
+    return Condition("collecte_arretee", "Collecte arrêtée", age > HEARTBEAT_MAX_AGE_SECONDS, details)
+
+
+def check_frozen_feed(conn, now):
+    try:
+        rows = conn.execute(
+            "SELECT feed_ts FROM collection_runs WHERE error IS NULL AND started_at >= ?",
+            (int(now - FROZEN_WINDOW_SECONDS),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    stamps = {feed_ts for (feed_ts,) in rows}
+    active = len(rows) >= FROZEN_MIN_RUNS and len(stamps) == 1
+    if active:
+        details = (f"Les {len(rows)} derniers relevés renvoient le même horodatage de flux "
+                   f"({day_hm(next(iter(stamps)))}) : TBM ne met plus à jour son flux.")
+    else:
+        details = f"{len(stamps)} horodatages de flux différents sur les {FROZEN_WINDOW_SECONDS // 60} dernières minutes."
+    return Condition("flux_fige", "Flux temps réel figé", active, details)
+
+
+def check_backup(backup_dir, now):
+    backup_dir = Path(backup_dir)
+    if not backup_dir.exists():
+        return None
+    manifests = sorted(backup_dir.glob("urban_vision_*.json"))
+    if not manifests:
+        return Condition("sauvegarde", "Sauvegarde manquante", True,
+                         f"Aucune sauvegarde dans {backup_dir}.")
+    manifest = json.loads(manifests[-1].read_text())
+    created = datetime.fromisoformat(manifest["created_at"]).timestamp()
+    age = now - created
+    details = (f"Dernière sauvegarde le {day_hm(created)} ({manifest['size'] / 1e6:.0f} Mo, "
+               f"contrôle {manifest.get('quick_check')}, copie hors VM : "
+               f"{'oui' if manifest.get('uploaded') else 'non'}).")
+    return Condition("sauvegarde", "Sauvegarde manquante", age > BACKUP_MAX_AGE_SECONDS, details)
+
+
+def unit_result(unit, runner=None):
+    runner = runner or subprocess.run
+    try:
+        out = runner(["systemctl", "show", "-p", "LoadState", "-p", "Result", unit],
+                     capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    fields = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    if fields.get("LoadState") != "loaded":
+        return None
+    return fields.get("Result")
+
+
+def check_units(units=WATCHED_UNITS, runner=None):
+    results = {unit: unit_result(unit, runner) for unit in units}
+    known = {unit: result for unit, result in results.items() if result is not None}
+    if not known:
+        return None
+    failed = sorted(unit for unit, result in known.items() if result in FAILED_RESULTS)
+    if failed:
+        details = ("En échec : " + ", ".join(f"{unit} ({known[unit]})" for unit in failed)
+                   + ". Voir journalctl -u <unité>.")
+    else:
+        details = f"{len(known)} tâche(s) planifiée(s) sans échec."
+    return Condition("taches", "Tâche planifiée en échec", bool(failed), details)
+
+
 def check_gaps(conn, now):
     rows = conn.execute(
         "SELECT gap_start, gap_end FROM collection_gaps WHERE gap_end >= ? ORDER BY gap_start",
@@ -167,19 +267,43 @@ def check_volume(conn, now):
     return Condition("flux_pauvre", "Flux temps réel quasi vide", active, details)
 
 
-def evaluate(db_path, log_dir, now):
+def evaluate(db_path, log_dir, now, backup_dir=None, runner=None):
+    backup_dir = BACKUP_DIR if backup_dir is None else backup_dir
     entries = {name: parse_log(read_tail(Path(log_dir) / name)) for name in LOG_FILES}
-    conditions = [check_heartbeat(entries["collect.log"], now)]
+    conditions = []
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
         try:
+            heartbeat = check_runs(conn, now)
+            conditions.append(heartbeat or check_heartbeat(entries["collect.log"], now))
+            conditions += [c for c in (check_frozen_feed(conn, now),) if c is not None]
             conditions += [check_gaps(conn, now), check_volume(conn, now)]
         finally:
             conn.close()
     except sqlite3.Error as e:
+        conditions.insert(0, check_heartbeat(entries["collect.log"], now))
         conditions.append(Condition("base", "Base de données illisible", True, str(e)))
     conditions.append(check_logs(entries, now))
+    conditions += [c for c in (check_backup(backup_dir, now), check_units(runner=runner)) if c is not None]
     return conditions
+
+
+def heartbeat_url(environ=None, env_file=None):
+    environ = os.environ if environ is None else environ
+    values = read_env_file(env_file or environ.get("UV_ALERT_ENV_FILE", ENV_FILE))
+    values.update({k: v for k, v in environ.items() if k.startswith("UV_")})
+    return values.get("UV_HEARTBEAT_URL", "").strip() or None
+
+
+def ping_heartbeat(url, failing, opener=None):
+    opener = opener or urllib.request.urlopen
+    target = url.rstrip("/") + ("/fail" if failing else "")
+    try:
+        with opener(target, timeout=HEARTBEAT_TIMEOUT_SECONDS) as response:
+            return response.status
+    except OSError as e:
+        print(f"Signal de vie non envoyé : {e}", file=sys.stderr)
+        return None
 
 
 def plan_notifications(conditions, state, now):
@@ -335,6 +459,9 @@ def main(argv=None):
         return 0
 
     status = 0
+    ping = heartbeat_url()
+    if ping:
+        ping_heartbeat(ping, failing=any(cond.active for cond in conditions))
     if notifications:
         subject, body = compose(notifications, now)
         if settings is None:

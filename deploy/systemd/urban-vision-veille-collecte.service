@@ -1,0 +1,19 @@
+[Unit]
+Description=Urban Vision - Veille de la collecte (alertes email)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+EnvironmentFile=/etc/urban-vision/alertes.env
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python src/scripts/veille_collecte.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
