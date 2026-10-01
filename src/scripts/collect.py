@@ -28,9 +28,9 @@ GAP_THRESHOLD_SECONDS = 180  # 3x l'intervalle normal de 60s, marge de sécurit�
 DB_BUSY_TIMEOUT_MS = 120_000
 # Recadence du recalcul des agrégats. Les agrégats sont (re)calculés intégralement
 # depuis `observations` à chaque fois : la valeur reste exacte, seule sa fraîcheur
-# baisse jusqu'à cet intervalle. Ce recalcul tient le verrou d'écriture ~2 min sur
-# une VM 1 vCPU : l'espace à 60s bloquait la collecte et le service d'alertes.
+# baisse jusqu'à cet intervalle.
 AGGREGATE_REFRESH_INTERVAL_SECONDS = 300
+REFRESH_WARN_SECONDS = 60
 
 
 logging.basicConfig(
@@ -141,6 +141,15 @@ def record_gap_if_any(conn, last_success_ts, now):
         logger.warning("Trou de collecte détecté : %.0f minutes", (now - last_success_ts) / 60)
 
 
+def log_refresh_duration(seconds):
+    if seconds > REFRESH_WARN_SECONDS:
+        logger.warning(
+            "Rafraîchissement des agrégats lent : %.1f s (seuil %d s)", seconds, REFRESH_WARN_SECONDS
+        )
+    else:
+        logger.info("Agrégats rafraîchis en %.1f s", seconds)
+
+
 def get_last_known_success(conn):
     row = conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()
     return float(row[0]) if row[0] is not None else None
@@ -171,8 +180,10 @@ def main():
                 if time.time() - last_refresh_ts >= AGGREGATE_REFRESH_INTERVAL_SECONDS:
                     today = datetime.now().strftime("%Y-%m-%d")
                     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    refresh_start = time.monotonic()
                     dbio.refresh_aggregates(conn, days=[yesterday, today])
                     last_refresh_ts = time.time()
+                    log_refresh_duration(time.monotonic() - refresh_start)
             except Exception as e:
                 logger.warning("Refresh des agrégats échoué : %s", e)
 

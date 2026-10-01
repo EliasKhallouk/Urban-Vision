@@ -4,13 +4,13 @@
 |---|---|
 | **Projet** | Urban Vision |
 | **Version du document** | 1.1 |
-| **Date** | 2026-09-14 |
-| **Commit de référence** | `13cf796` (branche `main`) |
+| **Date** | 2026-10-01 |
+| **Commit de référence** | `e838419` (branche `main`) + branche `correctif-collecte` |
 | **Auteur d'origine** | Elias Khallouk (eliaskhallouk@gmail.com) |
 | **Licence / dépôt** | https://github.com/EliasKhallouk/Urban-Vision |
 | **Périmètre** | Dépôt local **ET** environnement de production (VM Oracle Cloud) |
 
-Ce document décrit l'état **réel** du projet au 14/09/2026. Chaque information
+Ce document décrit l'état **réel** du projet au 01/10/2026. Chaque information
 provient du code, de la configuration ou de l'environnement observés ; rien n'a
 été inventé. Les points restés incertains sont signalés **« à confirmer »** et
 consolidés dans la section 26.
@@ -142,6 +142,9 @@ Flux de traitement en résumé :
 6. **Rapports** : `reports/generate_monthly_report.py` (moteur) produit un
    rapport LaTeX par périmètre ; `generate_single_report.py` / `generate_all_reports.py`
    orchestrent les générations ; les PDF sont compilés avec **xelatex**.
+7. **Veille** : `veille_collecte.py`, lancé toutes les 5 min par un timer
+   systemd, contrôle la collecte (relevés, trous, volume du flux, logs) et
+   envoie un email en cas d'anomalie (section 9.4).
 
 **Environnements :**
 
@@ -176,6 +179,7 @@ Urban-Vision/
 │   ├── urban_vision.db-shm
 │   ├── collect.log                 # logs du collecteur
 │   ├── alerts.log                  # logs du collecteur d'alertes
+│   ├── veille_collecte.json        # état des alertes de la veille (production)
 │   └── dashboard.log               # logs Streamlit — local/dev uniquement
 ├── docs/
 │   └── DOCUMENTATION_TECHNIQUE.md  # documentation technique (ce document)
@@ -199,8 +203,10 @@ Urban-Vision/
 │   │   ├── collect_alerts.py       # collecteur ServiceAlerts (120 s)
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
-│   │   └── gtfs_static.py          # chargement routes/stops
-└── tests/                          # 17 fichiers, 223 tests pytest
+│   │   ├── gtfs_static.py          # chargement routes/stops
+│   │   ├── veille_collecte.py      # veille de la collecte + alertes email
+│   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
+└── tests/                          # 18 fichiers, 258 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -318,7 +324,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 223 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 258 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -335,6 +341,8 @@ La procédure d'installation (contenu exact des unités en section 14) :
 3. `sudo systemctl enable` puis `start` chacune des unités.
 4. Vérifier : `sudo systemctl status urban-vision-collect.service
    urban-vision-collect-alerts.service urban-vision-dashboard.service`.
+5. Installer la veille de la collecte : identifiants SMTP (section 6.5), puis
+   service et timer `urban-vision-veille-collecte` (section 14).
 
 ---
 
@@ -392,7 +400,10 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | `GAP_THRESHOLD_SECONDS` | 180 s (3 × intervalle) | `collect.py:26` |
 | `DB_BUSY_TIMEOUT_MS` (collect) | 120 000 ms | `collect.py:28` |
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
-| `AGGREGATE_REFRESH_INTERVAL_SECONDS` | 300 s | `collect.py:33` |
+| `AGGREGATE_REFRESH_INTERVAL_SECONDS` | 300 s | `collect.py:32` |
+| `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `collect.py:33` |
+| `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:372` |
+| Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h | `veille_collecte.py:23-34` |
 | `FRESHNESS_BUFFER_SECONDS` | 1200 s (20 min) | `analyze.py:17`, `generate_monthly_report.py:51`, `app.py:50` |
 | `CACHE_TTL_SECONDS` (dashboard) | 60 s | `app.py:51` |
 | `MIN_OBSERVATIONS` (dashboard) | 50 | `app.py:52` |
@@ -430,12 +441,49 @@ Modes de transport au dashboard (`app.py:133-138`) : `{0: Tramway, 2: Rail,
 3: Bus, 4: Ferry, 5: Câble, 7: Funiculaire, 11: Trolleybus}` ; couleurs
 `{0: Copperwood (tram), 3: Teal (bus), 4: Black Forest (ferry)}`.
 
+
+### 6.5 Alertes email (`/etc/urban-vision/alertes.env`)
+
+`veille_collecte.py` (section 9.4) lit ses identifiants SMTP dans les variables
+d'environnement, sinon dans le fichier `UV_ALERT_ENV_FILE` (défaut
+`/etc/urban-vision/alertes.env` : une variable `CLÉ=valeur` par ligne, `#` pour
+les commentaires). Le fichier n'est pas dans git et n'est lisible que par
+`root` ; l'unité systemd le charge par `EnvironmentFile=` (section 14).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `UV_SMTP_USER` | — (obligatoire) | identifiant SMTP (adresse Gmail) |
+| `UV_SMTP_PASSWORD` | — (obligatoire) | mot de passe d'application Gmail ou clé SMTP d'un autre fournisseur ; les espaces sont retirés |
+| `UV_SMTP_HOST` | `smtp.gmail.com` | serveur SMTP |
+| `UV_SMTP_PORT` | `465` | `465` = SSL ; toute autre valeur = STARTTLS (ex. `587`) |
+| `UV_ALERT_TO` | `UV_SMTP_USER` | destinataire(s), séparés par des virgules |
+| `UV_ALERT_FROM` | `UV_SMTP_USER` | expéditeur |
+
+Mot de passe d'application Gmail (une fois) : activer la validation en deux
+étapes du compte Google, puis <https://myaccount.google.com/apppasswords> →
+nom « Urban Vision » → copier le code de 16 lettres (Google l'affiche en
+4 groupes : les espaces sont facultatifs). Un autre fournisseur
+(Brevo, Mailjet, SendGrid…) s'utilise avec `UV_SMTP_HOST`, `UV_SMTP_PORT`,
+l'identifiant et la clé SMTP qu'il fournit.
+
+Création du fichier sur la VM, puis envoi d'un email de test :
+
+```bash
+sudo install -d -m 755 /etc/urban-vision
+sudo install -m 600 /dev/null /etc/urban-vision/alertes.env
+sudo nano /etc/urban-vision/alertes.env
+#   UV_SMTP_USER=adresse@gmail.com
+#   UV_SMTP_PASSWORD=abcdefghijklmnop
+cd ~/Urban-Vision && sudo .venv/bin/python src/scripts/veille_collecte.py --test-email
+```
+
 ---
 
 ## 7. Base de données
 
 Système : **SQLite** (pas d'ORM ; `sqlite3` standard). Fichier `data/urban_vision.db`
-(~749 Mo en dev local ; **~2,4 Go en production** au 14/09/2026) +
+(~950 Mo en dev local ; **~3,6 Go en production** au 01/10/2026, 12,9 millions
+d'observations) +
 `-wal`/`-shm`. Mode **WAL** activé par les
 collecteurs (`PRAGMA journal_mode=WAL;`) et par les tests ; le dashboard
 n'active pas WAL lui-même mais émet `PRAGMA busy_timeout` (120 s) et
@@ -443,8 +491,9 @@ n'active pas WAL lui-même mais émet `PRAGMA busy_timeout` (120 s) et
 (`app.py:293-298`).
 
 > En WAL, l'écrivain tient des verrous courts ; le collecteur (écrivain
-> régulier, y compris le recalcul d'agrégats qui tient le verrou ~2 min sur une
-> VM 1 vCPU) et le service d'alertes coexistent grâce aux `busy_timeout`
+> régulier, y compris le recalcul incrémental des agrégats : ≈ 14 s de lecture
+> mesurées sur la base de production, contre ≈ 200 s avant le correctif de la
+> section 9.3) et le service d'alertes coexistent grâce aux `busy_timeout`
 > élevés (120 s / 180 s). Un `rollback` après erreur est effectué côté alertes
 > (`collect_alerts.py:143`) — comportement couvert par
 > `tests/test_collect_alerts.py::TestRecuperationApresVerrou`.
@@ -479,7 +528,7 @@ PK `(stat_date, route_id)`.
 
 **`collection_gaps`** — trous de collecte `(gap_start, gap_end)` en epoch. Écrits
 par `collect.py` quand l'écart entre deux succès dépasse 180 s. **Exclus**
-de l'analyse (cf. 7.3).
+de l'analyse (cf. 7.3). Surveillés par `veille_collecte.py` (section 9.4).
 
 **`trip_status`** — dernier statut connu par voyage. PK `(trip_id, start_date)`.
 
@@ -579,10 +628,21 @@ Détails des requêtes SQL d'agrégation (`db.py`)
   format `AAAAMMJJ`).
 - `_HOURLY_SQL` / `_HOURLY_STOP_SQL` : même principe par heure locale
   (`strftime('%H', datetime(departure_time,'unixepoch','localtime'))`).
-- `refresh_aggregates(days=None)` : **recalcul complet** (lent, ~minutes sur VM
-  1 vCPU). `days=[...]` : **incrémental** — supprime puis recalcule les
+- `refresh_aggregates(days=None)` : **recalcul complet** (≈ 55 s pour
+  3,2 millions d'observations sur le poste de dev ; durée en production à
+  confirmer). `days=[...]` : **incrémental** — supprime puis recalcule les
   journées listées uniquement (c'est le mode utilisé par le collecteur pour
   hier et aujourd'hui).
+- Requêtes incrémentales (`incremental_statements(days)`) : elles ne lisent
+  `observations` que par deux index bornés, `idx_observations_departure_time`
+  pour les délais (plage `departure_time` des jours traités) et
+  `idx_observations_last_seen_at` pour les arrêts sautés (jours traités ±
+  `SKP_LAST_SEEN_MARGIN_SECONDS`, 1 jour ; dans la base, `last_seen_at` est
+  compris entre +3,7 h et +28,4 h après le début du jour de service). Le `+`
+  de `+o.schedule_relationship` empêche SQLite de choisir
+  `idx_observations_sched_delay`, qui parcourt tout l'historique (section 9.3).
+  Les CTE `metrics`, `skpagg` et `hist` sont fusionnées par `UNION ALL` +
+  `GROUP BY`, sans jointure.
 - Jour-service : dérivé de `departure_time` (local) pour les délais, et de
   `start_date` pour les arrêts sautés ; deux clauses bornées
   (`::SCHED_BOUNDS::` / `::SKP_BOUNDS::`) paramétrées par le mode d'exécution.
@@ -614,7 +674,12 @@ le dashboard territorial et les rapports (colonne « direction »).
   intervalle est inséré dans `collection_gaps` (+ warning log).
 - Rafraîchissement des agrégats toutes les **300 s** sur les jours « hier » et
   « aujourd'hui » (recalcul exact, coût contrôlé ; un échec est seulement loggé
-  en warning pour ne pas arrêter la collecte).
+  en warning pour ne pas arrêter la collecte). Il s'exécute dans la boucle de
+  collecte : aucun relevé n'a lieu pendant sa durée. Celle-ci est journalisée à
+  chaque passage (« Agrégats rafraîchis en X s ») ; au-delà de
+  `REFRESH_WARN_SECONDS` (60 s), le message passe en warning
+  (« Rafraîchissement des agrégats lent ») et la veille (section 9.4) l'envoie
+  par email s'il se répète.
 - Boucle inconditionnelle ; les erreurs HTTP sont loggées et le cycle reprend.
   `time.sleep(max(0, interval - elapsed))` compense le temps de traitement.
 
@@ -632,14 +697,67 @@ le dashboard territorial et les rapports (colonne « direction »).
 
 ### 9.3 Considérations de performance
 
-- La base est en mode **WAL** ; les recalculs d'agrégats gardent le verrou
-  d'écriture quelques minutes sur VM 1 vCPU → intervalle d'agrégation porté à
-  300 s (cf. commentaire `collect.py:29-33`) ; `busy_timeout` élevés des deux
-  collecteurs.
+- La base est en mode **WAL** ; le rafraîchissement des agrégats bloque les
+  relevés pendant sa durée → intervalle d'agrégation de 300 s
+  (`collect.py:29-32`) ; `busy_timeout` élevés des deux collecteurs.
+- **Incident du 22/09/2026** (I5, section 26.3) : les requêtes incrémentales
+  choisissaient `idx_observations_sched_delay` (égalité sur
+  `schedule_relationship`) et parcouraient donc tous les passages `SCHEDULED`
+  de l'historique au lieu des deux jours traités ; le filtre `start_date` des
+  arrêts sautés n'était porté par aucun index, et la jointure non indexée de
+  `_DAILY_STOP_SQL` sur ses CTE était quadratique. La durée du
+  rafraîchissement suivait la taille de la base (≈ 150 s mi-septembre, ≈ 200 s
+  fin septembre en production) ; au-delà de 180 s, chaque rafraîchissement
+  produisait un trou de collecte. Correctif : plages `departure_time` et
+  `last_seen_at` portées par leurs index, `+o.schedule_relationship`,
+  `UNION ALL` + `GROUP BY` (section 8). Mesures : 27,5 s → 2,9 s sur la base de
+  dev (3,2 millions d'observations), résultats identiques ligne à ligne ;
+  ≈ 14 s de lecture sur la base de production (12,9 millions d'observations,
+  VM 1 vCPU). Le coût dépend du volume des jours traités, plus de l'historique.
+  Garde-fou : `tests/test_refresh_aggregates.py::TestRefreshIncrementalBorne`
+  (plan de requête et équivalence avec le recalcul complet).
 - Les lectures du dashboard sont presque exclusivement sur les tables `agg_*`
   (petites) ; `observations` (grande table) n'est utilisée que sur la page
   « Collecte des données » (histogrammes minute par minute sur 7 jours,
   optimisés par index).
+
+
+### 9.4 Veille de la collecte et alertes email (`veille_collecte.py`)
+
+Script en bibliothèque standard, lancé toutes les 5 min par
+`urban-vision-veille-collecte.timer` (section 14). Il ouvre la base en lecture
+seule, lit la fin (512 Ko) de `data/collect.log` et `data/alerts.log`, évalue
+les conditions suivantes et envoie un email (identifiants SMTP : section 6.5).
+
+| Condition | Règle | Source |
+|---|---|---|
+| Collecte arrêtée | aucune ligne `OK - …` depuis plus de 10 min | `collect.log` : le collecteur écrit `OK` même quand le flux est vide (0 entité de 2 h à 5 h), alors que `last_seen_at` n'avance plus la nuit |
+| Trous de collecte | au moins un trou de `collection_gaps` terminé dans la dernière heure | base |
+| Flux temps réel quasi vide | passages (`departure_time`) des 2 dernières heures, décalées de 10 min, inférieurs à 20 % de la médiane du même créneau les 3 semaines précédentes, quand cette médiane atteint 2 000 | base |
+| Avertissements répétés dans les logs | au moins 3 lignes `WARNING`/`ERROR` dans la dernière heure, hors « Trou de collecte » | `collect.log`, `alerts.log` |
+| Base de données illisible | erreur SQLite à l'ouverture ou à la lecture | base |
+
+- Un email part à l'apparition d'une alerte, puis un rappel toutes les 12 h
+  tant qu'elle dure, et un email « Retour à la normale » à sa fin ; les
+  conditions d'un même passage sont regroupées dans un seul email. Si l'envoi
+  échoue, l'alerte est retentée au passage suivant et le script sort en code 1
+  (unité en échec dans `systemctl --failed`).
+- État des alertes : `data/veille_collecte.json` (gitignoré).
+- Seuil de volume, calibré sur les données de production : hors incident, le
+  ratio reste entre 0,90 et 1,10. Le 08/09/2026 (≈ 3 h–9 h 30) et le
+  24/09/2026 (≈ 3 h–11 h), le flux TBM ne contenait presque plus de courses
+  (ratio 0,01–0,04) sans qu'aucun trou soit enregistré ; rejouée sur ces deux
+  journées, la veille alerte à 6 h. Un dimanche rapporté à un jour de semaine
+  donne ≈ 0,25 aux heures de pointe : un jour férié en semaine reste au-dessus
+  du seuil, à confirmer au premier férié (11/11/2026).
+
+```bash
+.venv/bin/python src/scripts/veille_collecte.py --dry-run    # diagnostic, ni email ni état
+sudo .venv/bin/python src/scripts/veille_collecte.py --test-email
+journalctl -u urban-vision-veille-collecte.service -n 20
+```
+
+Options : `--db`, `--log-dir`, `--state` (par défaut, les chemins du dépôt).
 
 ---
 
@@ -962,6 +1080,8 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/assign_stop_municipalities.py` | Rattache arrêts ↔ communes | `--db-path`, `--boundaries-file`, `--boundaries-url`, `--no-reverse-fallback`, `--unassigned-csv` |
 | `src/scripts/db.py` | Schéma + agrégats (auto-porteur) | *aucun* (l'import suffit) |
 | `src/scripts/export_open_data.py` | Export CSV open data (30 derniers jours) | `--db`, `--out`, `--since`, `--until`, `--print-datasets` |
+| `src/scripts/veille_collecte.py` | Veille de la collecte, alertes email (timer 5 min) | `--dry-run`, `--test-email`, `--db`, `--log-dir`, `--state` |
+| `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
 | `reports/generate_single_report.py` | Rapport unique | `--month` (obligatoire), `--commune` XOR `--network`, `--db-path`, `--output-dir`, `--compile` |
 | `reports/generate_all_reports.py` | Tous les rapports | `--month` (obligatoire), `--db-path`, `--output-dir`, `--compile`, `--communes …` |
@@ -1045,6 +1165,57 @@ sudo systemctl status  urban-vision-collect.service
 sudo systemctl status urban-vision-collect.service urban-vision-collect-alerts.service urban-vision-dashboard.service
 ```
 
+**Veille de la collecte** (section 9.4) : deux unités à créer, absentes de la
+VM au 01/10/2026.
+
+`urban-vision-veille-collecte.service`
+
+```ini
+[Unit]
+Description=Urban Vision - Veille de la collecte (alertes email)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+EnvironmentFile=/etc/urban-vision/alertes.env
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python src/scripts/veille_collecte.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=true
+```
+
+`urban-vision-veille-collecte.timer`
+
+```ini
+[Unit]
+Description=Urban Vision - Veille de la collecte toutes les 5 min
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Installation, une fois `/etc/urban-vision/alertes.env` créé (section 6.5) :
+
+```bash
+sudo nano /etc/systemd/system/urban-vision-veille-collecte.service   # contenu ci-dessus
+sudo nano /etc/systemd/system/urban-vision-veille-collecte.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now urban-vision-veille-collecte.timer
+systemctl list-timers urban-vision-veille-collecte.timer
+```
+
 > **I2 — `data/dashboard.log`** : ce log local montrait
 > `Uvicorn server started on 0.0.0.0:8501`. C'était un reliquat d'une exécution
 > **locale de dev** ; sur la VM, l'unité force `--server.address=127.0.0.1` et
@@ -1099,8 +1270,10 @@ Chaîne en production :
   ultérieur est voulu.
 - **Services** : voir section 14 — les 3 unités systemd et nginx sont
   **`active`**.
-- **Secrets** : `.env` est gitignoré (permissions 600) et **absent de prod**
-  (le code n'en utilise aucun).
+- **Secrets** : `/etc/urban-vision/bdc.key` (clé BigDataCloud, `root:600`,
+  section 17.2) et `/etc/urban-vision/alertes.env` (identifiants SMTP de la
+  veille, `root:600`, section 6.5, à créer) ; aucun secret dans git ni dans les
+  crontabs. `.env` est gitignoré et absent de prod.
 - **Dépannage hors-bande** : console OCI de l'instance (`ek-hub` →
   Console connection) en cas de blocage réseau/système.
 - Exposition : le dashboard étant public, les données qu'il affiche (retards,
@@ -1113,8 +1286,9 @@ Chaîne en production :
 
 | Fichier | Écrit par | Contenu typique |
 |---|---|---|
-| `data/collect.log` | `collect.py` (FileHandler) | `Démarrage de la collecte Urban Vision (intervalle: 60s)`, `OK - <n> entités, <n> observations mises à jour`, warnings « Trou de collecte » / « Échec de récupération » |
+| `data/collect.log` | `collect.py` (FileHandler) | `Démarrage de la collecte Urban Vision (intervalle: 60s)`, `OK - <n> entités, <n> observations mises à jour`, `Agrégats rafraîchis en <x> s`, warnings « Trou de collecte » / « Échec de récupération » / « Rafraîchissement des agrégats lent » |
 | `data/alerts.log` | `collect_alerts.py` | `OK - <n> entites, <n> alertes mises a jour`, erreurs éventuelles + traceback |
+| journald `urban-vision-veille-collecte` | `veille_collecte.py` | une ligne par condition (`ok` / `ALERTE`), email envoyé, erreurs SMTP |
 | `data/dashboard.log` | Streamlit/Uvicorn — **dev local uniquement** | démarrage serveur, warnings Streamlit ; en production Streamlit journalise vers **journald** (pas de fichier) |
 
 Observation : `data/collect.log` et `data/alerts.log` (gitignorés) contiennent
@@ -1130,7 +1304,7 @@ tail -f data/collect.log
 Les logs **ne tournent pas** : aucune règle logrotate dédiée, aucun cron de
 rotation ; seuls
 les logs système globaux sont gérés par `logrotate.timer`. Volumes en
-production : `collect.log` ≈ 6,2 Mo et `alerts.log` ≈ 5,6 Mo — volumes faibles,
+production au 01/10/2026 : `collect.log` ≈ 8,5 Mo et `alerts.log` ≈ 6,9 Mo — volumes faibles,
 mais la base principale, elle, est volumineuse (section 18.2).
 
 ### 17.1 Dashboards GoAccess des connexions nginx
@@ -1264,7 +1438,7 @@ plans/contours.
 ### 18.2 Taille de la base et WAL
 
 - `data/urban_vision.db` grossit avec l'historique (**~749 Mo en dev local ;
-  ~2,4 Go en production** au 14/09/2026, WAL ~76 Mo). Les agrégats sont
+  ~3,6 Go en production** au 01/10/2026, WAL ~143 Mo). Les agrégats sont
   reconstruits en incrémental ; la base n'est pas VACUUMed automatiquement.
 - Opérations possibles (à planifier, à confirmer par tests) :
   `sqlite3 data/urban_vision.db "PRAGMA wal_checkpoint(TRUNCATE);"`,
@@ -1277,7 +1451,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 223 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 258 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1349,6 +1523,10 @@ Procédure documentée/observée :
    sudo systemctl restart urban-vision-collect-alerts.service
    sudo systemctl restart urban-vision-dashboard.service
    ```
+3. Après une modification de `collect.py` ou `db.py`, vérifier dans
+   `data/collect.log` les lignes « Agrégats rafraîchis en … s » (quelques
+   secondes) et l'absence de « Trou de collecte ». Première installation de la
+   veille : sections 6.5 et 14.
 
 ### 20.3 Rapport de production
 
@@ -1368,7 +1546,7 @@ servis/transmis manuellement.
 
 | Symptôme | Cause probable | Actions |
 |---|---|---|
-| `sqlite3.OperationalError: database is locked` côté alertes | Recalcul d'agrégats du collecteur (verrou ~2 min) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Maigrir : `AGGREGATE_REFRESH_INTERVAL_SECONDS=300` |
+| `sqlite3.OperationalError: database is locked` côté alertes | Verrou d'écriture tenu par le rafraîchissement des agrégats du collecteur (≈ 200 s avant le correctif de la section 9.3) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Maigrir : `AGGREGATE_REFRESH_INTERVAL_SECONDS=300` |
 | Base `urban_vision.db` absente ou vide | Init jamais faite / données perdues | `python src/scripts/db.py` (schéma + migration) puis relancer collecte et gtfs statique |
 | Dashboard vide (warnings « pas d'observations ») | DB vide OU agrégats vides | Vérifier collecte (`tail -f data/collect.log`) ; le dashboard reconstruit les agrégats si vides, sinon relancer `python src/scripts/db.py` puis vérifier |
 | `xelatex: command not found` | LaTeX absent | `apt install texlive-* fonts-inter` cf. `apt-requirement.txt` |
@@ -1380,6 +1558,9 @@ servis/transmis manuellement.
 | Recopie de prod en local : DB « invisible » | `data/` et les logs sont gitignorés | Transférer manuellement le fichier et les `-wal`/`-shm` |
 | `settings.json`/`opencode.json` présents mais `.gitignore` | Fichiers locaux non versionnés | Normal (config développeur) |
 | Test `test_collect` « refresh trop fréquent » | Timings serrés | Relancer ; le test tolère `[1,3]` refreshes |
+| « Trou de collecte détecté : 3 à 5 minutes » en rafale, toutes les 5 à 9 min | Rafraîchissement des agrégats plus long que 180 s (section 9.3) | `grep -E "Agrégats rafraîchis\|agrégats lent" data/collect.log \| tail` ; rejouer `tests/test_refresh_aggregates.py` (plan de requête) |
+| Email « Flux temps réel quasi vide » | Flux TBM sans courses (incident côté TBM, grève, jour férié) | `grep "OK - " data/collect.log \| tail` : nombre d'entités proche de 0 ; consulter les alertes TBM ; rien à faire côté collecteur |
+| Aucun email d'alerte reçu | Timer inactif, identifiants absents ou refusés | `systemctl list-timers urban-vision-veille-collecte.timer` ; `journalctl -u urban-vision-veille-collecte.service -n 20` ; `sudo .venv/bin/python src/scripts/veille_collecte.py --test-email` |
 
 ---
 
@@ -1406,6 +1587,11 @@ Oui, à la granularité et au buffer près : même définition des passages
 issus de `reports/palette.py`. Différences constatées : le dashboard n'exclut
 pas les trous de collecte de ses agrégats (contrairement à `analyze.py`), voir
 section 7.3.
+
+**Comment suis-je prévenu d'un problème de collecte ?**
+Par email, via `veille_collecte.py` (section 9.4) : collecte arrêtée, trous de
+collecte, flux TBM quasi vide, avertissements répétés dans les logs.
+Identifiants SMTP : section 6.5.
 
 **Pourquoi faut-il exécuter `assign_stop_municipalities.py` ?**
 Les rapports communaux et la vue territoriale du dashboard filtrent par
@@ -1436,6 +1622,15 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 2. **Les trous de collecte** ne sont pas traités de façon uniforme par les
    trois consommateurs (analyse exclut, rapport comptabilise, dashboard
    n'exclut pas). C'est une dette méthodologique documentée à harmoniser.
+   Entre le 22/09/2026 et le redéploiement du collecteur corrigé (section 9.3),
+   `collection_gaps` reçoit ≈ 170 trous de 3 à 5 min par jour (1 321 trous,
+   4 244 min au 01/10/2026). Ce sont de vraies pauses de relève, mais le flux
+   TBM garde les arrêts desservis visibles après le départ et le relevé suivant
+   récupère presque toutes les valeurs : volumes de passages inchangés
+   (≈ 250 000 par jour de semaine), 2,4 à 2,5 % de valeurs finales issues d'une
+   prévision faite plus de 2 min avant le départ, contre 1,3 % auparavant. Le
+   rapport de septembre 2026 les additionne pourtant comme « interruption de
+   collecte » (≈ 4 058 min, recommandation 26.5 n° 5).
 3. **`daily_line_stats`** est écrite mais **jamais lue** par le dashboard ni
    les rapports (déjà obsolète).
 4. **`cause` des ServiceAlerts quasi toujours `UNKNOWN_CAUSE`** : le champ est
@@ -1450,6 +1645,12 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 8. **Exécution directe** : `generate_monthly_report.py` est documenté comme
    « moteur interne » ; appelé directement, il fonctionne mais peu de garde-fous
    UX.
+9. **Flux TBM vide sans trou de collecte** : le 08/09/2026 (≈ 3 h–9 h 30) et le
+   24/09/2026 (≈ 3 h–11 h), le flux TripUpdates ne contenait presque aucune
+   course alors que le collecteur tournait. Aucun trou n'est enregistré et les
+   agrégats de ces deux journées sont incomplets (214 451 et 169 192 passages,
+   contre ≈ 250 000 un jour de semaine). La veille (section 9.4) signale
+   désormais ces situations ; les données manquantes ne sont pas récupérables.
 
 ---
 
@@ -1520,14 +1721,16 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 223, isolés (suite `pytest` complète : 223 passed), flux synthétiques
+- Tests : 258, isolés (suite `pytest` complète : 258 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
   (gitignoré).
-- Git : branche `main`, remote GitHub ; production synchronisée sur le commit
-  `13cf796` + filtre Nouvelle-Aquitaine de `veille_visiteurs.py` déployé le
-  16/09/2026 (modification locale non commitée, sha256 identique VM/dev).
+- Git : branche `main`, remote GitHub ; production sur le commit `e838419`
+  (relevé le 01/10/2026). Correctif de collecte et veille email sur la branche
+  `correctif-collecte`, non déployés.
+- Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
+  `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
   nginx + cert Let's Encrypt (exp. 11/12/2026, renouvelé par `certbot.timer`),
   venv Python **3.12.14**, `xelatex` + fonts-inter présents ; `crontab` root
@@ -1539,7 +1742,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.2 Environnement de production
 
-État relevé sur la VM de production le 16/09/2026 :
+État relevé sur la VM de production le 16/09/2026, mis à jour le 01/10/2026 :
 
 | # | Point | État en production |
 |---|---|---|
@@ -1547,20 +1750,23 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U2 | Configuration nginx | Vhost `urban-vision` : 443 ssl → `proxy_pass 127.0.0.1:8501` (headers WebSocket), bloc :80 = 301 HTTPS (`$host` exact) sinon 404 ; vhost `default` de stock présent (page par défaut) |
 | U3 | Sauvegarde / rotation | Aucune sauvegarde (snapshots OCI non accessibles depuis le système) ; aucune règle logrotate dédiée ; `crontab` root (ajouté le 16/09/2026) : génération GoAccess toutes les 5 min (§17.1) et veille des visiteurs toutes les 5 min (§17.2) |
 | U4 | Version Python | venv **3.12.14**, Python système **3.10.12** (dev local : 3.11.2) |
-| U5 | URL de geocoding | Code prod identique au dev (`13cf796`) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
+| U5 | URL de geocoding | Code prod sur `e838419` (01/10/2026) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
 | U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** (tuiles **CARTO**, remplacées suite au blocage tile.openstreetmap.org 16/09) ; BigDataCloud actif depuis le 17/09 (clé `root:600`), localité + CP dans la colonne « Ville » ; **bannière « Dernier visiteur en France »** (toutes régions) ajoutée en tête le 17/09 ; ré-essai BigDataCloud 2 h après erreur transitoire (403) ; les IP « probable bot » (profil `p-bot`, orange) sont exclues de la passe BigDataCloud |
+| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus depuis le 22/09/2026 (171 trous et 9 h 51 min sur les 24 h précédant le 01/10/2026 à 11 h 37) ; cause et correctif : I5 (26.3) |
+| U10 | Veille de la collecte | Non installée : ni unité `urban-vision-veille-collecte.*`, ni `/etc/urban-vision/alertes.env` (le dossier ne contient que `bdc.key`) ; sortie SMTP vers `smtp.gmail.com` ouverte sur les ports 465 et 587 |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Les trois incohérences de l'audit ont été corrigées le 14/09/2026 :
+Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
 | I1 | `DB_PATH` de `gtfs_static.py` et `analyze.py` pointait vers `src/data/` (`parents[1]`) | `parents[2]` (aligné sur `collect.py`) + 2 tests de chemin ajoutés (`tests/test_gtfs_static.py`, `tests/test_analyze.py`) |
 | I3 | `src/sql/001_add_departure_time.sql` et `db.py` appliquaient la même `ALTER` | migration versionnée supprimée — `db.py` est l'unique mécanisme (PRAGMA + ALTER à l'import) |
 | I4 | Aide CLI `--compile` : « pdflatex » | texte d'aide = `xelatex/lualatex` (`generate_monthly_report.py`) |
+| I5 | Trous de collecte presque continus depuis le 22/09/2026 alors que le collecteur tournait : le rafraîchissement incrémental des agrégats (`db.py`) lisait tout l'historique (index `idx_observations_sched_delay`, filtre `start_date` sans index, jointure quadratique de `_DAILY_STOP_SQL`) ; sa durée (≈ 200 s) dépassait le seuil de trou (180 s) | Requêtes bornées par `idx_observations_departure_time` et `idx_observations_last_seen_at`, `+o.schedule_relationship`, `UNION ALL` + `GROUP BY` (section 9.3) ; durée du rafraîchissement journalisée par `collect.py` (warning au-delà de 60 s) ; veille email `veille_collecte.py` (section 9.4) ; tests `TestRefreshIncrementalBorne`. Effectif en production après redéploiement du collecteur (section 20.2) |
 
 ### 26.4 Dette documentaire
 
@@ -1587,6 +1793,14 @@ Les trois incohérences de l'audit ont été corrigées le 14/09/2026 :
    + sauvegarde périodique + VACUUM, avec tests associés.
 4. Activer un lint/type-check minimal (`ruff`, `pyright`) et une CI GitHub
    Actions exécutant `pytest` — aucun des deux n'existe.
+5. **Ligne « Trous de collecte » du rapport mensuel** : elle additionne toute
+   la table `collection_gaps` (septembre 2026 : ≈ 4 058 min, dont ≈ 3 900 dues
+   à l'incident I5, sans perte de données correspondante) et présente
+   `total_raw − passages` (arrêts sautés, `NO_DATA`, délais absents) comme des
+   observations exclues pour cause de trou, alors que le rapport n'exclut
+   rien. Reformuler la ligne et ne compter que les interruptions qui font
+   perdre des données (seuil à définir) avant de diffuser le rapport de
+   septembre.
 
 ---
 

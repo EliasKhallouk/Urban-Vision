@@ -17,12 +17,13 @@ def _seed_observations(conn):
       seq 4 | s1 | délai +400 (08:15)
       seq 5 | s1 | SKIPPED             (pas de departure_time)
     """
+    seen = _epoch_local(2026, 9, 11, 8, 20)
     rows = [
-        ("t1", "20260911", "A", 0, 1, "s1", "SCHEDULED", None, 10, _epoch_local(2026, 9, 11, 8, 0), 0),
-        ("t1", "20260911", "A", 0, 2, "s1", "SCHEDULED", 20, 20, _epoch_local(2026, 9, 11, 8, 5), 0),
-        ("t1", "20260911", "A", 0, 3, "s2", "SCHEDULED", 300, 300, _epoch_local(2026, 9, 11, 8, 10), 0),
-        ("t2", "20260911", "A", 0, 4, "s1", "SCHEDULED", 400, 400, _epoch_local(2026, 9, 11, 8, 15), 0),
-        ("t2", "20260911", "A", 0, 5, "s1", "SKIPPED", None, None, None, 0),
+        ("t1", "20260911", "A", 0, 1, "s1", "SCHEDULED", None, 10, _epoch_local(2026, 9, 11, 8, 0), seen),
+        ("t1", "20260911", "A", 0, 2, "s1", "SCHEDULED", 20, 20, _epoch_local(2026, 9, 11, 8, 5), seen),
+        ("t1", "20260911", "A", 0, 3, "s2", "SCHEDULED", 300, 300, _epoch_local(2026, 9, 11, 8, 10), seen),
+        ("t2", "20260911", "A", 0, 4, "s1", "SCHEDULED", 400, 400, _epoch_local(2026, 9, 11, 8, 15), seen),
+        ("t2", "20260911", "A", 0, 5, "s1", "SKIPPED", None, None, None, seen),
     ]
     conn.executemany(
         """INSERT INTO observations
@@ -124,3 +125,85 @@ class TestRefreshAgrees:
             "WHERE date_service = '2026-09-11' AND route_id = 'A'"
         ).fetchone()
         assert r == (4, 730, 1)
+
+
+def _seed_two_days(conn):
+    rows = []
+    for day in (11, 12):
+        start_date = f"202609{day}"
+        trips = [
+            ("A", "s1", 7, 0, "SCHEDULED", 30),
+            ("A", "s2", 7, 10, "SCHEDULED", 400),
+            ("A", "s3", 7, 20, "SKIPPED", None),
+            ("B", "s1", 17, 45, "SCHEDULED", -90),
+            ("B", "s4", 23, 50, "SCHEDULED", 200),
+        ]
+        for seq, (route, stop, hour, minute, rel, delay) in enumerate(trips, start=1):
+            departure = _epoch_local(2026, 9, day, hour, minute) if delay is not None else None
+            rows.append((f"t{day}{route}", start_date, route, 0, seq, stop, rel, delay, delay,
+                         departure, _epoch_local(2026, 9, day, hour, minute) + 120))
+        after_midnight = _epoch_local(2026, 9, day + 1, 0, 45)
+        rows.append((f"n{day}", start_date, "B", 1, 1, "s5", "SCHEDULED", 50, 50,
+                     _epoch_local(2026, 9, day + 1, 0, 40), after_midnight))
+        rows.append((f"n{day}", start_date, "B", 1, 2, "s6", "SKIPPED", None, None, None, after_midnight))
+    conn.executemany(
+        """INSERT INTO observations
+           (trip_id, start_date, route_id, direction_id, stop_sequence,
+            stop_id, schedule_relationship, arrival_delay, departure_delay,
+            departure_time, last_seen_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    conn.commit()
+
+
+def _dump_aggregates(conn, days):
+    import db as dbio
+
+    in_days = "', '".join(days)
+    return {
+        table: conn.execute(
+            f"SELECT * FROM {table} WHERE date_service IN ('{in_days}') ORDER BY 1, 2, 3, 4"
+        ).fetchall()
+        for table in dbio.AGG_TABLES
+    }
+
+
+class TestRefreshIncrementalBorne:
+    def test_plan_ne_lit_observations_que_par_les_index_bornes(self, conn):
+        import db as dbio
+
+        for sql, params in dbio.incremental_statements(["2026-09-11", "2026-09-12"]):
+            accesses = [
+                row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+                if row[3].startswith(("SCAN o", "SEARCH o"))
+            ]
+            assert accesses
+            for access in accesses:
+                assert ("idx_observations_departure_time" in access
+                        or "idx_observations_last_seen_at" in access), access
+
+    def test_incremental_identique_au_calcul_complet(self, conn):
+        import db as dbio
+
+        days = ["2026-09-11", "2026-09-12"]
+        _seed_two_days(conn)
+        dbio.refresh_aggregates(conn, days=None)
+        full = _dump_aggregates(conn, days)
+        for table in dbio.AGG_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+        conn.commit()
+        dbio.refresh_aggregates(conn, days=days)
+        assert _dump_aggregates(conn, days) == full
+        assert all(full[table] for table in dbio.AGG_TABLES)
+
+    def test_arret_saute_vu_apres_minuit_compte_dans_son_jour_de_service(self, conn):
+        import db as dbio
+
+        _seed_two_days(conn)
+        dbio.refresh_aggregates(conn, days=["2026-09-12"])
+        skipped, eligible = conn.execute(
+            "SELECT skipped, eligible FROM agg_daily_stop "
+            "WHERE date_service = '2026-09-12' AND route_id = 'B' AND stop_id = 's6'"
+        ).fetchone()
+        assert (skipped, eligible) == (1, 1)
