@@ -5,7 +5,7 @@
 | **Projet** | Urban Vision |
 | **Version du document** | 1.1 |
 | **Date** | 2026-10-01 |
-| **Commit de référence** | `e838419` (branche `main`) + branche `correctif-collecte` |
+| **Commit de référence** | `68f7329` (branche `main`) |
 | **Auteur d'origine** | Elias Khallouk (eliaskhallouk@gmail.com) |
 | **Licence / dépôt** | https://github.com/EliasKhallouk/Urban-Vision |
 | **Périmètre** | Dépôt local **ET** environnement de production (VM Oracle Cloud) |
@@ -491,9 +491,9 @@ n'active pas WAL lui-même mais émet `PRAGMA busy_timeout` (120 s) et
 (`app.py:293-298`).
 
 > En WAL, l'écrivain tient des verrous courts ; le collecteur (écrivain
-> régulier, y compris le recalcul incrémental des agrégats : ≈ 14 s de lecture
-> mesurées sur la base de production, contre ≈ 200 s avant le correctif de la
-> section 9.3) et le service d'alertes coexistent grâce aux `busy_timeout`
+> régulier, y compris le recalcul incrémental des agrégats : 17 à 19 s en
+> production depuis le déploiement du 01/10/2026, contre ≈ 200 s avant le
+> correctif de la section 9.3) et le service d'alertes coexistent grâce aux `busy_timeout`
 > élevés (120 s / 180 s). Un `rollback` après erreur est effectué côté alertes
 > (`collect_alerts.py:143`) — comportement couvert par
 > `tests/test_collect_alerts.py::TestRecuperationApresVerrou`.
@@ -712,8 +712,8 @@ le dashboard territorial et les rapports (colonne « direction »).
   `last_seen_at` portées par leurs index, `+o.schedule_relationship`,
   `UNION ALL` + `GROUP BY` (section 8). Mesures : 27,5 s → 2,9 s sur la base de
   dev (3,2 millions d'observations), résultats identiques ligne à ligne ;
-  ≈ 14 s de lecture sur la base de production (12,9 millions d'observations,
-  VM 1 vCPU). Le coût dépend du volume des jours traités, plus de l'historique.
+  16,8 à 19,0 s par rafraîchissement en production depuis le déploiement du
+  01/10/2026 (12,9 millions d'observations, VM 1 vCPU). Le coût dépend du volume des jours traités, plus de l'historique.
   Garde-fou : `tests/test_refresh_aggregates.py::TestRefreshIncrementalBorne`
   (plan de requête et équivalence avec le recalcul complet).
 - Les lectures du dashboard sont presque exclusivement sur les tables `agg_*`
@@ -1540,6 +1540,10 @@ est installé) :
 Sortie dans `reports/output/AAAA-MM/` (gitignoré). Les PDF finaux sont ensuite
 servis/transmis manuellement.
 
+Au 01/10/2026, le venv de la VM ne contient pas `matplotlib` (absent de
+`requirements.txt`) : `generate_monthly_report.py` échoue à l'import en
+production (26.2 U11, recommandation 26.5 n° 6).
+
 ---
 
 ## 21. Dépannage (troubleshooting)
@@ -1622,9 +1626,9 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 2. **Les trous de collecte** ne sont pas traités de façon uniforme par les
    trois consommateurs (analyse exclut, rapport comptabilise, dashboard
    n'exclut pas). C'est une dette méthodologique documentée à harmoniser.
-   Entre le 22/09/2026 et le redéploiement du collecteur corrigé (section 9.3),
-   `collection_gaps` reçoit ≈ 170 trous de 3 à 5 min par jour (1 321 trous,
-   4 244 min au 01/10/2026). Ce sont de vraies pauses de relève, mais le flux
+   Du 22/09/2026 au 01/10/2026 (dernier trou terminé à 12 h 01, collecteur
+   corrigé déployé à 12 h 09, section 9.3), `collection_gaps` a reçu ≈ 170
+   trous de 3 à 5 min par jour (1 324 trous, 4 255 min). Ce sont de vraies pauses de relève, mais le flux
    TBM garde les arrêts desservis visibles après le départ et le relevé suivant
    récupère presque toutes les valeurs : volumes de passages inchangés
    (≈ 250 000 par jour de semaine), 2,4 à 2,5 % de valeurs finales issues d'une
@@ -1726,9 +1730,9 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
   (gitignoré).
-- Git : branche `main`, remote GitHub ; production sur le commit `e838419`
-  (relevé le 01/10/2026). Correctif de collecte et veille email sur la branche
-  `correctif-collecte`, non déployés.
+- Git : branche `main`, remote GitHub ; production sur le commit `68f7329`
+  (correctif de collecte, déployé le 01/10/2026 à 12 h 09 ; veille email non
+  installée).
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -1750,12 +1754,13 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U2 | Configuration nginx | Vhost `urban-vision` : 443 ssl → `proxy_pass 127.0.0.1:8501` (headers WebSocket), bloc :80 = 301 HTTPS (`$host` exact) sinon 404 ; vhost `default` de stock présent (page par défaut) |
 | U3 | Sauvegarde / rotation | Aucune sauvegarde (snapshots OCI non accessibles depuis le système) ; aucune règle logrotate dédiée ; `crontab` root (ajouté le 16/09/2026) : génération GoAccess toutes les 5 min (§17.1) et veille des visiteurs toutes les 5 min (§17.2) |
 | U4 | Version Python | venv **3.12.14**, Python système **3.10.12** (dev local : 3.11.2) |
-| U5 | URL de geocoding | Code prod sur `e838419` (01/10/2026) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
+| U5 | URL de geocoding | Code prod sur `68f7329` (01/10/2026) ; fallback API Adresse `https://api-adresse.data.gouv.fr/reverse/?` ; aucune trace d'appel dans les logs récents |
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
 | U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** (tuiles **CARTO**, remplacées suite au blocage tile.openstreetmap.org 16/09) ; BigDataCloud actif depuis le 17/09 (clé `root:600`), localité + CP dans la colonne « Ville » ; **bannière « Dernier visiteur en France »** (toutes régions) ajoutée en tête le 17/09 ; ré-essai BigDataCloud 2 h après erreur transitoire (403) ; les IP « probable bot » (profil `p-bot`, orange) sont exclues de la passe BigDataCloud |
-| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus depuis le 22/09/2026 (171 trous et 9 h 51 min sur les 24 h précédant le 01/10/2026 à 11 h 37) ; cause et correctif : I5 (26.3) |
+| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus du 22/09/2026 au 01/10/2026 à 12 h 01 (I5, 26.3). Correctif déployé le 01/10/2026 à 12 h 09 (seul `urban-vision-collect` redémarré) : de 12 h 09 à 14 h 16, 128 relevés, aucun trou, aucun warning, plus grand écart entre deux relevés 80 s, rafraîchissement des agrégats 16,8 à 19,0 s ; agrégats du 30/09 identiques au comptage direct dans `observations` (251 591 passages) ; dashboard HTTPS 200 |
 | U10 | Veille de la collecte | Non installée : ni unité `urban-vision-veille-collecte.*`, ni `/etc/urban-vision/alertes.env` (le dossier ne contient que `bdc.key`) ; sortie SMTP vers `smtp.gmail.com` ouverte sur les ports 465 et 587 |
+| U11 | Tests sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed. `tests/test_monthly_report.py` (58 tests) n'est pas importable : `matplotlib` manque au venv, donc `generate_monthly_report.py` ne peut pas tourner sur la VM. Les PDF d'août de `reports/output/2026-08/` n'ont pas de `.tex` à côté : générés ailleurs puis copiés, à confirmer |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
@@ -1766,7 +1771,7 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/20
 | I1 | `DB_PATH` de `gtfs_static.py` et `analyze.py` pointait vers `src/data/` (`parents[1]`) | `parents[2]` (aligné sur `collect.py`) + 2 tests de chemin ajoutés (`tests/test_gtfs_static.py`, `tests/test_analyze.py`) |
 | I3 | `src/sql/001_add_departure_time.sql` et `db.py` appliquaient la même `ALTER` | migration versionnée supprimée — `db.py` est l'unique mécanisme (PRAGMA + ALTER à l'import) |
 | I4 | Aide CLI `--compile` : « pdflatex » | texte d'aide = `xelatex/lualatex` (`generate_monthly_report.py`) |
-| I5 | Trous de collecte presque continus depuis le 22/09/2026 alors que le collecteur tournait : le rafraîchissement incrémental des agrégats (`db.py`) lisait tout l'historique (index `idx_observations_sched_delay`, filtre `start_date` sans index, jointure quadratique de `_DAILY_STOP_SQL`) ; sa durée (≈ 200 s) dépassait le seuil de trou (180 s) | Requêtes bornées par `idx_observations_departure_time` et `idx_observations_last_seen_at`, `+o.schedule_relationship`, `UNION ALL` + `GROUP BY` (section 9.3) ; durée du rafraîchissement journalisée par `collect.py` (warning au-delà de 60 s) ; veille email `veille_collecte.py` (section 9.4) ; tests `TestRefreshIncrementalBorne`. Effectif en production après redéploiement du collecteur (section 20.2) |
+| I5 | Trous de collecte presque continus depuis le 22/09/2026 alors que le collecteur tournait : le rafraîchissement incrémental des agrégats (`db.py`) lisait tout l'historique (index `idx_observations_sched_delay`, filtre `start_date` sans index, jointure quadratique de `_DAILY_STOP_SQL`) ; sa durée (≈ 200 s) dépassait le seuil de trou (180 s) | Requêtes bornées par `idx_observations_departure_time` et `idx_observations_last_seen_at`, `+o.schedule_relationship`, `UNION ALL` + `GROUP BY` (section 9.3) ; durée du rafraîchissement journalisée par `collect.py` (warning au-delà de 60 s) ; veille email `veille_collecte.py` (section 9.4) ; tests `TestRefreshIncrementalBorne`. Déployé en production le 01/10/2026 à 12 h 09 ; aucun trou depuis |
 
 ### 26.4 Dette documentaire
 
@@ -1801,6 +1806,11 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/20
    rien. Reformuler la ligne et ne compter que les interruptions qui font
    perdre des données (seuil à définir) avant de diffuser le rapport de
    septembre.
+6. **Installer `matplotlib` en production** : l'ajouter à `requirements.txt`
+   (3.11.1 en dev, avec `contourpy`, `cycler`, `fonttools`, `kiwisolver`,
+   `pyparsing`) puis l'installer dans le venv de la VM
+   (`~/.local/bin/uv pip install --python .venv/bin/python -r requirements.txt`) ;
+   sans lui, `generate_monthly_report.py` échoue à l'import (26.2 U11, § 20.3).
 
 ---
 
