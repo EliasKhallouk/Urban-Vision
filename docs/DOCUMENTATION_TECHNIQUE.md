@@ -130,8 +130,9 @@ Flux de traitement en résumé :
    secours via l'API Adresse.
 3. **Agrégation** : `db.py` expose `refresh_aggregates()` qui calcule les
    tables `agg_daily`, `agg_hourly`, `agg_daily_stop`, `agg_hourly_stop`
-   (histogrammes JSON des délais pour une médiane exacte). Le collecteur
-   rafraîchit les agrégats toutes les 300 s (incrément sur hier/aujourd'hui) ;
+   (histogrammes JSON des délais pour une médiane exacte). Le timer
+   `urban-vision-rafraichir` les recalcule toutes les 5 min sur hier et
+   aujourd'hui (`rafraichir_agregats.py`, hors de la boucle de collecte) ;
    le dashboard les reconstruit intégralement s'ils sont vides/incomplets.
 4. **Analyse quotidienne** : `analyze.py` calcule les statistiques par ligne
    (buffer de stabilisation 20 min, exclusion des trous de collecte) et les
@@ -143,8 +144,13 @@ Flux de traitement en résumé :
    rapport LaTeX par périmètre ; `generate_single_report.py` / `generate_all_reports.py`
    orchestrent les générations ; les PDF sont compilés avec **xelatex**.
 7. **Veille** : `veille_collecte.py`, lancé toutes les 5 min par un timer
-   systemd, contrôle la collecte (relevés, trous, volume du flux, logs) et
-   envoie un email en cas d'anomalie (section 9.4).
+   systemd, contrôle la collecte (relevés, trous, volume du flux, flux figé,
+   logs, sauvegardes, tâches planifiées) et envoie un email en cas d'anomalie
+   (section 9.4) ; il peut aussi envoyer un signal de vie à une sonde externe.
+8. **Protection des données** : sauvegarde de la base chaque nuit
+   (`sauvegarde.py`, section 19) et archive du GTFS statique chaque fois qu'il
+   change (`archive_gtfs.py`, section 9.5), car TBM ne publie que les horaires
+   en cours et à venir.
 
 **Environnements :**
 
@@ -162,6 +168,7 @@ Arborescence pertinente (hors `.git/`, `.venv/`, `data/*.db`, `.vscode` et
 
 ```
 Urban-Vision/
+├── .github/workflows/tests.yml     # intégration continue : installation, ruff, pytest
 ├── .gitignore
 ├── .streamlit/
 │   └── config.toml                 # thème + serveur 127.0.0.1:8501
@@ -180,7 +187,15 @@ Urban-Vision/
 │   ├── collect.log                 # logs du collecteur
 │   ├── alerts.log                  # logs du collecteur d'alertes
 │   ├── veille_collecte.json        # état des alertes de la veille (production)
+│   ├── sauvegardes/                # sauvegardes quotidiennes compressées + manifestes
+│   ├── gtfs_archive/               # versions successives du GTFS statique + index.json
 │   └── dashboard.log               # logs Streamlit — local/dev uniquement
+├── deploy/                         # configuration de la VM, versionnée
+│   ├── deployer.sh                 # déploiement : code, dépendances, unités, contrôles
+│   ├── systemd/                    # unités et timers urban-vision-*
+│   ├── nginx/urban-vision          # vhost HTTPS (en-têtes de sécurité)
+│   ├── logrotate/urban-vision      # rotation de collect.log et alerts.log
+│   └── cron/root.crontab           # crontab root de référence (GoAccess, veille des visiteurs)
 ├── docs/
 │   └── DOCUMENTATION_TECHNIQUE.md  # documentation technique (ce document)
 ├── pytest.ini                      # testpaths=tests, addopts=-q
@@ -194,19 +209,22 @@ Urban-Vision/
 │   ├── plan/                       # 27 PDF de plans de réseau/communes (littéraux)
 │   └── output/                     # GITIGNORÉ — résultats (2026-07, 2026-08, …)
 ├── requirements.txt               # dépendances Python épinglées (42 lignes)
-├── requirements-dev.txt           # pytest
+├── requirements-dev.txt           # pytest, ruff
 ├── src/
 │   ├── scripts/
 │   │   ├── analyze.py              # bilan quotidien par ligne
+│   │   ├── archive_gtfs.py         # archive du GTFS statique quand il change
 │   │   ├── assign_stop_municipalities.py  # rattachement arrêts↔communes
 │   │   ├── collect.py              # collecteur TripUpdates (60 s)
 │   │   ├── collect_alerts.py       # collecteur ServiceAlerts (120 s)
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   ├── gtfs_static.py          # chargement routes/stops
+│   │   ├── rafraichir_agregats.py  # recalcul des agrégats (timer 5 min)
+│   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 19 fichiers, 262 tests pytest
+└── tests/                          # 22 fichiers, 302 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -324,7 +342,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 262 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 302 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -332,17 +350,17 @@ Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
 
 ### 5.7 Installation des services en production
 
-La procédure d'installation (contenu exact des unités en section 14) :
+Toute la configuration de la VM est versionnée dans `deploy/` (section 14) et
+installée par le script de déploiement (section 20.2) :
 
-1. Créer les 3 fichiers d'unité systemd dans `/etc/systemd/system/` :
-   `urban-vision-collect.service`, `urban-vision-collect-alerts.service`,
-   `urban-vision-dashboard.service` (contenu **non versionné**, cf. section 14).
-2. `sudo systemctl daemon-reload`
-3. `sudo systemctl enable` puis `start` chacune des unités.
-4. Vérifier : `sudo systemctl status urban-vision-collect.service
-   urban-vision-collect-alerts.service urban-vision-dashboard.service`.
-5. Installer la veille de la collecte : identifiants SMTP (section 6.5), puis
-   service et timer `urban-vision-veille-collecte` (section 14).
+```bash
+cd ~/Urban-Vision && deploy/deployer.sh            # met à jour, installe, redémarre, contrôle
+deploy/deployer.sh --sans-pull --sans-redemarrage  # réinstalle la configuration seule
+```
+
+Prérequis propres à la VM, hors dépôt : identifiants SMTP de la veille
+(section 6.5), adresse optionnelle de copie des sauvegardes hors VM
+(section 6.6), clé BigDataCloud de la veille des visiteurs (section 17.2).
 
 ---
 
@@ -395,22 +413,25 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 
 | Constante | Valeur | Emplacement |
 |---|---|---|
-| `POLL_INTERVAL_SECONDS` (TripUpdates) | 60 s | `collect.py:25` |
+| `POLL_INTERVAL_SECONDS` (TripUpdates) | 60 s | `collect.py:24` |
 | `POLL_INTERVAL_SECONDS` (ServiceAlerts) | 120 s | `collect_alerts.py:24` |
-| `GAP_THRESHOLD_SECONDS` | 180 s (3 × intervalle) | `collect.py:26` |
-| `DB_BUSY_TIMEOUT_MS` (collect) | 120 000 ms | `collect.py:28` |
+| `GAP_THRESHOLD_SECONDS` | 180 s (3 × intervalle) | `collect.py:25` |
+| `DB_BUSY_TIMEOUT_MS` (collect) | 120 000 ms | `collect.py:27` |
+| `PREDICTION_HORIZONS` | prévision retenue à 10, 5 et 2 min du départ | `collect.py:28` |
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
-| `AGGREGATE_REFRESH_INTERVAL_SECONDS` | 300 s | `collect.py:32` |
-| `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `collect.py:33` |
-| `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:372` |
-| Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h | `veille_collecte.py:23-34` |
+| Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
+| `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
+| `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:390` |
+| Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
+| `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:56` |
+| `KEEP_DAILY` / `KEEP_MONTHLY` | 7 sauvegardes quotidiennes, 6 mensuelles | `sauvegarde.py:20-21` |
 | `FRESHNESS_BUFFER_SECONDS` | 1200 s (20 min) | `analyze.py:17`, `generate_monthly_report.py:51`, `app.py:50` |
 | `CACHE_TTL_SECONDS` (dashboard) | 60 s | `app.py:51` |
 | `MIN_OBSERVATIONS` (dashboard) | 50 | `app.py:52` |
-| `timeout` HTTP (collecte) | 15 s | `collect.py:48`, `collect_alerts.py:59` |
+| `timeout` HTTP (collecte) | 15 s | `collect.py:44`, `collect_alerts.py:59` |
 | `timeout` HTTP (gtfs statique) | 30 s | `gtfs_static.py:25` |
 | Seuil « ponctuel » (retard ≤ 5 min) | 300 s | commun (SQL, rapport, palette) |
-| Seuil « en avance > 1 min » | < −60 s | `db.py:231`, `analyze.py:66` |
+| Seuil « en avance > 1 min » | < −60 s | `db.py:249`, `analyze.py:66` |
 
 ### 6.4 Charte graphique et seuils (source unique : `reports/palette.py`)
 
@@ -458,6 +479,14 @@ les commentaires). Le fichier n'est pas dans git et n'est lisible que par
 | `UV_SMTP_PORT` | `465` | `465` = SSL ; toute autre valeur = STARTTLS (ex. `587`) |
 | `UV_ALERT_TO` | `UV_SMTP_USER` | destinataire(s), séparés par des virgules |
 | `UV_ALERT_FROM` | `UV_SMTP_USER` | expéditeur |
+| `UV_HEARTBEAT_URL` | — (facultatif) | adresse de sonde externe (type healthchecks.io) appelée à chaque passage, suffixée de `/fail` quand une alerte est active |
+
+Sonde externe (une fois) : créer un compte gratuit sur un service de
+surveillance par signal de vie (par exemple healthchecks.io), créer un
+contrôle de période 5 min et de tolérance 10 min, puis copier son adresse
+dans `UV_HEARTBEAT_URL`. Le service prévient par email quand le signal cesse,
+ce qui couvre aussi une panne de la VM entière, que la veille ne peut pas
+signaler elle-même.
 
 Mot de passe d'application Gmail (une fois) : activer la validation en deux
 étapes du compte Google, puis <https://myaccount.google.com/apppasswords> →
@@ -475,6 +504,27 @@ sudo nano /etc/urban-vision/alertes.env
 #   UV_SMTP_USER=adresse@gmail.com
 #   UV_SMTP_PASSWORD=abcdefghijklmnop
 cd ~/Urban-Vision && sudo .venv/bin/python src/scripts/veille_collecte.py --test-email
+```
+
+### 6.6 Copie des sauvegardes hors VM (`/etc/urban-vision/sauvegarde.env`)
+
+Facultatif. `sauvegarde.py` (section 19) envoie chaque sauvegarde vers un
+seau de stockage objet quand `UV_BACKUP_PAR_URL` est défini, par une simple
+requête HTTP `PUT`, sans outil supplémentaire. Le fichier est chargé par
+l'unité `urban-vision-sauvegarde.service` (`EnvironmentFile=-…`, facultatif).
+
+Mise en place sur Oracle Cloud (Object Storage, inclus dans l'offre
+gratuite) : créer un seau, puis une *requête pré-authentifiée* en écriture
+sur ce seau (« Pre-Authenticated Request », accès « Permit object writes »,
+avec une date d'expiration lointaine), et copier son adresse, qui se termine
+par `/o/`. Ajouter une règle de cycle de vie qui supprime les objets de plus
+de 30 jours.
+
+```bash
+sudo install -m 600 /dev/null /etc/urban-vision/sauvegarde.env
+sudo nano /etc/urban-vision/sauvegarde.env
+#   UV_BACKUP_PAR_URL=https://objectstorage.<région>.oraclecloud.com/p/<jeton>/n/<espace>/b/<seau>/o/
+sudo systemctl start urban-vision-sauvegarde.service && journalctl -u urban-vision-sauvegarde.service -n 5
 ```
 
 ---
@@ -501,7 +551,9 @@ n'active pas WAL lui-même mais émet `PRAGMA busy_timeout` (120 s) et
 ### 7.1 Schéma (source unique de vérité)
 
 Tout est défini dans `src/scripts/db.py::SCHEMA_DDL` (créé de manière
-idempotente). Les tables `routes`/`stops` et `stop_municipalities`/`municipalities`,
+idempotente). `init_db` ajoute d'abord à une base existante les colonnes
+apparues depuis sa création (`OBSERVATION_COLUMNS_ADDED`), puis applique le
+schéma. Les tables `routes`/`stops` et `stop_municipalities`/`municipalities`,
 ainsi que `stop_direction`, sont définies dans leurs modules respectifs
 (`gtfs_static.py`, `assign_stop_municipalities.py`, `db.py`).
 
@@ -521,6 +573,7 @@ Clé primaire `(trip_id, start_date, stop_sequence)`.
 | `departure_delay` | INTEGER | retard au départ (s) — **variable d'analyse** |
 | `departure_time` | INTEGER | heure de départ effective (epoch) — ajoutée par migration |
 | `last_seen_at` | INTEGER | dernière fois où le flux mentionnait ce passage (epoch) |
+| `pred_dep_10`, `pred_dep_5`, `pred_dep_2` | INTEGER | heure de départ prévue (epoch) lue au relevé où le départ annoncé passe sous 10, 5 puis 2 min ; `NULL` si l'horizon n'a pas été franchi sous les yeux du collecteur (passage apparu trop tard). Comparées à `departure_time` final, elles mesurent la fiabilité de l'information voyageur |
 
 **`daily_line_stats`** — statistiques quotidiennes par ligne (écrites par `analyze.py` ;
 **non lues** par le dashboard ni les rapports — usage historique).
@@ -529,6 +582,12 @@ PK `(stat_date, route_id)`.
 **`collection_gaps`** — trous de collecte `(gap_start, gap_end)` en epoch. Écrits
 par `collect.py` quand l'écart entre deux succès dépasse 180 s. **Exclus**
 de l'analyse (cf. 7.3). Surveillés par `veille_collecte.py` (section 9.4).
+
+**`collection_runs`** — journal de collecte, une ligne par relevé (`started_at`
+en epoch, clé primaire) : horodatage du flux (`feed_ts`), entités, lignes
+écrites, durées de téléchargement et d'écriture (ms), message d'erreur
+(`NULL` si le relevé a réussi). Il donne la complétude exacte de la collecte,
+sert de signal de vie à la veille et de point de reprise au collecteur.
 
 **`trip_status`** — dernier statut connu par voyage. PK `(trip_id, start_date)`.
 
@@ -610,13 +669,16 @@ Vue temporelle d'une journée-type :
 ```
 06:00  ...  TBM publie les GTFS-RT (protobuf encodé, envoyé gzippé)
               │
- 60 s        collect.py  ──► upsert observations / trip_status
+ 60 s        collect.py  ──► upsert observations / trip_status, ligne de collection_runs
  120 s       collect_alerts.py ──► upsert service_alerts
- 300 s       collect.py  ──► refresh_aggregates(days=[hier, aujourd'hui])
+ 5 min       rafraichir_agregats.py ──► refresh_aggregates(days=[hier, aujourd'hui])
+ 5 min       veille_collecte.py ──► alertes email, signal de vie
+ 02:30       sauvegarde.py ──► data/sauvegardes/ (+ copie hors VM)
+ 06:15       archive_gtfs.py ──► data/gtfs_archive/ si le GTFS a changé
               │
  à chaq. réexéc.    dashboard/app.py ──► lit agg_* (cache 60 s)
               │
- fin de mois  generate_all_reports.py ──► generate_monthly_report.py ──► xelatex ──► PDF
+ 1er, 03:00   generate_all_reports.py ──► generate_monthly_report.py ──► xelatex ──► PDF
 ```
 
 Détails des requêtes SQL d'agrégation (`db.py`)
@@ -671,15 +733,20 @@ le dashboard territorial et les rapports (colonne « direction »).
   dernière valeur gagne) — garantit que 60 s de collecte ne doublonnent rien
   (`last_seen_at` est mis à jour à chaque cycle pour les passages encore visibles).
 - Détection des trous : si l'écart entre deux « succès » dépasse 180 s, un
-  intervalle est inséré dans `collection_gaps` (+ warning log).
-- Rafraîchissement des agrégats toutes les **300 s** sur les jours « hier » et
-  « aujourd'hui » (recalcul exact, coût contrôlé ; un échec est seulement loggé
-  en warning pour ne pas arrêter la collecte). Il s'exécute dans la boucle de
-  collecte : aucun relevé n'a lieu pendant sa durée. Celle-ci est journalisée à
-  chaque passage (« Agrégats rafraîchis en X s ») ; au-delà de
-  `REFRESH_WARN_SECONDS` (60 s), le message passe en warning
-  (« Rafraîchissement des agrégats lent ») et la veille (section 9.4) l'envoie
-  par email s'il se répète.
+  intervalle est inséré dans `collection_gaps` (+ warning log). Au démarrage,
+  le dernier succès est lu dans `collection_runs` (repli sur
+  `MAX(last_seen_at)`) : un redémarrage la nuit, quand le flux est vide, ne
+  crée plus de faux trou de plusieurs heures.
+- Journal de collecte : chaque relevé, réussi ou non, ajoute une ligne à
+  `collection_runs` (section 7.1).
+- Trajectoire des prévisions : l'upsert retient, dans `pred_dep_10`,
+  `pred_dep_5` et `pred_dep_2`, l'heure prévue au relevé où le départ annoncé
+  franchit 10, 5 puis 2 min (`PREDICTION_HORIZONS`) ; une valeur retenue n'est
+  plus modifiée.
+- Le collecteur ne calcule plus les agrégats : `rafraichir_agregats.py` le fait
+  toutes les 5 min dans un processus séparé (section 10.2). Un recalcul lent ou
+  en échec ne retarde plus aucun relevé ; l'écriture d'un relevé attend au plus
+  la fin d'un recalcul en cours (verrou SQLite, `busy_timeout`).
 - Boucle inconditionnelle ; les erreurs HTTP sont loggées et le cycle reprend.
   `time.sleep(max(0, interval - elapsed))` compense le temps de traitement.
 
@@ -697,9 +764,9 @@ le dashboard territorial et les rapports (colonne « direction »).
 
 ### 9.3 Considérations de performance
 
-- La base est en mode **WAL** ; le rafraîchissement des agrégats bloque les
-  relevés pendant sa durée → intervalle d'agrégation de 300 s
-  (`collect.py:29-32`) ; `busy_timeout` élevés des deux collecteurs.
+- La base est en mode **WAL** ; depuis le 01/10/2026, le recalcul des agrégats
+  tourne dans son propre processus (timer toutes les 5 min) et ne bloque plus
+  les relevés ; `busy_timeout` élevés des deux collecteurs et du recalcul.
 - **Incident du 22/09/2026** (I5, section 26.3) : les requêtes incrémentales
   choisissaient `idx_observations_sched_delay` (égalité sur
   `schedule_relationship`) et parcouraient donc tous les passages `SCHEDULED`
@@ -726,16 +793,20 @@ le dashboard territorial et les rapports (colonne « direction »).
 
 Script en bibliothèque standard, lancé toutes les 5 min par
 `urban-vision-veille-collecte.timer` (section 14). Il ouvre la base en lecture
-seule, lit la fin (512 Ko) de `data/collect.log` et `data/alerts.log`, évalue
-les conditions suivantes et envoie un email (identifiants SMTP : section 6.5).
+seule, lit la fin (512 Ko) de `data/collect.log` et `data/alerts.log`, le
+dernier manifeste de sauvegarde et l'état des tâches planifiées, évalue les
+conditions suivantes et envoie un email (identifiants SMTP : section 6.5).
 
 | Condition | Règle | Source |
 |---|---|---|
-| Collecte arrêtée | aucune ligne `OK - …` depuis plus de 10 min | `collect.log` : le collecteur écrit `OK` même quand le flux est vide (0 entité de 2 h à 5 h), alors que `last_seen_at` n'avance plus la nuit |
+| Collecte arrêtée | aucun relevé réussi depuis plus de 10 min ; l'email cite la dernière erreur | `collection_runs` (repli sur les lignes `OK - …` de `collect.log` si le journal est vide). Le journal enregistre aussi les relevés à 0 entité de 2 h à 5 h, alors que `last_seen_at` n'avance plus la nuit |
+| Flux temps réel figé | au moins 5 relevés réussis sur 15 min, tous avec le même horodatage de flux | `collection_runs` |
 | Trous de collecte | au moins un trou de `collection_gaps` terminé dans la dernière heure | base |
 | Flux temps réel quasi vide | passages (`departure_time`) des 2 dernières heures, décalées de 10 min, inférieurs à 20 % de la médiane du même créneau les 3 semaines précédentes, quand cette médiane atteint 2 000 | base |
 | Avertissements répétés dans les logs | au moins 3 lignes `WARNING`/`ERROR` dans la dernière heure, hors « Trou de collecte » | `collect.log`, `alerts.log` |
 | Base de données illisible | erreur SQLite à l'ouverture ou à la lecture | base |
+| Sauvegarde manquante | dernière sauvegarde de plus de 26 h, ou aucune | manifestes de `data/sauvegardes/` (condition ignorée si le dossier n'existe pas) |
+| Tâche planifiée en échec | résultat `exit-code`, `timeout`, `signal`… pour le recalcul des agrégats, la sauvegarde, l'archive GTFS ou les rapports | `systemctl show -p Result` (d'où `AF_UNIX` dans les familles autorisées de l'unité) |
 
 - Un email part à l'apparition d'une alerte, puis un rappel toutes les 12 h
   tant qu'elle dure, et un email « Retour à la normale » à sa fin ; les
@@ -743,6 +814,9 @@ les conditions suivantes et envoie un email (identifiants SMTP : section 6.5).
   échoue, l'alerte est retentée au passage suivant et le script sort en code 1
   (unité en échec dans `systemctl --failed`).
 - État des alertes : `data/veille_collecte.json` (gitignoré).
+- Signal de vie : si `UV_HEARTBEAT_URL` est défini (section 6.5), chaque
+  passage appelle cette adresse, suffixée de `/fail` quand une alerte est
+  active ; un échec d'appel est seulement signalé sur la sortie d'erreur.
 - Seuil de volume, calibré sur les données de production : hors incident, le
   ratio reste entre 0,90 et 1,10. Le 08/09/2026 (≈ 3 h–9 h 30) et le
   24/09/2026 (≈ 3 h–11 h), le flux TBM ne contenait presque plus de courses
@@ -758,6 +832,22 @@ journalctl -u urban-vision-veille-collecte.service -n 20
 ```
 
 Options : `--db`, `--log-dir`, `--state` (par défaut, les chemins du dépôt).
+
+### 9.5 Archive du GTFS statique (`archive_gtfs.py`)
+
+TBM ne publie que les horaires en cours et à venir (le fichier téléchargé le
+01/10/2026 couvre du 01/10 au 30/12/2026) : sans archive, l'offre prévue d'un
+jour passé est perdue. Le timer `urban-vision-archive-gtfs` télécharge le GTFS
+statique chaque jour à 6 h 15 (TBM le régénère vers 4 h 50), contrôle qu'il
+contient `trips.txt`, `stop_times.txt`, `routes.txt` et `stops.txt`, puis le
+conserve dans `data/gtfs_archive/gtfs_<date>_<empreinte>.zip` seulement si son
+empreinte SHA-256 est nouvelle (22,7 Mo par version). `index.json` liste les
+versions (dates de validité et version lues dans `feed_info.txt`) et la date du
+dernier contrôle.
+
+```bash
+.venv/bin/python src/scripts/archive_gtfs.py            # --dest pour un autre dossier
+```
 
 ---
 
@@ -780,6 +870,13 @@ Options : `--db`, `--log-dir`, `--state` (par défaut, les chemins du dépôt).
 > cette table (ils utilisent les `agg_*`). Elle reste conservée pour l'historique.
 
 ### 10.2 `db.py::refresh_aggregates` — agrégats du dashboard (chaîne principale)
+
+Le recalcul de routine est lancé toutes les 5 min par
+`urban-vision-rafraichir.timer` : `rafraichir_agregats.py` recalcule hier et
+aujourd'hui, journalise la durée dans `data/collect.log` (« Agrégats rafraîchis
+en X s », warning « Rafraîchissement des agrégats lent » au-delà de 60 s) et
+sort en code 1 en cas d'échec, ce que la veille signale (« Tâche planifiée en
+échec »).
 
 Cf. sections 7.1 et 8. Les valeurs réseau du dashboard sont issues d'une
 lecture des `agg_*` puis de regroupements en mémoire :
@@ -1063,6 +1160,12 @@ intermédiaires sont conservés pour le diagnostic.
   ligne. Résultats identiques à l'ancienne formulation (`strftime(…
   'localtime')` évalué sur toute la table) ; requêtes d'un rapport de commune
   sur la VM : plus de 6 min → ≈ 1 à 3 min.
+- **Trous de collecte (méthode)** : seules les interruptions d'au moins
+  10 min (`SIGNIFICANT_GAP_SECONDS`) sont présentées comme pouvant faire perdre
+  des passages ; les plus courtes sont comptées à part, comme rattrapées par
+  le relevé suivant. Les durées sont rognées aux bornes du mois local. La ligne
+  rappelle aussi le nombre de passages analysés sur les observations brutes,
+  sans les qualifier d'« exclues » (`gap_methodology_line`).
 - **Rapport « sans données »** : `build_no_data_latex` produit un document
   court et transparent si aucun passage exploitable.
 - **Sécurité** : `latex()` échappe tout texte externe (XSS/LaTeX) — correction
@@ -1101,6 +1204,10 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/db.py` | Schéma + agrégats (auto-porteur) | *aucun* (l'import suffit) |
 | `src/scripts/export_open_data.py` | Export CSV open data (30 derniers jours) | `--db`, `--out`, `--since`, `--until`, `--print-datasets` |
 | `src/scripts/veille_collecte.py` | Veille de la collecte, alertes email (timer 5 min) | `--dry-run`, `--test-email`, `--db`, `--log-dir`, `--state` |
+| `src/scripts/rafraichir_agregats.py` | Recalcul des agrégats d'hier et d'aujourd'hui (timer 5 min) | `--db`, `--log` |
+| `src/scripts/sauvegarde.py` | Sauvegarde quotidienne, contrôle, rotation, copie hors VM | `--db`, `--dest`, `--verifier [archive]`, `--sans-envoi` |
+| `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien) | `--dest` |
+| `deploy/deployer.sh` | Déploiement sur la VM (section 20.2) | `--sans-pull`, `--sans-redemarrage` |
 | `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
 | `reports/generate_single_report.py` | Rapport unique | `--month` (obligatoire), `--commune` XOR `--network`, `--db-path`, `--output-dir`, `--compile` |
@@ -1124,167 +1231,43 @@ Détails de `assign_stop_municipalities.py` :
 
 ## 14. Services système (systemd)
 
-> **Les fichiers d'unité ne sont PAS dans git** (choix historique). Le contenu
-> exact ci-dessous est celui des unités installées sur la VM de production ;
-> les trois services sont **`active`**.
+Depuis le 01/10/2026, les unités sont **versionnées dans `deploy/systemd/`**
+(copie exacte de la VM pour celles qui existaient) et installées dans
+`/etc/systemd/system/` par `deploy/deployer.sh` (section 20.2).
 
-Trois unités installées dans `/etc/systemd/system/` :
+| Unité | Type | Rôle | Planification |
+|---|---|---|---|
+| `urban-vision-collect.service` | service continu | collecte TripUpdates (section 9.1) | permanent |
+| `urban-vision-collect-alerts.service` | service continu | collecte ServiceAlerts (section 9.2) | permanent |
+| `urban-vision-dashboard.service` | service continu | Streamlit sur `127.0.0.1:8501` (sections 11 et 15) | permanent |
+| `urban-vision-rafraichir.service` + `.timer` | ponctuel | recalcul des agrégats (section 10.2) | toutes les 5 min (minutes 2, 7, 12…) |
+| `urban-vision-veille-collecte.service` + `.timer` | ponctuel | veille et alertes email (section 9.4) | toutes les 5 min |
+| `urban-vision-sauvegarde.service` + `.timer` | ponctuel | sauvegarde de la base (section 19) | chaque nuit à 2 h 30 |
+| `urban-vision-archive-gtfs.service` + `.timer` | ponctuel | archive du GTFS statique (section 9.5) | chaque jour à 6 h 15 |
+| `urban-vision-rapports.service` + `.timer` | ponctuel | rapports du mois précédent (section 12) | le 1er du mois à 3 h |
 
-`urban-vision-collect.service`
-
-```ini
-[Unit]
-Description=Urban Vision - Collecte GTFS-RT en continu
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Urban-Vision
-ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python src/scripts/collect.py
-Restart=always
-RestartSec=10
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
-RestrictRealtime=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`urban-vision-collect-alerts.service` : identique à la précédente (description
-« Collecte ServiceAlerts en continu »), avec `ExecStart=.../collect_alerts.py`.
-
-`urban-vision-dashboard.service` : description « Dashboard Streamlit »,
-`ExecStart` =
-`.venv/bin/python -m streamlit run dashboard/app.py --server.address=127.0.0.1 --server.port=8501`.
-Le serveur Streamlit écoute donc **explicitement sur `127.0.0.1:8501`** —
-inaccessible directement, exposé uniquement via nginx (section 15).
-
-Durcissements communs aux 3 unités : `User=ubuntu`, `Restart=always` /
-`RestartSec=10`, `NoNewPrivileges=true`, `PrivateTmp=true`,
-`ProtectSystem=full`, `ProtectKernelTunables=true`,
-`ProtectKernelModules=true`, `ProtectControlGroups=true`,
-`RestrictAddressFamilies=AF_INET AF_INET6`, `RestrictRealtime=true`.
+Réglages communs : `User=ubuntu`, `WorkingDirectory=/home/ubuntu/Urban-Vision`,
+`NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=full`,
+`ProtectKernelTunables=true`, `ProtectKernelModules=true`,
+`ProtectControlGroups=true`, `RestrictRealtime=true`,
+`RestrictAddressFamilies=AF_INET AF_INET6` (la veille ajoute `AF_UNIX` pour
+interroger systemd ; l'unité des rapports n'a pas de restriction réseau). Les
+services continus redémarrent seuls (`Restart=always`, `RestartSec=10`). Les
+tâches lourdes tournent en basse priorité : recalcul `Nice=5`, sauvegarde et
+archive `Nice=10` (sauvegarde en E/S `idle`), rapports `Nice=19` et E/S
+`idle`. Secrets : la veille charge `/etc/urban-vision/alertes.env`
+(section 6.5), la sauvegarde `/etc/urban-vision/sauvegarde.env` s'il existe
+(section 6.6).
 
 Commandes usuelles :
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable  urban-vision-collect.service
-sudo systemctl start   urban-vision-collect.service
-sudo systemctl status  urban-vision-collect.service
-# idem : urban-vision-collect-alerts.service, urban-vision-dashboard.service
-# vue globale :
+systemctl list-timers 'urban-vision-*'
 sudo systemctl status urban-vision-collect.service urban-vision-collect-alerts.service urban-vision-dashboard.service
+journalctl -u urban-vision-rafraichir.service -n 20
+sudo systemctl start --no-block urban-vision-rapports.service   # rapports du mois précédent, à la demande
+sudo systemctl start urban-vision-sauvegarde.service            # sauvegarde immédiate
 ```
-
-**Veille de la collecte** (section 9.4) : deux unités installées le 01/10/2026
-(identifiants SMTP dans `/etc/urban-vision/alertes.env`, email de test envoyé
-le même jour).
-
-`urban-vision-veille-collecte.service`
-
-```ini
-[Unit]
-Description=Urban Vision - Veille de la collecte (alertes email)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Urban-Vision
-EnvironmentFile=/etc/urban-vision/alertes.env
-ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python src/scripts/veille_collecte.py
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
-RestrictRealtime=true
-```
-
-`urban-vision-veille-collecte.timer`
-
-```ini
-[Unit]
-Description=Urban Vision - Veille de la collecte toutes les 5 min
-
-[Timer]
-OnCalendar=*:0/5
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Installation, une fois `/etc/urban-vision/alertes.env` créé (section 6.5) :
-
-```bash
-sudo nano /etc/systemd/system/urban-vision-veille-collecte.service   # contenu ci-dessus
-sudo nano /etc/systemd/system/urban-vision-veille-collecte.timer
-sudo systemctl daemon-reload
-sudo systemctl enable --now urban-vision-veille-collecte.timer
-systemctl list-timers urban-vision-veille-collecte.timer
-```
-
-**Rapports mensuels automatiques** (section 12) : installées le 01/10/2026.
-Le 1er du mois à 3 h, heure la plus creuse (flux TBM quasi vide : 12 courses
-en moyenne entre 3 h et 4 h en septembre 2026, contre ≈ 1 900 en journée),
-génération de tous les rapports du mois précédent (réseau + communes) dans
-`reports/output/<AAAA-MM>/`, PDF seuls. Priorité CPU et disque minimales :
-le collecteur reste prioritaire.
-
-`urban-vision-rapports.service`
-
-```ini
-[Unit]
-Description=Urban Vision - Rapports mensuels du mois precedent
-After=network-online.target
-
-[Service]
-Type=oneshot
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Urban-Vision
-ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python reports/generate_all_reports.py --previous-month --compile --pdf-only
-Nice=19
-IOSchedulingClass=idle
-TimeoutStartSec=6h
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictRealtime=true
-```
-
-`urban-vision-rapports.timer`
-
-```ini
-[Unit]
-Description=Urban Vision - Rapports mensuels le 1er du mois a 3 h
-
-[Timer]
-OnCalendar=*-*-01 03:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Suivi : `systemctl list-timers urban-vision-rapports.timer`,
-`journalctl -u urban-vision-rapports.service`. Lancement manuel (mois
-précédent) : `sudo systemctl start --no-block urban-vision-rapports.service`.
 
 > **I2 — `data/dashboard.log`** : ce log local montrait
 > `Uvicorn server started on 0.0.0.0:8501`. C'était un reliquat d'une exécution
@@ -1313,6 +1296,14 @@ Chaîne en production :
   (RSA, **expiration le 11/12/2026**, valide 87 j au 14/09/2026).
   Renouvellement par le timer systemd **`certbot.timer`** (quotidien) — pas de
   cron dédié.
+- **En-têtes de sécurité** (depuis le 01/10/2026, fichier versionné
+  `deploy/nginx/urban-vision`) : `Strict-Transport-Security: max-age=31536000`,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Permissions-Policy: geolocation=(), microphone=(), camera=()`. Pas de
+  politique CSP : Streamlit et les graphiques chargent des scripts en ligne et
+  depuis des CDN. Le déploiement garde une copie datée de l'ancien vhost et la
+  remet en place si `nginx -t` refuse le nouveau.
 - **`default` vhost** : le vhost de stock nginx sur :80 (page par défaut) —
   ne sert pas l'application.
 - **Firewall** : le port **8501 est fermé** (cf. section 16) ; le dashboard
@@ -1341,9 +1332,11 @@ Chaîne en production :
 - **Services** : voir section 14 — les 3 unités systemd et nginx sont
   **`active`**.
 - **Secrets** : `/etc/urban-vision/bdc.key` (clé BigDataCloud, `root:600`,
-  section 17.2) et `/etc/urban-vision/alertes.env` (identifiants SMTP de la
-  veille, `root:600`, section 6.5, à créer) ; aucun secret dans git ni dans les
-  crontabs. `.env` est gitignoré et absent de prod.
+  section 17.2), `/etc/urban-vision/alertes.env` (identifiants SMTP et adresse
+  de sonde de la veille, `root:600`, section 6.5) et, facultatif,
+  `/etc/urban-vision/sauvegarde.env` (adresse d'écriture du stockage objet,
+  section 6.6) ; aucun secret dans git ni dans les crontabs. `.env` est
+  gitignoré et absent de prod.
 - **Dépannage hors-bande** : console OCI de l'instance (`ek-hub` →
   Console connection) en cas de blocage réseau/système.
 - Exposition : le dashboard étant public, les données qu'il affiche (retards,
@@ -1356,9 +1349,10 @@ Chaîne en production :
 
 | Fichier | Écrit par | Contenu typique |
 |---|---|---|
-| `data/collect.log` | `collect.py` (FileHandler) | `Démarrage de la collecte Urban Vision (intervalle: 60s)`, `OK - <n> entités, <n> observations mises à jour`, `Agrégats rafraîchis en <x> s`, warnings « Trou de collecte » / « Échec de récupération » / « Rafraîchissement des agrégats lent » |
+| `data/collect.log` | `collect.py` et `rafraichir_agregats.py` (FileHandler) | `Démarrage de la collecte Urban Vision (intervalle: 60s)`, `OK - <n> entités, <n> observations mises à jour`, `Agrégats rafraîchis en <x> s`, warnings « Trou de collecte » / « Échec de récupération » / « Rafraîchissement des agrégats lent » / « Refresh des agrégats échoué » |
 | `data/alerts.log` | `collect_alerts.py` | `OK - <n> entites, <n> alertes mises a jour`, erreurs éventuelles + traceback |
 | journald `urban-vision-veille-collecte` | `veille_collecte.py` | une ligne par condition (`ok` / `ALERTE`), email envoyé, erreurs SMTP |
+| journald `urban-vision-sauvegarde`, `-archive-gtfs`, `-rafraichir`, `-rapports` | tâches planifiées | résumé de chaque exécution (taille, durée, contrôle, version archivée…) |
 | `data/dashboard.log` | Streamlit/Uvicorn — **dev local uniquement** | démarrage serveur, warnings Streamlit ; en production Streamlit journalise vers **journald** (pas de fichier) |
 
 Observation : `data/collect.log` et `data/alerts.log` (gitignorés) contiennent
@@ -1371,11 +1365,13 @@ Lecture en direct :
 tail -f data/collect.log
 ```
 
-Les logs **ne tournent pas** : aucune règle logrotate dédiée, aucun cron de
-rotation ; seuls
-les logs système globaux sont gérés par `logrotate.timer`. Volumes en
-production au 01/10/2026 : `collect.log` ≈ 8,5 Mo et `alerts.log` ≈ 6,9 Mo — volumes faibles,
-mais la base principale, elle, est volumineuse (section 18.2).
+Rotation (depuis le 01/10/2026, `deploy/logrotate/urban-vision` installé dans
+`/etc/logrotate.d/`) : `collect.log` et `alerts.log` tournent chaque semaine,
+8 semaines conservées, compressées, en `copytruncate` (les processus gardent
+leur fichier ouvert). La veille lit l'état de la collecte dans
+`collection_runs`, pas dans ces fichiers : une rotation ne déclenche pas de
+fausse alerte. Volumes en production au 01/10/2026 : `collect.log` ≈ 8,5 Mo et
+`alerts.log` ≈ 6,9 Mo.
 
 ### 17.1 Dashboards GoAccess des connexions nginx
 
@@ -1510,6 +1506,8 @@ plans/contours.
 - `data/urban_vision.db` grossit avec l'historique (**~749 Mo en dev local ;
   ~3,6 Go en production** au 01/10/2026, WAL ~143 Mo). Les agrégats sont
   reconstruits en incrémental ; la base n'est pas VACUUMed automatiquement.
+  Les sauvegardes compressées pèsent environ le quart de la base (226 Mo pour
+  968 Mo sur le poste de dev) ; 13 sont conservées au plus (section 19).
 - Opérations possibles (à planifier, à confirmer par tests) :
   `sqlite3 data/urban_vision.db "PRAGMA wal_checkpoint(TRUNCATE);"`,
   `VACUUM;` (nécessite ~la taille de la base en espace libre). Vérifier la
@@ -1521,7 +1519,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 262 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 302 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1537,27 +1535,51 @@ via un Python shell ou le collecteur.
 
 ## 19. Sauvegarde et restauration
 
-Il n'existe **aucun mécanisme de sauvegarde automatisé** sur la VM de
-production : ni script de sauvegarde, ni timer systemd dédié (le `crontab` root
-existait pour l'analyse des logs — sections 17 —, pas pour les données). Seuls
-les **snapshots OCI** de l'instance (console du cloud) ne sont pas accessibles
-depuis le système.
+Depuis le 01/10/2026, `src/scripts/sauvegarde.py` sauvegarde la base chaque
+nuit à 2 h 30 (`urban-vision-sauvegarde.timer`) :
 
-Base minimaliste recommandée (SQLite = un fichier) :
+1. copie cohérente par l'API de sauvegarde SQLite, sur une connexion en lecture
+   seule (la collecte continue d'écrire pendant la copie) ;
+2. `PRAGMA quick_check` sur la copie et relevé des effectifs des tables
+   principales ; une copie corrompue arrête la sauvegarde en erreur ;
+3. compression `zstd -3` (gzip si `zstd` est absent) dans
+   `data/sauvegardes/urban_vision_<date>.db.zst`, avec un manifeste
+   `urban_vision_<date>.json` (taille, empreinte SHA-256, contrôle, effectifs,
+   durée, copie hors VM) ;
+4. copie hors VM si `UV_BACKUP_PAR_URL` est défini (section 6.6) ; un échec de
+   copie garde la sauvegarde locale et sort en code 2 ;
+5. rotation : les 7 sauvegardes les plus récentes et la première de chacun des
+   6 derniers mois.
+
+Mesures sur le poste de dev : base de 968 Mo sauvegardée en 25 s (226 Mo
+compressés), restauration contrôlée en 23 s.
+
+La veille alerte si la dernière sauvegarde a plus de 26 h ou si l'unité est en
+échec (section 9.4).
+
+**Vérifier une sauvegarde** (restauration complète dans un dossier temporaire,
+contrôle de l'empreinte, de l'intégrité et des effectifs) :
 
 ```bash
-# Sauvegarde cohérente (WAL) :
-sqlite3 data/urban_vision.db ".backup '/tmp/urban_vision_$(date +%F).db'"
-# ou copie froide après vérification qu'aucun écrivain ne tourne :
-# (WAL actif → ne PAS copier seulement le .db sans le .db-wal)
+.venv/bin/python src/scripts/sauvegarde.py --verifier                 # la dernière
+.venv/bin/python src/scripts/sauvegarde.py --verifier data/sauvegardes/urban_vision_2026-10-02.db.zst
 ```
 
-Restauration : remplacer `data/urban_vision.db*` par la sauvegarde puis
-relancer les services. Si la base de production doit être reproduite sur le
-poste local : le contenu de `data/` est **gitignoré** et n'est pas dans le
-dépôt — un transfert manuel est nécessaire (rsync/scp).
+**Restaurer** :
 
-La partie reproductible (code + config + profils) est, elle, dans git.
+```bash
+sudo systemctl stop urban-vision-collect urban-vision-collect-alerts urban-vision-dashboard urban-vision-rafraichir.timer
+zstd -d data/sauvegardes/urban_vision_<date>.db.zst -o /tmp/restauration.db
+mv data/urban_vision.db data/urban_vision.db.avant-restauration
+rm -f data/urban_vision.db-wal data/urban_vision.db-shm
+mv /tmp/restauration.db data/urban_vision.db
+sudo systemctl start urban-vision-collect urban-vision-collect-alerts urban-vision-dashboard urban-vision-rafraichir.timer
+```
+
+Sans copie hors VM, les sauvegardes partagent le disque de la base : elles
+protègent d'une erreur de manipulation ou d'une corruption, pas d'une perte du
+disque. La partie reproductible (code, configuration de la VM, profils) est
+dans git.
 
 ---
 
@@ -1571,32 +1593,37 @@ La partie reproductible (code + config + profils) est, elle, dans git.
   `feat:`, `fix:`, `docs:`, `chore:`, messages parfois en français
   (ex. `fix: escape external text against XSS and LaTeX injection`, « Ajout de
   tests pour… »).
+- Intégration continue : `.github/workflows/tests.yml` installe les
+  dépendances depuis zéro (Python 3.12, comme la VM), lance `ruff check
+  --select E9,F63,F7,F82` (erreurs de syntaxe et noms non définis), la suite
+  `pytest` et un contrôle de syntaxe de `deploy/deployer.sh`, à chaque push et
+  pull request.
 - `.gitignore` : `data/*`, `__pycache__/`, `*.pyc`, `.venv/`, `reports/output/`,
   `reports/recipients.json`, `data/*.log`, `data/collect.log`, `.env`,
   `opencode.json`, `.vscode/`.
 
-### 20.2 Déploiement (manuel)
+### 20.2 Déploiement
 
-Le déploiement est **manuel** : pas de CI/CD, pas de Docker, pas de Makefile.
-Procédure documentée/observée :
+Le déploiement reste déclenché à la main, mais il est scripté :
 
-1. Sur le poste de dev : `git add/commit/push` vers `main`.
+1. Sur le poste de dev : `git push` vers `main` (l'intégration continue
+   rejoue les tests).
 2. Sur la VM (`ssh ek-hub`) :
    ```bash
-   cd ~/Urban-Vision
-   git pull
-   source .venv/bin/activate
-   pip install -r requirements.txt        # si des dépendances ont changé
-   # initialisation base si nécessaire :
-   python src/scripts/db.py
-   sudo systemctl restart urban-vision-collect.service
-   sudo systemctl restart urban-vision-collect-alerts.service
-   sudo systemctl restart urban-vision-dashboard.service
+   cd ~/Urban-Vision && deploy/deployer.sh
    ```
-3. Après une modification de `collect.py` ou `db.py`, vérifier dans
-   `data/collect.log` les lignes « Agrégats rafraîchis en … s » (quelques
-   secondes) et l'absence de « Trou de collecte ». Première installation de la
-   veille : sections 6.5 et 14.
+
+`deploy/deployer.sh` refuse de tourner si des fichiers suivis ont été modifiés
+sur la VM, puis : `git pull --ff-only` ; installe `requirements.txt` dans le
+venv (avec `uv`, ou `pip` à défaut) ; installe les unités de `deploy/systemd/`
+qui ont changé, `daemon-reload` et active les timers ; installe la rotation
+des journaux ; installe le vhost nginx s'il a changé (copie datée de
+l'ancien, `nginx -t`, retour arrière si refus) ; signale un écart entre la
+crontab root et `deploy/cron/root.crontab` sans la modifier ; redémarre la
+collecte, les alertes et le dashboard ; attend un relevé puis contrôle que les
+services sont actifs, qu'un relevé réussi figure dans `collection_runs`, que
+le dashboard répond 200 en HTTPS, et affiche les timers et le diagnostic de la
+veille. Options : `--sans-pull`, `--sans-redemarrage`.
 
 ### 20.3 Rapport de production
 
@@ -1620,7 +1647,7 @@ d'un lot complet sur la VM : voir 26.2 U11.
 
 | Symptôme | Cause probable | Actions |
 |---|---|---|
-| `sqlite3.OperationalError: database is locked` côté alertes | Verrou d'écriture tenu par le rafraîchissement des agrégats du collecteur (≈ 200 s avant le correctif de la section 9.3) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Maigrir : `AGGREGATE_REFRESH_INTERVAL_SECONDS=300` |
+| `sqlite3.OperationalError: database is locked` côté alertes | Verrou d'écriture tenu par le recalcul des agrégats (≈ 200 s avant le correctif de la section 9.3, quelques secondes depuis, dans son propre processus) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Maigrir : `AGGREGATE_REFRESH_INTERVAL_SECONDS=300` |
 | Base `urban_vision.db` absente ou vide | Init jamais faite / données perdues | `python src/scripts/db.py` (schéma + migration) puis relancer collecte et gtfs statique |
 | Dashboard vide (warnings « pas d'observations ») | DB vide OU agrégats vides | Vérifier collecte (`tail -f data/collect.log`) ; le dashboard reconstruit les agrégats si vides, sinon relancer `python src/scripts/db.py` puis vérifier |
 | `xelatex: command not found` | LaTeX absent | `apt install texlive-* fonts-inter` cf. `apt-requirement.txt` |
@@ -1634,6 +1661,9 @@ d'un lot complet sur la VM : voir 26.2 U11.
 | Test `test_collect` « refresh trop fréquent » | Timings serrés | Relancer ; le test tolère `[1,3]` refreshes |
 | « Trou de collecte détecté : 3 à 5 minutes » en rafale, toutes les 5 à 9 min | Rafraîchissement des agrégats plus long que 180 s (section 9.3) | `grep -E "Agrégats rafraîchis\|agrégats lent" data/collect.log \| tail` ; rejouer `tests/test_refresh_aggregates.py` (plan de requête) |
 | Email « Flux temps réel quasi vide » | Flux TBM sans courses (incident côté TBM, grève, jour férié) | `grep "OK - " data/collect.log \| tail` : nombre d'entités proche de 0 ; consulter les alertes TBM ; rien à faire côté collecteur |
+| Email « Tâche planifiée en échec » | Recalcul, sauvegarde, archive GTFS ou rapports sortis en erreur | `journalctl -u <unité> -n 50` ; relancer avec `sudo systemctl start <unité>` une fois la cause corrigée |
+| Email « Sauvegarde manquante » | Sauvegarde en échec ou timer inactif | `systemctl list-timers urban-vision-sauvegarde.timer` ; `journalctl -u urban-vision-sauvegarde.service -n 20` ; place disque (`df -h /`) |
+| Email « Flux temps réel figé » | TBM ne met plus à jour l'horodatage du flux | comparer `feed_ts` dans `collection_runs` ; rien à faire côté collecteur |
 | Aucun email d'alerte reçu | Timer inactif, identifiants absents ou refusés | `systemctl list-timers urban-vision-veille-collecte.timer` ; `journalctl -u urban-vision-veille-collecte.service -n 20` ; `sudo .venv/bin/python src/scripts/veille_collecte.py --test-email` |
 
 ---
@@ -1703,8 +1733,8 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
    récupère presque toutes les valeurs : volumes de passages inchangés
    (≈ 250 000 par jour de semaine), 2,4 à 2,5 % de valeurs finales issues d'une
    prévision faite plus de 2 min avant le départ, contre 1,3 % auparavant. Le
-   rapport de septembre 2026 les additionne pourtant comme « interruption de
-   collecte » (≈ 4 058 min, recommandation 26.5 n° 5).
+   rapport ne compte plus comme interruptions que celles d'au moins 10 min ;
+   les plus courtes sont mentionnées à part, comme rattrapées (section 12.3).
 3. **`daily_line_stats`** est écrite mais **jamais lue** par le dashboard ni
    les rapports (déjà obsolète).
 4. **`cause` des ServiceAlerts quasi toujours `UNKNOWN_CAUSE`** : le champ est
@@ -1712,8 +1742,10 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 5. **Histogramme JSON** des agrégats : dépend d'une fonction
    `json_group_object` bien définie ; tout changement de format invalidera les
    recalculs incrémentaux (degré de liberté).
-6. **Pas de sauvegarde automatisée, pas de rotation de logs** — non traité
-   dans le dépôt.
+6. **Sauvegardes sur le disque de la VM** : la sauvegarde quotidienne et la
+   rotation des journaux existent depuis le 01/10/2026, mais sans adresse de
+   copie hors VM (section 6.6) les sauvegardes ne protègent pas d'une perte du
+   disque.
 7. **Le dashboard.js** dépend de CDN externes (Highcharts, pydeck) : hors
    ligne le site reste affiché mais certains graphiques/carte sont dégradés.
 8. **Exécution directe** : `generate_monthly_report.py` est documenté comme
@@ -1795,7 +1827,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 262, isolés (suite `pytest` complète : 262 passed), flux synthétiques
+- Tests : 302, isolés (suite `pytest` complète : 302 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1807,8 +1839,9 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Environnement de production : unités systemd exactes (section 14), vhost
   nginx + cert Let's Encrypt (exp. 11/12/2026, renouvelé par `certbot.timer`),
   venv Python **3.12.14**, `xelatex` + fonts-inter présents ; `crontab` root
-  depuis le 16/09/2026 (GoAccess + veille des visiteurs, sections 17), pas de
-  logrotate dédié, aucune sauvegarde automatique, `reports/recipients.json`
+  depuis le 16/09/2026 (GoAccess + veille des visiteurs, sections 17) ;
+  sauvegarde quotidienne, archive du GTFS, rotation des journaux et en-têtes
+  HTTP installés le 01/10/2026 (section 26.2) ; `reports/recipients.json`
   absent.
 - `requirements.txt`, `requirements-dev.txt`, `apt-requirement.txt`,
   `pytest.ini`, `.streamlit/config.toml`, `.vscode/settings.json`, `.gitignore`.
@@ -1847,9 +1880,11 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/20
 - README racine refondu (synthèse + pointeur vers `docs/`).
 - README `dashboard/` et `reports/README.md` supprimés : leur contenu est
   couvert par le présent document (sections 11 et 12).
-- Fichiers d'unité systemd et config nginx non versionnés → leurs contenus
-  exacts sont désormais la trace consolidée (sections 14 et 15).
-- Dépôt sans CI ni lint configuré (pas de `ruff`, pas de `pyproject.toml`).
+- Unités systemd, vhost nginx, rotation des journaux et crontab de référence
+  versionnés dans `deploy/` depuis le 01/10/2026 (sections 14, 15, 17 et 20.2).
+- Intégration continue en place (`.github/workflows/tests.yml`) ; le contrôle
+  `ruff` se limite aux erreurs bloquantes, sans formatage ni typage, et le dépôt
+  n'a pas de `pyproject.toml`.
 - Les modules se chargent par `sys.path` inséré au runtime
   (`reports/`, `src/scripts/`, `dashboard/`) sans packaging — fragile mais
   fonctionnel ; un regroupement en paquets installerables simplifierait les
@@ -1857,24 +1892,15 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/20
 
 ### 26.5 Recommandations
 
-1. **Versionner les fichiers systemd/nginx** (ex. dossier `deploy/`) : le
-   contenu exact est désormais documenté (sections 14 et 15) ; un versionnement
-   des fichiers rendrait le déploiement reproductible et auditable.
-2. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
-   et analyse (définition unique) ou documenter explicitement la divergence
-   (déjà décrite en 7.3/23.2).
-3. **Planifier une politique de rétention** de `observations` (table volumineuse)
-   + sauvegarde périodique + VACUUM, avec tests associés.
-4. Activer un lint/type-check minimal (`ruff`, `pyright`) et une CI GitHub
-   Actions exécutant `pytest` — aucun des deux n'existe.
-5. **Ligne « Trous de collecte » du rapport mensuel** : elle additionne toute
-   la table `collection_gaps` (septembre 2026 : ≈ 4 058 min, dont ≈ 3 900 dues
-   à l'incident I5, sans perte de données correspondante) et présente
-   `total_raw − passages` (arrêts sautés, `NO_DATA`, délais absents) comme des
-   observations exclues pour cause de trou, alors que le rapport n'exclut
-   rien. Reformuler la ligne et ne compter que les interruptions qui font
-   perdre des données (seuil à définir) avant de diffuser le rapport de
-   septembre.
+1. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
+   et analyse (définition unique, désormais mesurable par `collection_runs`) ou
+   documenter explicitement la divergence (déjà décrite en 7.3/23.2).
+2. **Planifier une politique de rétention** de `observations` (table
+   volumineuse) et un VACUUM périodique, avec tests associés.
+3. **Copier les sauvegardes hors de la VM** (section 6.6) : sans cela, elles
+   ne protègent pas d'une perte du disque.
+4. Étendre l'intégration continue : règles `ruff` complètes, typage
+   (`pyright`), contrôles d'accessibilité.
 
 ---
 

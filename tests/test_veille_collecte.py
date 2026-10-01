@@ -16,6 +16,16 @@ SETTINGS = {
 }
 
 
+CHECK_UNITS = vc.check_units
+
+
+@pytest.fixture(autouse=True)
+def _hermetique(monkeypatch, tmp_path):
+    monkeypatch.setattr(vc, "BACKUP_DIR", tmp_path / "pas-de-sauvegardes")
+    monkeypatch.setattr(vc, "check_units", lambda units=vc.WATCHED_UNITS, runner=None: None)
+    monkeypatch.setattr(vc, "heartbeat_url", lambda environ=None, env_file=None: None)
+
+
 def _log_line(ts, level, msg):
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") + f",123 [{level}] {msg}"
 
@@ -331,3 +341,131 @@ class TestMain:
     def test_email_de_test_sans_configuration(self, monkeypatch):
         monkeypatch.setattr(vc, "load_settings", lambda: None)
         assert vc.main(["--test-email"]) == 2
+
+
+def _runs(conn, rows):
+    conn.executemany(
+        "INSERT INTO collection_runs (started_at, feed_ts, entities, rows_written, error) VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+class TestJournalDeCollecte:
+    def test_releve_recent_ok(self, conn):
+        _runs(conn, [(int(NOW) - 60, int(NOW) - 70, 3400, 130000, None)])
+        cond = vc.check_runs(conn, NOW)
+        assert not cond.active
+        assert "il y a 1 min" in cond.details
+
+    def test_seulement_des_erreurs_depuis_15_min(self, conn):
+        _runs(conn, [(int(NOW) - 900, int(NOW) - 910, 3400, 130000, None),
+                     (int(NOW) - 60, None, None, None, "Flux indisponible : 502 Server Error")])
+        cond = vc.check_runs(conn, NOW)
+        assert cond.active
+        assert "Dernière erreur : Flux indisponible : 502 Server Error" in cond.details
+
+    def test_journal_vide_repli_sur_les_logs(self, conn):
+        assert vc.check_runs(conn, NOW) is None
+
+    def test_flux_fige(self, conn):
+        _runs(conn, [(int(NOW) - 60 * k, 1790000000, 3400, 130000, None) for k in range(1, 7)])
+        cond = vc.check_frozen_feed(conn, NOW)
+        assert cond.active
+        assert "6 derniers relevés" in cond.details
+
+    def test_flux_qui_avance(self, conn):
+        _runs(conn, [(int(NOW) - 60 * k, 1790000000 - 60 * k, 3400, 130000, None) for k in range(1, 7)])
+        assert not vc.check_frozen_feed(conn, NOW).active
+
+    def test_evaluate_prefere_le_journal_aux_logs(self, conn, db_path, tmp_path):
+        _runs(conn, [(int(NOW) - 30, int(NOW) - 40, 3400, 130000, None)])
+        conditions = vc.evaluate(db_path, tmp_path, NOW)
+        heartbeat = next(c for c in conditions if c.key == "collecte_arretee")
+        assert not heartbeat.active
+        assert heartbeat.details.startswith("Dernier relevé réussi")
+
+
+class TestSauvegardeSurveillee:
+    def _manifest(self, folder, created_at):
+        folder.mkdir(exist_ok=True)
+        (folder / "urban_vision_2026-10-01.json").write_text(
+            '{"created_at": "%s", "size": 950000000, "quick_check": "ok", "uploaded": false}' % created_at
+        )
+
+    def test_sans_dossier_pas_de_condition(self, tmp_path):
+        assert vc.check_backup(tmp_path / "absent", NOW) is None
+
+    def test_sauvegarde_recente(self, tmp_path):
+        self._manifest(tmp_path / "s", datetime.fromtimestamp(NOW - 3600).isoformat())
+        cond = vc.check_backup(tmp_path / "s", NOW)
+        assert not cond.active
+        assert "950 Mo" in cond.details
+
+    def test_sauvegarde_trop_ancienne(self, tmp_path):
+        self._manifest(tmp_path / "s", datetime.fromtimestamp(NOW - 30 * 3600).isoformat())
+        assert vc.check_backup(tmp_path / "s", NOW).active
+
+    def test_dossier_vide(self, tmp_path):
+        (tmp_path / "s").mkdir()
+        assert vc.check_backup(tmp_path / "s", NOW).active
+
+
+class FakeRunner:
+    def __init__(self, results):
+        self.results = results
+
+    def __call__(self, cmd, capture_output, text, timeout):
+        unit = cmd[-1]
+        load, result = self.results.get(unit, ("not-found", ""))
+
+        class Out:
+            stdout = f"LoadState={load}\nResult={result}\n"
+
+        return Out()
+
+
+class TestTachesPlanifiees:
+    def test_tache_en_echec_signalee(self):
+        runner = FakeRunner({"urban-vision-sauvegarde.service": ("loaded", "exit-code"),
+                             "urban-vision-rafraichir.service": ("loaded", "success")})
+        cond = CHECK_UNITS(runner=runner)
+        assert cond.active
+        assert "urban-vision-sauvegarde.service (exit-code)" in cond.details
+
+    def test_taches_sans_echec(self):
+        cond = CHECK_UNITS(runner=FakeRunner({"urban-vision-rafraichir.service": ("loaded", "success")}))
+        assert not cond.active
+        assert cond.details == "1 tâche(s) planifiée(s) sans échec."
+
+    def test_aucune_unite_installee(self):
+        assert CHECK_UNITS(runner=FakeRunner({})) is None
+
+
+class TestSignalDeVie:
+    def test_ping_ok_ou_fail(self):
+        called = []
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def opener(url, timeout):
+            called.append(url)
+            return Response()
+
+        assert vc.ping_heartbeat("https://hc-ping.com/abc", failing=False, opener=opener) == 200
+        vc.ping_heartbeat("https://hc-ping.com/abc/", failing=True, opener=opener)
+        assert called == ["https://hc-ping.com/abc", "https://hc-ping.com/abc/fail"]
+
+    def test_ping_injoignable_n_interrompt_rien(self, capsys):
+        def opener(url, timeout):
+            raise OSError("réseau coupé")
+
+        assert vc.ping_heartbeat("https://hc-ping.com/abc", failing=False, opener=opener) is None
+        assert "Signal de vie non envoyé" in capsys.readouterr().err

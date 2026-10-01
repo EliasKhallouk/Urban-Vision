@@ -1,0 +1,9 @@
+[Unit]
+Description=Urban Vision - Archive du GTFS statique chaque jour a 6 h 15
+
+[Timer]
+OnCalendar=*-*-* 06:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

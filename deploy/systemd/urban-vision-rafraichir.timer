@@ -1,0 +1,9 @@
+[Unit]
+Description=Urban Vision - Recalcul des agregats toutes les 5 min
+
+[Timer]
+OnCalendar=*:2/5
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

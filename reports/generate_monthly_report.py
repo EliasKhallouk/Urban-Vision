@@ -53,6 +53,7 @@ FRESHNESS_BUFFER_SECONDS = 20 * 60
 # en dessous, les pourcentages (arrêts sautés notamment) ne sont pas exploitables.
 MIN_PASSAGES_FOR_RANKING = 50
 FLEX_ROUTES_SQL = " AND o.route_id NOT IN (SELECT route_id FROM routes WHERE route_long_name LIKE '%Flex%')"
+SIGNIFICANT_GAP_SECONDS = 600
 RECENT_ROWS_SQL = " AND o.rowid NOT IN (SELECT x.rowid FROM observations x WHERE x.last_seen_at >= ?)"
 MONTH_SQL = (
     " AND ((o.departure_time >= ? AND o.departure_time < ?)"
@@ -354,22 +355,40 @@ def count_month_observations(conn: sqlite3.Connection, month: str) -> int:
 
 def query_collection_gaps(conn: sqlite3.Connection, month: str) -> dict:
     """Return gap stats and total observations for the methodology section."""
+    result = {"gap_seconds": 0, "gap_count": 0, "short_seconds": 0, "short_count": 0,
+              "total_raw": int(count_month_observations(conn, month))}
     table_exists = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='collection_gaps'"
     ).fetchone()
     if not table_exists:
-        return {"gap_seconds": 0, "total_raw": int(count_month_observations(conn, month))}
+        return result
+    lo, hi = month_bounds(month)
+    for start, end in conn.execute(
+        "SELECT gap_start, gap_end FROM collection_gaps WHERE gap_end > ? AND gap_start < ?", (lo, hi)
+    ):
+        clipped = min(end, hi) - max(start, lo)
+        kind = "gap" if end - start >= SIGNIFICANT_GAP_SECONDS else "short"
+        result[f"{kind}_seconds"] += int(clipped)
+        result[f"{kind}_count"] += 1
+    return result
 
-    gap_seconds = conn.execute(
-        "SELECT COALESCE(SUM(gap_end - gap_start), 0) FROM collection_gaps "
-        "WHERE strftime('%Y-%m', datetime(gap_start, 'unixepoch')) = ? "
-        "OR strftime('%Y-%m', datetime(gap_end, 'unixepoch')) = ?",
-        (month, month)
-    ).fetchone()[0] or 0
 
-    total_raw = count_month_observations(conn, month)
-
-    return {"gap_seconds": int(gap_seconds), "total_raw": int(total_raw)}
+def gap_methodology_line(gaps: dict | None, passages: int) -> str:
+    gaps = gaps or {}
+    if gaps.get("gap_count"):
+        line = (f"{gaps['gap_count']}~interruption(s) de plus de 10~minutes ce mois-ci, "
+                f"{number(gaps['gap_seconds'] / 60)}~min au total : les passages de ces intervalles peuvent manquer.")
+    else:
+        line = "Aucune interruption de collecte de plus de 10~minutes ce mois-ci."
+    if gaps.get("short_count"):
+        line += (f" {gaps['short_count']}~interruption(s) plus courte(s) ({number(gaps['short_seconds'] / 60)}~min "
+                 "au total) ont été rattrapées par le relevé suivant, le flux conservant les passages "
+                 "quelques minutes après leur départ.")
+    if gaps.get("total_raw"):
+        line += (f" Passages analysés : {number(passages)} sur {number(gaps['total_raw'])} observations "
+                 "brutes ; les autres sont des arrêts non desservis, des passages sans retard publié ou "
+                 "des lignes à la demande.")
+    return line
 
 
 def query_service_alerts(conn: sqlite3.Connection, month: str, route_ids: set[str]) -> list[dict]:
@@ -832,12 +851,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         net_rank = {row.route_id: idx + 1 for idx, row in ranked.iterrows()}
 
     # Collection gaps info for methodology
-    if gaps and gaps["gap_seconds"] > 0:
-        gap_minutes = gaps["gap_seconds"] // 60
-        excluded = gaps["total_raw"] - int(metrics["passages"])
-        gap_line = f"{excluded} observations exclues sur {gaps['total_raw']} ({gap_minutes}~min d\'interruption de collecte)."
-    else:
-        gap_line = "Aucune interruption de collecte significative sur la période."
+    gap_line = gap_methodology_line(gaps, int(metrics["passages"]))
     evolution_note = rf"\textbf{{Évolution mensuelle.}} {change.get('fiability', '')}"
 
 
@@ -1037,7 +1051,7 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 \subsection*{{Précision et limites}}
 \textbf{{Marge d'incertitude.}} Les retards sont calculés à partir de l'heure de départ effective transmise par le véhicule dans le flux GTFS-RT. Ce flux est interrogé toutes les 60~secondes~; l'heure réelle de départ peut donc précéder ou suivre l'observation d'au plus 60~secondes. Cette marge d'incertitude ($\pm 60$~s) est inhérente au dispositif de collecte et ne remet pas en cause la pertinence des tendances présentées.
 
-\textbf{{Trous de collecte.}} Lorsque le service de collecte est interrompu (redémarrage, indisponibilité réseau), les données produites pendant l'intervalle sont exclues de l'analyse.
+\textbf{{Trous de collecte.}} Le flux est relevé chaque minute ; une interruption de la collecte (redémarrage, indisponibilité du réseau ou du flux) peut faire manquer des passages, qui ne sont pas extrapolés.
 {gap_line}
 {evolution_note}
 

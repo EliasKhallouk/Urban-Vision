@@ -8,7 +8,6 @@ Conçu pour tourner en continu, en tâche de fond, sur plusieurs semaines.
 import sqlite3
 import time
 import logging
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -26,11 +25,8 @@ POLL_INTERVAL_SECONDS = 60
 GAP_THRESHOLD_SECONDS = 180  # 3x l'intervalle normal de 60s, marge de sécurité
 # Attendre le verrou d'écriture (ex. un autre script qui écrit) au lieu d'échouer.
 DB_BUSY_TIMEOUT_MS = 120_000
-# Recadence du recalcul des agrégats. Les agrégats sont (re)calculés intégralement
-# depuis `observations` à chaque fois : la valeur reste exacte, seule sa fraîcheur
-# baisse jusqu'à cet intervalle.
-AGGREGATE_REFRESH_INTERVAL_SECONDS = 300
-REFRESH_WARN_SECONDS = 60
+PREDICTION_HORIZONS = (("pred_dep_10", 600), ("pred_dep_5", 300), ("pred_dep_2", 120))
+RUN_ERROR_MAX_CHARS = 500
 
 
 logging.basicConfig(
@@ -52,11 +48,15 @@ def fetch_feed() -> gtfs_realtime_pb2.FeedMessage:
     return feed
 
 
-def upsert_observation(conn, trip_id, start_date, route_id, direction_id,
-                        stop_sequence, stop_id, schedule_relationship,
-                        arrival_delay, departure_delay, departure_time,
-                        feed_timestamp):
-    conn.execute("""
+_PREDICTION_SET = ",\n".join(
+    f"""            {column} = COALESCE(observations.{column}, CASE
+                WHEN excluded.departure_time - excluded.last_seen_at <= {seconds}
+                 AND observations.departure_time - observations.last_seen_at > {seconds}
+                THEN excluded.departure_time END)"""
+    for column, seconds in PREDICTION_HORIZONS
+)
+
+UPSERT_OBSERVATION_SQL = f"""
         INSERT INTO observations
             (trip_id, start_date, route_id, direction_id, stop_sequence,
              stop_id, schedule_relationship, arrival_delay, departure_delay,
@@ -67,10 +67,20 @@ def upsert_observation(conn, trip_id, start_date, route_id, direction_id,
             arrival_delay = excluded.arrival_delay,
             departure_delay = excluded.departure_delay,
             departure_time = excluded.departure_time,
-            last_seen_at = excluded.last_seen_at
-    """, (trip_id, start_date, route_id, direction_id, stop_sequence,
-          stop_id, schedule_relationship, arrival_delay, departure_delay,
-          departure_time, feed_timestamp))
+            last_seen_at = excluded.last_seen_at,
+{_PREDICTION_SET}
+"""
+
+
+def upsert_observation(conn, trip_id, start_date, route_id, direction_id,
+                        stop_sequence, stop_id, schedule_relationship,
+                        arrival_delay, departure_delay, departure_time,
+                        feed_timestamp):
+    conn.execute(UPSERT_OBSERVATION_SQL, (
+        trip_id, start_date, route_id, direction_id, stop_sequence,
+        stop_id, schedule_relationship, arrival_delay, departure_delay,
+        departure_time, feed_timestamp,
+    ))
 
 
 def log_trip_status(conn, trip_id, start_date, route_id, trip_schedule_relationship, feed_timestamp):
@@ -141,16 +151,26 @@ def record_gap_if_any(conn, last_success_ts, now):
         logger.warning("Trou de collecte détecté : %.0f minutes", (now - last_success_ts) / 60)
 
 
-def log_refresh_duration(seconds):
-    if seconds > REFRESH_WARN_SECONDS:
-        logger.warning(
-            "Rafraîchissement des agrégats lent : %.1f s (seuil %d s)", seconds, REFRESH_WARN_SECONDS
+def record_run(conn, started_at, run):
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO collection_runs "
+            "(started_at, feed_ts, entities, rows_written, fetch_ms, write_ms, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (int(started_at), run.get("feed_ts"), run.get("entities"), run.get("rows_written"),
+             run.get("fetch_ms"), run.get("write_ms"), run.get("error")),
         )
-    else:
-        logger.info("Agrégats rafraîchis en %.1f s", seconds)
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.warning("Journal de collecte non écrit : %s", e)
 
 
 def get_last_known_success(conn):
+    row = conn.execute(
+        "SELECT MAX(started_at) FROM collection_runs WHERE error IS NULL"
+    ).fetchone()
+    if row[0] is not None:
+        return float(row[0])
     row = conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()
     return float(row[0]) if row[0] is not None else None
 
@@ -159,42 +179,41 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS};")
+    dbio.init_db(conn)
     logger.info("Démarrage de la collecte Urban Vision (intervalle: %ss)", POLL_INTERVAL_SECONDS)
 
     last_success_ts = get_last_known_success(conn)
-    last_refresh_ts = 0.0
 
     while True:
         cycle_start = time.monotonic()
+        started_at = time.time()
+        run = {}
         try:
             feed = fetch_feed()
+            run["fetch_ms"] = int((time.monotonic() - cycle_start) * 1000)
 
             now = time.time()
             record_gap_if_any(conn, last_success_ts, now)
             last_success_ts = now
 
+            write_start = time.monotonic()
             n_rows = process_feed(conn, feed)
-
-            # Agrégats du dashboard : recalcul espacé, pas à chaque poll.
-            try:
-                if time.time() - last_refresh_ts >= AGGREGATE_REFRESH_INTERVAL_SECONDS:
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-                    refresh_start = time.monotonic()
-                    dbio.refresh_aggregates(conn, days=[yesterday, today])
-                    last_refresh_ts = time.time()
-                    log_refresh_duration(time.monotonic() - refresh_start)
-            except Exception as e:
-                logger.warning("Refresh des agrégats échoué : %s", e)
-
+            run.update(
+                feed_ts=feed.header.timestamp, entities=len(feed.entity), rows_written=n_rows,
+                write_ms=int((time.monotonic() - write_start) * 1000),
+            )
             logger.info(
                 "OK - %d entités, %d observations mises à jour (feed ts=%s)",
                 len(feed.entity), n_rows, feed.header.timestamp,
             )
         except requests.RequestException as e:
+            run["error"] = f"Flux indisponible : {e}"[:RUN_ERROR_MAX_CHARS]
             logger.warning("Échec de récupération du flux : %s", e)
         except Exception as e:
+            conn.rollback()
+            run["error"] = f"Erreur de traitement : {e}"[:RUN_ERROR_MAX_CHARS]
             logger.exception("Erreur inattendue pendant le traitement : %s", e)
+        record_run(conn, started_at, run)
 
         elapsed = time.monotonic() - cycle_start
         time.sleep(max(0, POLL_INTERVAL_SECONDS - elapsed))

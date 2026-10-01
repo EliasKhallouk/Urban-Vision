@@ -1,0 +1,22 @@
+[Unit]
+Description=Urban Vision - Sauvegarde quotidienne de la base
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+EnvironmentFile=-/etc/urban-vision/sauvegarde.env
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python src/scripts/sauvegarde.py
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=true

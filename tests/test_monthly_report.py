@@ -376,6 +376,41 @@ class TestQueryCollectionGaps:
         conn.commit()
         result = report.query_collection_gaps(conn, "2026-09")
         assert result["gap_seconds"] == 3600
+        assert result["gap_count"] == 1
+
+    def test_interruptions_courtes_comptees_a_part(self, conn):
+        gtfs_static.create_static_tables(conn)
+        start = int(datetime(2026, 9, 22, 10, 0).timestamp())
+        conn.executemany("INSERT INTO collection_gaps VALUES (?, ?)", [
+            (start, start + 240), (start + 600, start + 840), (start + 3600, start + 3600 + 1800),
+        ])
+        conn.commit()
+        result = report.query_collection_gaps(conn, "2026-09")
+        assert (result["gap_count"], result["gap_seconds"]) == (1, 1800)
+        assert (result["short_count"], result["short_seconds"]) == (2, 480)
+
+    def test_interruption_a_cheval_sur_deux_mois_rognee(self, conn):
+        gtfs_static.create_static_tables(conn)
+        end_of_month = int(datetime(2026, 10, 1).timestamp())
+        conn.execute("INSERT INTO collection_gaps VALUES (?, ?)", (end_of_month - 1200, end_of_month + 600))
+        conn.commit()
+        assert report.query_collection_gaps(conn, "2026-09")["gap_seconds"] == 1200
+        assert report.query_collection_gaps(conn, "2026-10")["gap_seconds"] == 600
+
+
+class TestLigneTrousDeCollecte:
+    def test_sans_interruption(self):
+        line = report.gap_methodology_line({"gap_count": 0, "short_count": 0, "total_raw": 0}, 0)
+        assert line == "Aucune interruption de collecte de plus de 10~minutes ce mois-ci."
+
+    def test_interruptions_longues_courtes_et_passages(self):
+        line = report.gap_methodology_line(
+            {"gap_count": 2, "gap_seconds": 5400, "short_count": 1262, "short_seconds": 243480,
+             "total_raw": 7000000}, 6685205)
+        assert line.startswith("2~interruption(s) de plus de 10~minutes ce mois-ci, 90~min au total")
+        assert "1262~interruption(s) plus courte(s) (4\\,058~min au total) ont été rattrapées" in line
+        assert "Passages analysés : 6\\,685\\,205 sur 7\\,000\\,000 observations brutes" in line
+        assert "exclues" not in line
 
 
 class TestQueryMonthlyEvolution:

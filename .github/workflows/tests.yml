@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Installer les dépendances depuis zéro
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Erreurs bloquantes (syntaxe, noms non définis)
+        run: ruff check --select E9,F63,F7,F82 --output-format=github .
+      - name: Tests
+        run: |
+          mkdir -p data
+          python -m pytest
+      - name: Script de déploiement
+        run: bash -n deploy/deployer.sh
