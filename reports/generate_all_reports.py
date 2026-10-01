@@ -12,6 +12,7 @@ import argparse
 import sqlite3
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,11 +24,32 @@ def slug(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "-" for char in value).strip("-") or "rapport"
 
 
+def previous_month(today: date) -> str:
+    year, month = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
+    return f"{year:04d}-{month:02d}"
+
+
+def keep_only_pdfs(batch_root: Path) -> list[Path]:
+    kept = []
+    for folder in sorted({path.parent for path in batch_root.rglob("*.pdf")}):
+        for path in folder.iterdir():
+            if path.is_file() and path.suffix != ".pdf":
+                path.unlink()
+        kept.extend(sorted(folder.glob("*.pdf")))
+    compile_script = batch_root / "compile_all.sh"
+    if compile_script.exists():
+        compile_script.unlink()
+    return kept
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Génère le rapport réseau + un rapport par commune, chacun dans son dossier."
     )
-    parser.add_argument("--month", required=True, help="Mois analysé au format AAAA-MM.")
+    period = parser.add_mutually_exclusive_group(required=True)
+    period.add_argument("--month", help="Mois analysé au format AAAA-MM.")
+    period.add_argument("--previous-month", action="store_true", dest="previous_month",
+                        help="Mois précédant la date du jour (lancement automatique le 1er du mois).")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB, help="Base SQLite à analyser.")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "reports" / "output",
                         help="Répertoire racine (par défaut reports/output).")
@@ -35,7 +57,14 @@ def main() -> int:
                         help="Génère compile_all.sh pour compiler tous les rapports en PDF (xelatex).")
     parser.add_argument("--communes", nargs="+",
                         help="Sous-ensemble facultatif de communes (utile pour tester).")
+    parser.add_argument("--pdf-only", action="store_true", dest="pdf_only",
+                        help="Avec --compile : ne garde que le PDF dans chaque dossier.")
     args = parser.parse_args()
+    if args.previous_month:
+        args.month = previous_month(date.today())
+    if args.pdf_only and not args.compile:
+        parser.error("--pdf-only nécessite --compile.")
+    args.output_dir = args.output_dir.resolve()
     if not args.db_path.exists():
         parser.error(f"Base introuvable : {args.db_path}")
 
@@ -130,6 +159,9 @@ def main() -> int:
             print(f"Relancez-la manuellement : bash {compile_script}", file=sys.stderr)
             return 1
         print("[+] PDF générés.")
+        if args.pdf_only:
+            kept = keep_only_pdfs(batch_root)
+            print(f"[+] {len(kept)} PDF conservés, fichiers intermédiaires supprimés.")
 
     print(f"\n{total} rapports générés dans {batch_root}")
     if failures:
