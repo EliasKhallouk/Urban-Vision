@@ -206,7 +206,7 @@ Urban-Vision/
 │   │   ├── gtfs_static.py          # chargement routes/stops
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 18 fichiers, 258 tests pytest
+└── tests/                          # 19 fichiers, 262 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -324,7 +324,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 258 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 262 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -973,7 +973,7 @@ Trois scripts dans `reports/` :
 | Script | Rôle |
 |---|---|
 | `generate_single_report.py` | Un rapport (réseau **ou** une commune) |
-| `generate_all_reports.py` | Tout : réseau + chaque commune, un dossier par rapport, génère `compile_all.sh` si `--compile` |
+| `generate_all_reports.py` | Tout : réseau + chaque commune, un dossier par rapport, génère `compile_all.sh` si `--compile` ; `--previous-month` (mois précédant la date du jour) et `--pdf-only` (ne garde que les PDF) servent à la génération automatique |
 | `generate_monthly_report.py` | **Moteur** — à ne pas appeler directement (mais rien ne l'interdit) |
 
 `--compile` compile en PDF via **xelatex** (deux passages, `-interaction=nonstopmode
@@ -995,6 +995,9 @@ est écrit. Nom de sortie :
 
 # Recompiler manuellement les .tex d'un batch déjà généré
 bash reports/output/2026-08/compile_all.sh
+
+# Génération automatique du 1er du mois (timer urban-vision-rapports, section 14)
+.venv/bin/python reports/generate_all_reports.py --previous-month --compile --pdf-only
 ```
 
 Structure de sortie :
@@ -1007,6 +1010,12 @@ reports/output/<AAAA-MM>/
 └── (PNG des graphiques : reliability, risk_scatter, stops, evolution, hourly, distribution)
 ```
 
+Avec `--pdf-only` (après une compilation réussie de tous les rapports), chaque
+dossier ne garde que son PDF et `compile_all.sh` est supprimé :
+`<AAAA-MM>/reseau/bordeaux-metropole/<pdf>` et
+`<AAAA-MM>/communes/<slug>/<pdf>`. Si une compilation échoue, tous les fichiers
+intermédiaires sont conservés pour le diagnostic.
+
 ### 12.3 Moteur (`generate_monthly_report.py` : 1111 lignes)
 
 - **Périmètre** : `Scope(recipient, routes, communes, description)`. En CLI :
@@ -1018,7 +1027,8 @@ reports/output/<AAAA-MM>/
 - **Interrogations** (`query_*`) : observations SCHEDULED/SKIPPED du mois (avec
   filtre lignes/communes et seuil de stabilisation de 20 min), stats par arrêt
   (uniquement si ≥ `MIN_PASSAGES_FOR_RANKING` passages, sinon tout le périmètre),
-  évolution mensuelle, trous de collecte, alertes ServiceAlerts actives sur la
+  évolution mensuelle (lue dans `agg_daily`, ou `agg_daily_stop` pour une
+  commune : mêmes passages, regroupés par mois de `date_service`), trous de collecte, alertes ServiceAlerts actives sur la
   période pour les lignes du périmètre. **Les lignes à la demande** (Flex',
   Flex'Night) ne sont **pas traitées** dans ces requêtes ni dans les classements
   ni dans le graphique « Arrêts les plus problématiques ».
@@ -1043,6 +1053,16 @@ reports/output/<AAAA-MM>/
   des ServiceAlerts, dédoublonnées par contenu :
   route × titre × période), méthode (formule, marge ± 60 s, trous de collecte,
   non-interférence des alertes travaux).
+- **Performance** : le mois est borné par `month_bounds()` (minuit local du 1er
+  au 1er du mois suivant) sur `departure_time` (ou `last_seen_at` quand
+  `departure_time` est nul, `MONTH_SQL`), ce qui passe par
+  `idx_observations_departure_time` ; `+o.schedule_relationship` écarte
+  `idx_observations_sched_delay`. Le seuil de stabilisation exclut les lignes
+  vues dans les 20 dernières minutes via `idx_observations_last_seen_at`
+  (`RECENT_ROWS_SQL`, `rowid NOT IN …`) au lieu de lire `last_seen_at` ligne à
+  ligne. Résultats identiques à l'ancienne formulation (`strftime(…
+  'localtime')` évalué sur toute la table) ; requêtes d'un rapport de commune
+  sur la VM : plus de 6 min → ≈ 1 à 3 min.
 - **Rapport « sans données »** : `build_no_data_latex` produit un document
   court et transparent si aucun passage exploitable.
 - **Sécurité** : `latex()` échappe tout texte externe (XSS/LaTeX) — correction
@@ -1063,8 +1083,8 @@ Le contexte « territorial » nécessite que `stop_municipalities` soit rempli
 
 ### 12.5 Prérequis système pour la compilation
 
-`xelatex` + `fonts-inter` (+ `texlive-lang-french`, `texlive-xetex`…). Sans
-LaTeX installé, les `.tex` sont générés et une erreur explicite est levée à la
+`xelatex` + `fonts-inter` (+ `texlive-lang-french`, `texlive-xetex`…), et
+`matplotlib` (dans `requirements.txt`). Sans LaTeX installé, les `.tex` sont générés et une erreur explicite est levée à la
 compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 
 ---
@@ -1084,7 +1104,7 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
 | `reports/generate_single_report.py` | Rapport unique | `--month` (obligatoire), `--commune` XOR `--network`, `--db-path`, `--output-dir`, `--compile` |
-| `reports/generate_all_reports.py` | Tous les rapports | `--month` (obligatoire), `--db-path`, `--output-dir`, `--compile`, `--communes …` |
+| `reports/generate_all_reports.py` | Tous les rapports | `--month` ou `--previous-month` (l'un des deux), `--db-path`, `--output-dir`, `--compile`, `--pdf-only`, `--communes …` |
 | `reports/generate_monthly_report.py` | Moteur de rapport | `--month`, `--db-path`, `--output-dir`, `--recipient`, `--routes`, `--communes`, `--profile`, `--recipients-file`, `--compile` |
 
 Détails de `assign_stop_municipalities.py` :
@@ -1215,6 +1235,55 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now urban-vision-veille-collecte.timer
 systemctl list-timers urban-vision-veille-collecte.timer
 ```
+
+**Rapports mensuels automatiques** (section 12) : installées le 01/10/2026.
+Le 1er du mois à 3 h, heure la plus creuse (flux TBM quasi vide : 12 courses
+en moyenne entre 3 h et 4 h en septembre 2026, contre ≈ 1 900 en journée),
+génération de tous les rapports du mois précédent (réseau + communes) dans
+`reports/output/<AAAA-MM>/`, PDF seuls. Priorité CPU et disque minimales :
+le collecteur reste prioritaire.
+
+`urban-vision-rapports.service`
+
+```ini
+[Unit]
+Description=Urban Vision - Rapports mensuels du mois precedent
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Urban-Vision
+ExecStart=/home/ubuntu/Urban-Vision/.venv/bin/python reports/generate_all_reports.py --previous-month --compile --pdf-only
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+```
+
+`urban-vision-rapports.timer`
+
+```ini
+[Unit]
+Description=Urban Vision - Rapports mensuels le 1er du mois a 3 h
+
+[Timer]
+OnCalendar=*-*-01 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Suivi : `systemctl list-timers urban-vision-rapports.timer`,
+`journalctl -u urban-vision-rapports.service`. Lancement manuel (mois
+précédent) : `sudo systemctl start --no-block urban-vision-rapports.service`.
 
 > **I2 — `data/dashboard.log`** : ce log local montrait
 > `Uvicorn server started on 0.0.0.0:8501`. C'était un reliquat d'une exécution
@@ -1451,7 +1520,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 258 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 262 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_app_loaders.py` (requêtes du dashboard), `test_monthly_report.py`
@@ -1540,9 +1609,9 @@ est installé) :
 Sortie dans `reports/output/AAAA-MM/` (gitignoré). Les PDF finaux sont ensuite
 servis/transmis manuellement.
 
-Au 01/10/2026, le venv de la VM ne contient pas `matplotlib` (absent de
-`requirements.txt`) : `generate_monthly_report.py` échoue à l'import en
-production (26.2 U11, recommandation 26.5 n° 6).
+Génération automatique : le 1er de chaque mois à 3 h par
+`urban-vision-rapports.timer` (section 14), PDF seuls (`--pdf-only`). Durée
+d'un lot complet sur la VM : voir 26.2 U11.
 
 ---
 
@@ -1725,7 +1794,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 258, isolés (suite `pytest` complète : 258 passed), flux synthétiques
+- Tests : 262, isolés (suite `pytest` complète : 262 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -1806,11 +1875,6 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 le 01/10/20
    rien. Reformuler la ligne et ne compter que les interruptions qui font
    perdre des données (seuil à définir) avant de diffuser le rapport de
    septembre.
-6. **Installer `matplotlib` en production** : l'ajouter à `requirements.txt`
-   (3.11.1 en dev, avec `contourpy`, `cycler`, `fonttools`, `kiwisolver`,
-   `pyparsing`) puis l'installer dans le venv de la VM
-   (`~/.local/bin/uv pip install --python .venv/bin/python -r requirements.txt`) ;
-   sans lui, `generate_monthly_report.py` échoue à l'import (26.2 U11, § 20.3).
 
 ---
 

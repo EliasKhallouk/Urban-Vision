@@ -399,10 +399,15 @@ class TestQueryMonthlyEvolution:
             (deltat, deltat),
         )
         conn.commit()
+        import db as dbio
+
+        dbio.refresh_aggregates(conn, days=None)
         scope = report.Scope("test", [], [], "test")
         evo = report.query_monthly_evolution(conn, "2026-08", scope)
-        assert len(evo) >= 2
-        assert set(evo.columns) >= {"mois", "ponctualite", "retard_moyen"}
+        assert evo["mois"].tolist() == ["2026-07", "2026-08"]
+        assert evo["ponctualite"].tolist() == [100.0, 100.0]
+        assert evo["retard_moyen"].tolist() == [10.0, 10.0]
+        assert evo["passages"].tolist() == [1, 1]
 
 
 class TestQueryStopStats:

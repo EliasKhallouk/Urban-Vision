@@ -17,7 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from calendar import monthrange
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import matplotlib
@@ -53,6 +53,11 @@ FRESHNESS_BUFFER_SECONDS = 20 * 60
 # en dessous, les pourcentages (arrêts sautés notamment) ne sont pas exploitables.
 MIN_PASSAGES_FOR_RANKING = 50
 FLEX_ROUTES_SQL = " AND o.route_id NOT IN (SELECT route_id FROM routes WHERE route_long_name LIKE '%Flex%')"
+RECENT_ROWS_SQL = " AND o.rowid NOT IN (SELECT x.rowid FROM observations x WHERE x.last_seen_at >= ?)"
+MONTH_SQL = (
+    " AND ((o.departure_time >= ? AND o.departure_time < ?)"
+    " OR (o.departure_time IS NULL AND o.last_seen_at >= ? AND o.last_seen_at < ?))"
+)
 FRENCH_MONTHS = (
     "janvier", "février", "mars", "avril", "mai", "juin",
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
@@ -168,20 +173,25 @@ def load_scope(args: argparse.Namespace) -> Scope:
     )
 
 
+def month_bounds(month: str) -> tuple[int, int]:
+    start = datetime.strptime(month, "%Y-%m")
+    end = (start + timedelta(days=32)).replace(day=1)
+    return int(start.timestamp()), int(end.timestamp())
+
+
 def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """Return scheduled and skipped observations for the calendar month and scope."""
     latest = conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()[0]
     if latest is None:
         raise ValueError("La base ne contient aucune observation.")
     cutoff = int(latest) - FRESHNESS_BUFFER_SECONDS
+    lo, hi = month_bounds(month)
     month_latest = conn.execute(
-        "SELECT MAX(COALESCE(departure_time, last_seen_at)) FROM observations "
-        "WHERE strftime('%Y-%m', datetime(COALESCE(departure_time, last_seen_at), "
-        "'unixepoch', 'localtime')) = ?",
-        (month,),
+        "SELECT MAX(COALESCE(o.departure_time, o.last_seen_at)) FROM observations o WHERE 1 = 1" + MONTH_SQL,
+        (lo, hi, lo, hi),
     ).fetchone()[0]
     route_filter = ""
-    params: list[object] = [cutoff, month]
+    params: list[object] = [lo, hi, lo, hi, cutoff]
     if scope.routes:
         placeholders = ", ".join("?" for _ in scope.routes)
         route_filter = f" AND o.route_id IN ({placeholders})"
@@ -218,21 +228,20 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
     base = f"""
         FROM observations o
         LEFT JOIN routes r ON r.route_id = o.route_id
-        WHERE o.last_seen_at < ?
-          AND strftime('%Y-%m', datetime(COALESCE(o.departure_time, o.last_seen_at), 'unixepoch', 'localtime')) = ?
+        WHERE 1 = 1 {MONTH_SQL} {RECENT_ROWS_SQL}
           {route_filter}
           {commune_filter}
           {FLEX_ROUTES_SQL}
     """
     scheduled = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, o.departure_delay, o.departure_time "
-        + base + " AND o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL",
+        + base + " AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL",
         conn, params=params,
     )
     skipped = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, "
         "SUM(CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END) AS skipped, COUNT(*) AS eligible "
-        + base + " AND o.schedule_relationship IN ('SCHEDULED', 'SKIPPED') GROUP BY o.route_id, ligne",
+        + base + " AND +o.schedule_relationship IN ('SCHEDULED', 'SKIPPED') GROUP BY o.route_id, ligne",
         conn, params=params,
     )
     collected_at = (
@@ -247,8 +256,9 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
     if latest is None:
         raise ValueError("La base ne contient aucune observation.")
     cutoff = int(latest) - FRESHNESS_BUFFER_SECONDS
+    lo, hi = month_bounds(month)
     route_filter = ""
-    params: list[object] = [cutoff, month]
+    params: list[object] = [lo, hi, cutoff]
     if scope.routes:
         placeholders = ", ".join("?" for _ in scope.routes)
         route_filter = f" AND o.route_id IN ({placeholders})"
@@ -266,12 +276,11 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
                o.departure_delay, o.route_id
         FROM observations o
         LEFT JOIN stops s ON o.stop_id = s.stop_id
-        WHERE o.last_seen_at < ?
-          AND strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) = ?
+        WHERE o.departure_time >= ? AND o.departure_time < ? {RECENT_ROWS_SQL}
           {route_filter}
           {commune_filter}
           {FLEX_ROUTES_SQL}
-          AND o.schedule_relationship = 'SCHEDULED'
+          AND +o.schedule_relationship = 'SCHEDULED'
           AND o.departure_delay IS NOT NULL
     """
     df = pd.read_sql_query(query, conn, params=params)
@@ -303,42 +312,44 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
 
 def query_monthly_evolution(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.DataFrame:
     """Return monthly punctuality trend for the scope (all months up to the given one)."""
-    latest = conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()[0]
-    if latest is None:
-        return pd.DataFrame()
-    cutoff = int(latest) - FRESHNESS_BUFFER_SECONDS
-    route_filter = ""
-    params: list[object] = [cutoff, month]
+    params: list[object] = [f"{month}-32"]
+    table = "agg_daily"
+    filters = ""
     if scope.routes:
-        placeholders = ", ".join("?" for _ in scope.routes)
-        route_filter = f" AND o.route_id IN ({placeholders})"
+        filters += f" AND a.route_id IN ({', '.join('?' for _ in scope.routes)})"
         params.extend(scope.routes)
-    commune_filter = ""
     if scope.communes:
-        placeholders = ", ".join("?" for _ in scope.communes)
-        commune_filter = (
-            " AND o.stop_id IN (SELECT stop_id FROM stop_municipalities "
-            f"WHERE commune_name IN ({placeholders}))"
+        table = "agg_daily_stop"
+        filters += (
+            " AND a.stop_id IN (SELECT stop_id FROM stop_municipalities "
+            f"WHERE commune_name IN ({', '.join('?' for _ in scope.communes)}))"
         )
         params.extend(scope.communes)
     query = f"""
-        SELECT strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) AS mois,
-               AVG(CASE WHEN o.departure_delay <= 300 THEN 1.0 ELSE 0.0 END) * 100 AS ponctualite,
-               AVG(o.departure_delay) AS retard_moyen,
-               COUNT(*) AS passages
-        FROM observations o
-        WHERE o.last_seen_at < ?
-          AND o.schedule_relationship = 'SCHEDULED'
-          AND o.departure_delay IS NOT NULL
-          AND o.departure_time IS NOT NULL
-          AND strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) <= ?
-          {route_filter}
-          {commune_filter}
+        SELECT substr(a.date_service, 1, 7) AS mois,
+               SUM(a.cnt_le300) * 100.0 / SUM(a.obs) AS ponctualite,
+               SUM(a.sum_delay) * 1.0 / SUM(a.obs) AS retard_moyen,
+               SUM(a.obs) AS passages
+        FROM {table} a
+        WHERE a.date_service < ? {filters}
         GROUP BY mois
+        HAVING SUM(a.obs) > 0
         ORDER BY mois
     """
-    df = pd.read_sql_query(query, conn, params=params)
-    return df
+    try:
+        return pd.read_sql_query(query, conn, params=params)
+    except (sqlite3.OperationalError, pd.errors.DatabaseError):
+        return pd.DataFrame()
+
+
+def count_month_observations(conn: sqlite3.Connection, month: str) -> int:
+    lo, hi = month_bounds(month)
+    return conn.execute(
+        "SELECT COUNT(*) FROM observations o "
+        "LEFT JOIN routes r ON r.route_id = o.route_id "
+        "WHERE o.departure_time >= ? AND o.departure_time < ?",
+        (lo, hi),
+    ).fetchone()[0] or 0
 
 
 def query_collection_gaps(conn: sqlite3.Connection, month: str) -> dict:
@@ -347,13 +358,7 @@ def query_collection_gaps(conn: sqlite3.Connection, month: str) -> dict:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='collection_gaps'"
     ).fetchone()
     if not table_exists:
-        total_raw = conn.execute(
-            "SELECT COUNT(*) FROM observations o "
-            "LEFT JOIN routes r ON r.route_id = o.route_id "
-            "WHERE strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) = ?",
-            (month,)
-        ).fetchone()[0] or 0
-        return {"gap_seconds": 0, "total_raw": int(total_raw)}
+        return {"gap_seconds": 0, "total_raw": int(count_month_observations(conn, month))}
 
     gap_seconds = conn.execute(
         "SELECT COALESCE(SUM(gap_end - gap_start), 0) FROM collection_gaps "
@@ -362,15 +367,7 @@ def query_collection_gaps(conn: sqlite3.Connection, month: str) -> dict:
         (month, month)
     ).fetchone()[0] or 0
 
-    total_raw = conn.execute(
-        "SELECT COUNT(*) FROM observations o "
-
-        "LEFT JOIN routes r ON r.route_id = o.route_id "
-
-        "WHERE strftime('%Y-%m', datetime(o.departure_time, 'unixepoch', 'localtime')) = ?",
-
-        (month,)
-    ).fetchone()[0] or 0
+    total_raw = count_month_observations(conn, month)
 
     return {"gap_seconds": int(gap_seconds), "total_raw": int(total_raw)}
 
