@@ -200,16 +200,43 @@ class TestLoadCollectionStats:
                 ("T3", "20260911", "A", 0, 1, "s1", "SKIPPED", None, None, None, 1_799_000_000),
             ],
         )
+        conn.executemany(
+            "INSERT INTO trip_status (trip_id, start_date, route_id, schedule_relationship, last_seen_at) "
+            "VALUES (?, '20260911', 'A', ?, 0)",
+            [("T1", "SCHEDULED"), ("T2", "SCHEDULED"), ("T3", "SCHEDULED"), ("T4", "CANCELED")],
+        )
         conn.commit()
+        import db as dbio
 
-    def test_totaux_et_observations_stabilisees(self, conn):
+        dbio.refresh_aggregates(conn, days=None)
+
+    def test_totaux_depuis_les_agregats(self, conn):
         self._seed(conn)
         stats = app_mod.load_collection_stats(conn)
         assert stats["total"] == 3
-        assert stats["trajets"] == 3
+        assert stats["trajets"] == 4
         assert stats["lignes"] == 1
-        assert stats["analysed"] == 1  # T2 seulement (delay 400, stabilisé)
-        assert int(stats["hourly"]["observations"].sum()) == 3
+        assert stats["analysed"] == 2
+        assert stats["first_ts"] == 1_799_000_000
+        assert stats["last_ts"] == 1_800_000_000
+
+    def test_repartition_horaire_bornee_aux_derniers_jours(self, conn):
+        self._seed(conn)
+        recent = 1_800_000_000 - (app_mod.COLLECTION_HOURLY_DAYS - 1) * 86400
+        conn.execute(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id, "
+            "schedule_relationship, departure_delay, departure_time, last_seen_at) "
+            "VALUES ('T0', '20260901', 'A', 0, 1, 's1', 'SCHEDULED', 10, ?, ?)", (recent, recent))
+        conn.commit()
+        stats = app_mod.load_collection_stats(conn)
+        assert stats["total"] == 4
+        assert int(stats["hourly"]["observations"].sum()) == 2
+
+    def test_repartition_horaire_lue_par_l_index_des_releves(self, conn):
+        plan = " ".join(row[3] for row in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT CAST(strftime('%H', datetime(last_seen_at, 'unixepoch', 'localtime')) "
+            "AS INTEGER) h, COUNT(*) FROM observations WHERE last_seen_at >= ? GROUP BY h", (0,)))
+        assert "idx_observations_last_seen_at" in plan
 
 
 class TestLoadCommunes:

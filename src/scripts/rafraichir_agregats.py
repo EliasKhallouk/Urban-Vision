@@ -55,6 +55,23 @@ def refresh_segments(conn, now: datetime) -> float:
     return time.monotonic() - start
 
 
+def ensure_v2_history(conn, today: str) -> int:
+    conn.executescript(dbio.AGG_DDL)
+    known = {d for (d,) in conn.execute("SELECT date_service FROM quality_days")}
+    missing = [d for (d,) in conn.execute("SELECT DISTINCT date_service FROM agg_daily ORDER BY 1")
+               if d not in known and d < today]
+    if not missing:
+        return 0
+    logger.info("Méthode 2.0 : calcul de l'historique, %d jours…", len(missing))
+    start = time.monotonic()
+    for day in missing:
+        dbio.refresh_v2(conn, days=[day])
+    dbio.refresh_quality_days(conn, None, today)
+    conn.commit()
+    logger.info("Méthode 2.0 : historique calculé en %.0f s", time.monotonic() - start)
+    return len(missing)
+
+
 def configure_logging(log_path: Path) -> None:
     handlers = [logging.StreamHandler()]
     if log_path.parent.exists():
@@ -84,6 +101,12 @@ def main(argv=None) -> int:
             log_refresh_duration(refresh_segments(conn, now), "tronçons")
         except Exception as e:
             logger.warning("Refresh des tronçons échoué : %s", e)
+            status = 1
+        try:
+            ensure_v2_history(conn, now.strftime("%Y-%m-%d"))
+            conn.execute("PRAGMA optimize")
+        except Exception as e:
+            logger.warning("Méthode 2.0 : calcul de l'historique échoué : %s", e)
             status = 1
     finally:
         conn.close()

@@ -41,6 +41,12 @@ from palette import (  # noqa: E402  (module partagé de charte et de seuils)
     hex as palette_hex, kpi_latex as palette_kpi_latex,
 )
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[1] / "src" / "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import indicateurs as ind  # noqa: E402
+from db import QUALITY_INCOMPLETE_HOURS  # noqa: E402
+
 plt.rcParams["axes.prop_cycle"] = plt.cycler(color=[BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, TEAL])
 
 SUNLIT_CLAY_TINT = "#F6E7D7"
@@ -425,6 +431,203 @@ def query_service_alerts(conn: sqlite3.Connection, month: str, route_ids: set[st
         }
         for r in rows
     ]
+
+
+V2_DAY_TYPES = (("Jours de semaine", "semaine"), ("Samedis", "samedi"), ("Dimanches", "dimanche"))
+V2_TABLE_ROWS = 8
+
+
+def next_month(month: str) -> str:
+    return (datetime.strptime(month, "%Y-%m") + timedelta(days=32)).strftime("%Y-%m")
+
+
+def month_label(month: str) -> str:
+    date = datetime.strptime(month, "%Y-%m")
+    return f"{FRENCH_MONTHS[date.month - 1]} {date.year}"
+
+
+def query_method_v2(conn: sqlite3.Connection, month: str, scope: Scope) -> dict | None:
+    since, end = f"{month}-01", f"{next_month(month)}-01"
+    previous_since = f"{previous_month(month)}-01"
+    routes = scope.routes or None
+    communes = scope.communes or None
+    try:
+        current = ind.indicators(conn, since, end, routes=routes, communes=communes)
+        if not current.disponible:
+            return None
+        by_day_type = []
+        for label, kind in V2_DAY_TYPES:
+            now = ind.indicators(conn, since, end, routes=routes, communes=communes, day_types=[kind])
+            before = ind.indicators(conn, previous_since, since, routes=routes, communes=communes, day_types=[kind])
+            by_day_type.append({"label": label, "current": now, "previous": before,
+                                "change": ind.compare(now, before)})
+        lines = ind.route_indicators(conn, since, end, communes=communes, min_passages=MIN_PASSAGES_FOR_RANKING)
+        if routes:
+            lines = lines[lines["route_id"].isin(routes)]
+        regularity = ind.route_regularity(conn, since, end, communes=communes, routes=routes)
+        flags = ind.quality_flags(conn, since, end)
+    except sqlite3.Error:
+        return None
+    names = dict(conn.execute("SELECT route_id, COALESCE(route_short_name, route_id) FROM routes"))
+    return {
+        "month": month,
+        "current": current,
+        "by_day_type": by_day_type,
+        "lines": lines,
+        "regularity": regularity,
+        "degraded_days": sorted(d for d, flag in flags.items() if flag == "degrade"),
+        "names": names,
+    }
+
+
+def _short_day(day: str) -> str:
+    return datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m")
+
+
+def _with_margin(value: float | None, margin: float | None, decimals: int = 1) -> str:
+    if value is None:
+        return "—"
+    if margin is None:
+        return number(value, decimals)
+    return f"{number(value, decimals)} $\\pm$ {number(margin, decimals)}"
+
+
+def _pct_fr(value: float | None) -> str:
+    return "—" if value is None or pd.isna(value) else f"{number(value, 1)}\\,\\%"
+
+
+def _change_reading(change: dict | None) -> str:
+    if change is None:
+        return "comparaison impossible"
+    if change["significatif"] is None:
+        return "marge non calculable"
+    if not change["significatif"]:
+        return "dans la marge d'incertitude"
+    return "hausse significative" if change["ecart"] > 0 else "baisse significative"
+
+
+def method_v2_summary(v2: dict | None) -> str:
+    if not v2:
+        return ""
+    current = v2["current"]
+    return (
+        "\n\\vspace{.2cm}\n"
+        rf"\textbf{{Score {ind.METHOD_VERSION} (en test).}} {_with_margin(current.score, current.marge)} sur 100. "
+        "Cette mesure plus exigeante tient compte des départs en avance et des courses supprimées. "
+        rf"Elle est présentée page \pageref{{v2page}} et ne remplace pas encore le score ci-dessus."
+    )
+
+
+def method_v2_section(v2: dict | None) -> str:
+    if not v2:
+        return ""
+    current = v2["current"]
+    names = v2["names"]
+    previous_label = month_label(previous_month(v2["month"]))
+    score_color = kpi_color({"fiability": current.score}, "fiability")
+    punctuality_color = kpi_color({"ponctualite": current.ponctualite}, "ponctualite")
+    rows = []
+    for item in v2["by_day_type"]:
+        now, before, change = item["current"], item["previous"], item["change"]
+        rows.append(
+            f"{item['label']} & {_with_margin(now.score, now.marge)} ({now.jours} j) & "
+            f"{_with_margin(before.score, before.marge)} ({before.jours} j) & "
+            f"{'—' if change is None else _with_margin(change['ecart'], change['marge'])} & "
+            f"{_change_reading(change)} \\\\"
+        )
+    day_type_rows = "\n".join(rows)
+
+    regular = {r: reg for r, reg in v2["regularity"].items() if reg["jours"] * 2 >= current.jours}
+    regularity = sorted(regular.items(), key=lambda kv: kv[1]["attente_excedentaire"], reverse=True)
+    regularity_rows = "\n".join(
+        f"{latex(names.get(route_id, route_id))} & {duration(reg['attente_prevue'], signed=False)} & "
+        f"{duration(reg['attente_reelle'], signed=False)} & {duration(reg['attente_excedentaire'])} \\\\"
+        for route_id, reg in regularity[:V2_TABLE_ROWS]
+    )
+    regularity_block = (
+        r"\begin{tabularx}{\textwidth}{@{}Xrrr@{}}" "\n"
+        r"\toprule" "\n"
+        r"\textbf{Ligne} & \textbf{Attente prévue} & \textbf{Attente réelle} & \textbf{Attente excédentaire} \\" "\n"
+        r"\midrule" "\n"
+        f"{regularity_rows}\n"
+        r"\bottomrule" "\n"
+        r"\end{tabularx}"
+    ) if regularity else r"\textit{Aucune ligne ne compte au moins 5 passages prévus par heure sur ce périmètre.}"
+
+
+    lines = v2["lines"]
+    worst = lines[~lines["temps_reel_douteux"]].sort_values("score_v2").head(V2_TABLE_ROWS)
+    line_rows = "\n".join(
+        f"{latex(names.get(row.route_id, row.route_id))} & {_with_margin(row.score_v2, row.marge_v2)} & "
+        f"{_pct_fr(row.ponctualite_stricte)} & {_pct_fr(row.part_avance)} & {_pct_fr(row.service_assure)} & "
+        f"{number(int(row.passages))} \\\\"
+        for row in worst.itertuples()
+    )
+
+    excluded = ", ".join(_short_day(d) for d in current.jours_exclus) or "aucun"
+    degraded = ", ".join(_short_day(d) for d in v2["degraded_days"]) or "aucun"
+    discarded = ", ".join(
+        f"{latex(names.get(route_id, route_id))} ({number(share, 0)}\\,\\% de retards nuls)"
+        for route_id, share in sorted(current.lignes_ecartees.items())
+    ) or "aucune"
+
+    return rf"""\newpage
+\section*{{Méthode {ind.METHOD_VERSION} — indicateurs en test}}
+\label{{v2page}}
+Ces indicateurs sont calculés en parallèle du score de fiabilité, sans le remplacer. Ils corrigent trois limites de la méthode actuelle : un départ en avance n'est plus compté « à l'heure », les courses supprimées entrent dans le calcul, et chaque résultat est accompagné de sa marge d'incertitude. Le choix de la méthode de référence sera fait après plusieurs mois de double affichage.\\[.4cm]
+\makebox[\textwidth]{{\kpi[{score_color}]{{Score 2.0}}{{{_with_margin(current.score, current.marge)}}}\hfill
+\kpi[{punctuality_color}]{{Ponctualité stricte ($-1$ à $+5$ min)}}{{{_with_margin(current.ponctualite, current.marge_ponctualite)}\,\%}}\hfill
+\kpi{{Service assuré}}{{{_pct_fr(current.service)}}}}}
+
+\vspace{{.3cm}}
+\textbf{{Lecture.}} Sur 100 passages attendus, {number(current.service, 1)} ont été assurés (non supprimés, arrêt desservi) ; {_pct_fr(current.ponctualite)} des passages observés sont partis dans la fenêtre d'une minute d'avance à cinq minutes de retard et {_pct_fr(current.avance)} avec plus d'une minute d'avance. Le score 2.0 combine les deux : il compte les passages assurés et à l'heure parmi tous les passages attendus.
+
+\subsection*{{Comparaison avec {latex(previous_label)}, à type de jour égal}}
+\begin{{tabularx}}{{\textwidth}}{{@{{}}lrrrX@{{}}}}
+\toprule
+\textbf{{Type de jour}} & \textbf{{{latex(month_label(v2['month']))}}} & \textbf{{{latex(previous_label)}}} & \textbf{{Écart}} & \textbf{{Lecture}} \\
+\midrule
+{day_type_rows}
+\bottomrule
+\end{{tabularx}}
+
+\vspace{{.15cm}}
+{{\small Un écart est significatif lorsqu'il dépasse la marge combinée des deux mois. Comparer un mois à l'autre par type de jour évite de confondre une dégradation avec un calendrier différent (nombre de week-ends, jours fériés).}}
+
+\subsection*{{Régularité des lignes fréquentes}}
+Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le prochain passage : ce qui compte est la régularité des intervalles. L'attente excédentaire est le temps d'attente moyen ajouté par des passages irréguliers par rapport à la grille prévue. Seules figurent les lignes fréquentes au moins un jour sur deux.\\[.2cm]
+{regularity_block}
+
+\subsection*{{Lignes les moins bien placées selon le score 2.0}}
+\begin{{tabularx}}{{\textwidth}}{{@{{}}Xrrrrr@{{}}}}
+\toprule
+\textbf{{Ligne}} & \textbf{{Score 2.0}} & \textbf{{Ponctualité stricte}} & \textbf{{En avance}} & \textbf{{Service assuré}} & \textbf{{Passages}} \\
+\midrule
+{line_rows}
+\bottomrule
+\end{{tabularx}}
+
+\subsection*{{Qualité des données}}
+\begin{{itemize}}[leftmargin=1.4em,itemsep=.2em]
+\item \textbf{{Jours exclus}} (collecte incomplète) : {excluded}.
+\item \textbf{{Jours à collecte dégradée}} (conservés) : {degraded}.
+\item \textbf{{Lignes écartées}} (temps réel douteux) : {discarded}.
+\end{{itemize}}
+
+\subsection*{{Définitions}}
+{{\small
+\begin{{itemize}}[leftmargin=1.4em,itemsep=.15em]
+\item \textbf{{Fenêtre « à l'heure »}} : départ entre {ind.EARLY_TOLERANCE_SECONDS}~s d'avance et {ind.LATE_TOLERANCE_SECONDS // 60}~min de retard.
+\item \textbf{{Passages attendus}} : passages desservis ou sautés, plus les passages des courses supprimées. Ces derniers sont estimés au prorata du nombre moyen de passages par course de la ligne le même jour. Une course supprimée puis remplacée par une course ajoutée le même jour sur la même ligne n'est pas comptée comme perdue.
+\item \textbf{{Score 2.0}} = passages assurés et à l'heure / passages attendus. \textbf{{Service assuré}} = passages assurés / passages attendus. \textbf{{Ponctualité stricte}} = passages dans la fenêtre / passages observés.
+\item \textbf{{Marge ($\pm$)}} : intervalle de confiance à 95\,\% (loi de Student), les jours étant traités comme unités d'échantillonnage. La marge reflète la variabilité d'un jour à l'autre et non la précision de la mesure d'un passage ; elle s'élargit quand peu de jours sont disponibles.
+\item \textbf{{Jour incomplet}} : au moins {QUALITY_INCOMPLETE_HOURS} heures entre 5~h et 23~h avec moins de la moitié du volume habituel (médiane des trois mêmes jours de la semaine précédents). Un jour incomplet est exclu ; un jour avec une ou deux heures lacunaires est conservé et signalé.
+\item \textbf{{Temps réel douteux}} : ligne dont au moins {int(ind.DOUBTFUL_ZERO_SHARE * 100)}\,\% des retards valent exactement zéro (horaire théorique republié à la place du temps réel).
+\item \textbf{{Attente moyenne}} = $\sum h^2 / (2 \sum h)$, où $h$ est l'intervalle entre deux passages successifs à un arrêt. Calculée sur les arrêts et heures comptant au moins 5 passages prévus.
+\item Les passages attendus et assurés sont rattachés au jour de la course, la ponctualité au jour du départ effectif ; les deux ne diffèrent que pour les départs après minuit.
+\end{{itemize}}
+}}
+"""
 
 
 def make_line_stats(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame:
@@ -837,7 +1040,8 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
                 stop_stats: pd.DataFrame | None = None,
                 monthly_evolution: pd.DataFrame | None = None,
                 gaps: dict | None = None,
-                alerts: list[dict] | None = None) -> str:
+                alerts: list[dict] | None = None,
+                v2: dict | None = None) -> str:
     report_date = datetime.strptime(month, "%Y-%m")
     report_month = f"{FRENCH_MONTHS[report_date.month - 1]} {report_date.year}"
     worst = lines.head(3)
@@ -992,6 +1196,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 
 \vspace{{.3cm}}
 \textbf{{Score de fiabilité.}} Ce score (sur 100) mesure la fiabilité du réseau sur le mois. Il part de la ponctualité : le pourcentage de passages avec au plus 5 minutes de retard. Puis il applique une pénalité pour les arrêts sautés : chaque pourcent d'arrêts sautés retire 2 points. Formule : \textit{{score = max(0 ; ponctualité - 2 $\times$ taux d'arrêts sautés)}}. Un score faible signale une ligne prioritaire.
+{method_v2_summary(v2)}
 
 \vspace{{.35cm}}
 \textbf{{Alertes prioritaires}}
@@ -1056,6 +1261,8 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 {evolution_note}
 
 \textbf{{Alertes travaux.}} Les alertes de la section \textit{{Infos trafic}} (\alertmark) sont issues du flux ServiceAlerts TBM et sont reproduites à titre indicatif. Elles ne sont pas utilisées pour filtrer ou corriger les indicateurs de ponctualité. La présence d'une alerte sur une ligne ne signifie pas que les retards ou arrêts sautés observés sont causés par les travaux annoncés.
+
+{method_v2_section(v2)}
 
 {alerts_section}
 
@@ -1128,11 +1335,12 @@ def main() -> int:
                 gaps = query_collection_gaps(conn, month)
                 route_ids = set(scheduled["route_id"].unique()) if not scheduled.empty else set()
                 alerts_data = query_service_alerts(conn, month, route_ids) if route_ids else []
+                v2 = query_method_v2(conn, month, scope)
                 content = build_latex(month, scope, current, comparison(current, previous),
                                       lines, scheduled, collected_at,
                                       args.output_dir,
                                       network_metrics, network_lines, stop_stats,
-                                      monthly_evolution, gaps, alerts_data)
+                                      monthly_evolution, gaps, alerts_data, v2)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         tex_path = args.output_dir / f"urban-vision-{month}-{safe_slug(scope.recipient)}.tex"
         tex_path.write_text(content, encoding="utf-8")

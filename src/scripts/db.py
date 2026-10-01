@@ -1,5 +1,116 @@
+import json
 import sqlite3
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
+
+AGG_DDL = """
+CREATE TABLE IF NOT EXISTS agg_daily (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    eligible INTEGER NOT NULL,
+    histogram TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_service ON agg_daily(date_service);
+CREATE TABLE IF NOT EXISTS agg_hourly (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
+CREATE TABLE IF NOT EXISTS agg_daily_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    eligible INTEGER NOT NULL,
+    histogram TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_stop ON agg_daily_stop(stop_id);
+CREATE TABLE IF NOT EXISTS agg_hourly_stop (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    stop_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    cnt_le300 INTEGER NOT NULL,
+    cnt_gt300 INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id, stop_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_route ON agg_hourly_stop(route_id, date_service);
+CREATE TABLE IF NOT EXISTS agg_daily_segment (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    stop_id TEXT NOT NULL,
+    eligible INTEGER NOT NULL,
+    skipped INTEGER NOT NULL,
+    sum_seq INTEGER NOT NULL,
+    obs INTEGER NOT NULL,
+    sum_delay INTEGER NOT NULL,
+    pairs INTEGER NOT NULL,
+    sum_prev_delay INTEGER NOT NULL,
+    sum_gain INTEGER NOT NULL,
+    cnt_gain_gt120 INTEGER NOT NULL,
+    prev_stop_id TEXT,
+    hist_gain TEXT NOT NULL,
+    PRIMARY KEY (date_service, route_id, direction_id, stop_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_route ON agg_daily_segment(route_id, date_service);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_id);
+CREATE TABLE IF NOT EXISTS agg_daily_trips (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    scheduled INTEGER NOT NULL,
+    cancelled INTEGER NOT NULL,
+    added INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id)
+);
+CREATE TABLE IF NOT EXISTS agg_hourly_regularity (
+    date_service TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    stop_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    n_act INTEGER NOT NULL,
+    sum_h_act INTEGER NOT NULL,
+    sum_h2_act INTEGER NOT NULL,
+    n_sch INTEGER NOT NULL,
+    sum_h_sch INTEGER NOT NULL,
+    sum_h2_sch INTEGER NOT NULL,
+    PRIMARY KEY (date_service, route_id, direction_id, stop_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_regularity_route ON agg_hourly_regularity(route_id, date_service);
+CREATE TABLE IF NOT EXISTS quality_days (
+    date_service TEXT PRIMARY KEY,
+    passages INTEGER NOT NULL,
+    lacunar_hours TEXT NOT NULL,
+    flag TEXT NOT NULL,
+    computed_at INTEGER NOT NULL
+);
+"""
 
 # Schéma SQLite : source unique de vérité, réutilisé par init_db() à l'import et
 # par les tests sur une base temporaire. Idempotent (CREATE IF NOT EXISTS).
@@ -78,92 +189,12 @@ CREATE INDEX IF NOT EXISTS idx_observations_last_seen_at
     ON observations(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_observations_route
     ON observations(route_id);
-CREATE INDEX IF NOT EXISTS idx_observations_sched_delay
-    ON observations(schedule_relationship, departure_delay, last_seen_at, route_id);
+DROP INDEX IF EXISTS idx_observations_sched_delay;
 CREATE INDEX IF NOT EXISTS idx_service_alerts_period
     ON service_alerts(active_period_start, active_period_end);
 CREATE INDEX IF NOT EXISTS idx_observations_departure_time
     ON observations(departure_time, schedule_relationship, departure_delay, route_id);
-
-CREATE TABLE IF NOT EXISTS agg_daily (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    cnt_lt60 INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    eligible INTEGER NOT NULL,
-    histogram TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_service ON agg_daily(date_service);
-
-CREATE TABLE IF NOT EXISTS agg_hourly (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    heure INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    PRIMARY KEY (date_service, route_id, heure)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
-
-CREATE TABLE IF NOT EXISTS agg_daily_stop (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    stop_id TEXT NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    cnt_lt60 INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    eligible INTEGER NOT NULL,
-    histogram TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id, stop_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_stop ON agg_daily_stop(stop_id);
-
-CREATE TABLE IF NOT EXISTS agg_hourly_stop (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    stop_id TEXT NOT NULL,
-    heure INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    PRIMARY KEY (date_service, route_id, stop_id, heure)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_route ON agg_hourly_stop(route_id, date_service);
-CREATE TABLE IF NOT EXISTS agg_daily_segment (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    direction_id INTEGER NOT NULL,
-    stop_id TEXT NOT NULL,
-    eligible INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    sum_seq INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    pairs INTEGER NOT NULL,
-    sum_prev_delay INTEGER NOT NULL,
-    sum_gain INTEGER NOT NULL,
-    cnt_gain_gt120 INTEGER NOT NULL,
-    prev_stop_id TEXT,
-    hist_gain TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id, direction_id, stop_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_route ON agg_daily_segment(route_id, date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_id);
-"""
+""" + AGG_DDL
 
 
 OBSERVATION_COLUMNS_ADDED = (
@@ -189,86 +220,6 @@ DB_PATH = Path(__file__).resolve().parents[2] / "data" / "urban_vision.db"
 conn = sqlite3.connect(DB_PATH)
 init_db(conn)
 
-
-from datetime import datetime, timedelta
-
-AGG_DDL = """
-CREATE TABLE IF NOT EXISTS agg_daily (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    cnt_lt60 INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    eligible INTEGER NOT NULL,
-    histogram TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_service ON agg_daily(date_service);
-CREATE TABLE IF NOT EXISTS agg_hourly (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    heure INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    PRIMARY KEY (date_service, route_id, heure)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
-CREATE TABLE IF NOT EXISTS agg_daily_stop (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    stop_id TEXT NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    cnt_lt60 INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    eligible INTEGER NOT NULL,
-    histogram TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id, stop_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_stop ON agg_daily_stop(stop_id);
-CREATE TABLE IF NOT EXISTS agg_hourly_stop (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    stop_id TEXT NOT NULL,
-    heure INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    cnt_le300 INTEGER NOT NULL,
-    cnt_gt300 INTEGER NOT NULL,
-    PRIMARY KEY (date_service, route_id, stop_id, heure)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_stop ON agg_hourly_stop(stop_id);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_route ON agg_hourly_stop(route_id, date_service);
-CREATE TABLE IF NOT EXISTS agg_daily_segment (
-    date_service TEXT NOT NULL,
-    route_id TEXT NOT NULL,
-    direction_id INTEGER NOT NULL,
-    stop_id TEXT NOT NULL,
-    eligible INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    sum_seq INTEGER NOT NULL,
-    obs INTEGER NOT NULL,
-    sum_delay INTEGER NOT NULL,
-    pairs INTEGER NOT NULL,
-    sum_prev_delay INTEGER NOT NULL,
-    sum_gain INTEGER NOT NULL,
-    cnt_gain_gt120 INTEGER NOT NULL,
-    prev_stop_id TEXT,
-    hist_gain TEXT NOT NULL,
-    PRIMARY KEY (date_service, route_id, direction_id, stop_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_route ON agg_daily_segment(route_id, date_service);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_segment_stop ON agg_daily_segment(stop_id);
-"""
 
 # ::SCHED_BOUNDS:: borne le scan aux jours traités (incrémental) ; chaîne vide = tout
 # (re)calculer. `hist` est un objet JSON {secondes_de_retard: effectif} qui permet
@@ -471,6 +422,7 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
             c.execute(f"DELETE FROM {table} WHERE date_service IN ('{day_strs}')")
         for sql, params in incremental_statements(days):
             c.execute(sql, params)
+    refresh_v2(c, days)
     c.commit()
 
 
@@ -605,6 +557,136 @@ def refresh_segments(c, days: list[str] | None = None) -> None:
         c.execute(f"DELETE FROM agg_daily_segment WHERE date_service IN ('{day_strs}')")
         c.execute(*incremental_segment_statement(days))
     c.commit()
+
+
+TRIP_CANCELLED = ("CANCELED", "DELETED")
+TRIP_ADDED = ("ADDED", "NEW", "DUPLICATED", "REPLACEMENT")
+FREQUENT_MIN_DEPARTURES_PER_HOUR = 5
+HEADWAY_MAX_SECONDS = 3600
+V2_TABLES = ("agg_daily_trips", "agg_hourly_regularity")
+
+_TRIPS_SQL = f"""
+INSERT OR REPLACE INTO agg_daily_trips (date_service, route_id, scheduled, cancelled, added)
+SELECT substr(start_date, 1, 4) || '-' || substr(start_date, 5, 2) || '-' || substr(start_date, 7, 2) ds,
+       route_id,
+       SUM(schedule_relationship NOT IN {TRIP_CANCELLED + TRIP_ADDED}),
+       SUM(schedule_relationship IN {TRIP_CANCELLED}),
+       SUM(schedule_relationship IN {TRIP_ADDED})
+FROM trip_status
+WHERE start_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]' ::DAYS::
+GROUP BY ds, route_id
+"""
+
+_REGULARITY_SQL = f"""
+INSERT OR REPLACE INTO agg_hourly_regularity
+    (date_service, route_id, direction_id, stop_id, heure,
+     n_act, sum_h_act, sum_h2_act, n_sch, sum_h_sch, sum_h2_sch)
+WITH p AS (
+    SELECT o.route_id, COALESCE(o.direction_id, -1) dir, o.stop_id,
+           o.departure_time act, o.departure_time - o.departure_delay sch
+    FROM observations o
+    WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+          AND o.departure_time IS NOT NULL ::WINDOW_BOUNDS::
+),
+heads AS (
+    SELECT route_id, dir, stop_id, act t, 1 kind,
+           act - LAG(act) OVER (PARTITION BY route_id, dir, stop_id ORDER BY act) h
+    FROM p
+    UNION ALL
+    SELECT route_id, dir, stop_id, sch t, 2 kind,
+           sch - LAG(sch) OVER (PARTITION BY route_id, dir, stop_id ORDER BY sch) h
+    FROM p
+),
+g AS (
+    SELECT date(datetime(t, 'unixepoch', 'localtime')) ds, route_id, dir, stop_id,
+           CAST(strftime('%H', datetime(t, 'unixepoch', 'localtime')) AS INTEGER) heure,
+           SUM(kind = 1) n_act,
+           COALESCE(SUM(CASE WHEN kind = 1 THEN h END), 0) sum_h_act,
+           COALESCE(SUM(CASE WHEN kind = 1 THEN h * h END), 0) sum_h2_act,
+           SUM(kind = 2) n_sch,
+           COALESCE(SUM(CASE WHEN kind = 2 THEN h END), 0) sum_h_sch,
+           COALESCE(SUM(CASE WHEN kind = 2 THEN h * h END), 0) sum_h2_sch
+    FROM heads
+    WHERE h > 0 AND h <= {HEADWAY_MAX_SECONDS}
+    GROUP BY ds, route_id, dir, stop_id, heure
+)
+SELECT ds, route_id, dir, stop_id, heure, n_act, sum_h_act, sum_h2_act, n_sch, sum_h_sch, sum_h2_sch
+FROM g
+WHERE n_sch >= {FREQUENT_MIN_DEPARTURES_PER_HOUR} ::DAY_FILTER::
+"""
+
+
+def v2_statements(days: list[str]) -> list[tuple[str, tuple]]:
+    d0_ts = int(datetime.strptime(min(days), "%Y-%m-%d").timestamp())
+    d1_ts = int((datetime.strptime(max(days), "%Y-%m-%d") + timedelta(days=1)).timestamp())
+    day_ints = "', '".join(d.replace("-", "") for d in days)
+    day_strs = "', '".join(days)
+    return [
+        (_TRIPS_SQL.replace("::DAYS::", f"AND start_date IN ('{day_ints}')"), ()),
+        (_REGULARITY_SQL.replace("::WINDOW_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?")
+                        .replace("::DAY_FILTER::", f"AND ds IN ('{day_strs}')"),
+         (d0_ts - HEADWAY_MAX_SECONDS, d1_ts)),
+    ]
+
+
+def refresh_v2(c, days: list[str] | None = None) -> None:
+    c.executescript(AGG_DDL)
+    if days is None:
+        for table in V2_TABLES:
+            c.execute(f"DELETE FROM {table}")
+        c.execute(_TRIPS_SQL.replace("::DAYS::", ""))
+        c.execute(_REGULARITY_SQL.replace("::WINDOW_BOUNDS::", "").replace("::DAY_FILTER::", ""))
+    else:
+        day_strs = "', '".join(days)
+        for table in V2_TABLES:
+            c.execute(f"DELETE FROM {table} WHERE date_service IN ('{day_strs}')")
+        for sql, params in v2_statements(days):
+            c.execute(sql, params)
+    refresh_quality_days(c, days)
+    c.commit()
+
+
+QUALITY_HOURS = range(5, 24)
+QUALITY_MIN_BASELINE = 500
+QUALITY_LACUNAR_RATIO = 0.5
+QUALITY_INCOMPLETE_HOURS = 3
+QUALITY_REFERENCE_WEEKS = (1, 2, 3)
+
+
+def day_quality(hourly: dict, day: str) -> tuple[str, list[int]]:
+    d = datetime.strptime(day, "%Y-%m-%d")
+    refs = [hourly[r] for r in ((d - timedelta(days=7 * k)).strftime("%Y-%m-%d") for k in QUALITY_REFERENCE_WEEKS)
+            if r in hourly]
+    if len(refs) < 2:
+        return "non_evalue", []
+    current = hourly.get(day, {})
+    lacunar = []
+    for hour in QUALITY_HOURS:
+        values = sorted(ref.get(hour, 0) for ref in refs)
+        mid = len(values) // 2
+        baseline = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+        if baseline >= QUALITY_MIN_BASELINE and current.get(hour, 0) < QUALITY_LACUNAR_RATIO * baseline:
+            lacunar.append(hour)
+    if len(lacunar) >= QUALITY_INCOMPLETE_HOURS:
+        return "incomplet", lacunar
+    return ("degrade" if lacunar else "ok"), lacunar
+
+
+def refresh_quality_days(c, days: list[str] | None = None, today: str | None = None) -> None:
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    hourly: dict = {}
+    for ds, hour, n in c.execute("SELECT date_service, heure, SUM(obs) FROM agg_hourly GROUP BY date_service, heure"):
+        hourly.setdefault(ds, {})[hour] = n
+    targets = sorted(hourly) if days is None else days
+    for day in targets:
+        if day >= today:
+            continue
+        flag, lacunar = day_quality(hourly, day)
+        c.execute(
+            "INSERT OR REPLACE INTO quality_days (date_service, passages, lacunar_hours, flag, computed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (day, sum(hourly.get(day, {}).values()), json.dumps(lacunar), flag, int(time.time())),
+        )
 
 
 # Direction dominante par (ligne, arrêt), étiquetée par le terminus de la ligne
