@@ -225,7 +225,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 23 fichiers, 341 tests pytest
+└── tests/                          # 23 fichiers, 342 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -422,6 +422,7 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
 | Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
 | `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
+| `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés, pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
 | `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:362` |
 | Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
 | `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:62` |
@@ -936,8 +937,10 @@ sort en code 1 en cas d'échec, ce que la veille signale (« Tâche planifiée e
 
 Ensuite, `ensure_v2_history` calcule la méthode 2.0 des jours de `agg_daily`
 antérieurs à aujourd'hui qui n'ont pas encore de ligne dans `quality_days`,
-un jour à la fois pour ne pas bloquer la collecte (≈ 2 s par jour sur la copie
-de production), puis réévalue la qualité de tous les jours ; c'est ce qui
+un jour à la fois, avec une pause d'une seconde entre deux jours
+(`BACKFILL_PAUSE_SECONDS`) pour que le collecteur obtienne le verrou
+d'écriture (≈ 4 s par jour en production), puis réévalue la qualité de tous
+les jours ; c'est ce qui
 construit l'historique au premier passage après un déploiement. Un jour sans
 course connue dans `trip_status` reçoit quand même sa ligne de qualité : il
 n'est pas recalculé à chaque passage. `PRAGMA optimize` suit. Échec
@@ -1672,7 +1675,9 @@ changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 
 Le stockage `histogram` est utilisé pour les médianes ; en cas de changement du
 format, penser à `refresh_aggregates(days=None)` (recalcul complet) une fois
-via un Python shell ou le collecteur.
+via un Python shell. Pour recalculer toute la méthode 2.0, vider `quality_days` :
+le passage suivant du timer `urban-vision-rafraichir` la reconstruit jour par
+jour (`ensure_v2_history`, section 10.2).
 
 ---
 
@@ -1985,7 +1990,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte pydeck.
-- Tests : 341, isolés (suite `pytest` complète : 341 passed), flux synthétiques
+- Tests : 342, isolés (suite `pytest` complète : 342 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2028,7 +2033,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 à I10 le 01/10/2026) :
+Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 à I11 le 01/10/2026 ; I12 le 02/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2041,6 +2046,8 @@ Incohérences relevées et correctifs (I1, I3, I4 le 14/09/2026 ; I5 à I10 le 0
 | I8 | `idx_observations_sched_delay` restait mis à jour à chaque relevé alors qu'aucune requête ne l'utilisait plus depuis I5, et le dashboard le recréait à chaque démarrage (`app.py::INDEX_DDL`) | Retiré de `SCHEMA_DDL` et de `INDEX_DDL`, supprimé par `init_db` (`DROP INDEX IF EXISTS`) ; écriture d'un relevé 34 % plus rapide, ≈ 400 Mo de pages libérées (section 9.3) ; test `TestAgregatsV2::test_index_piege_supprime_a_l_import` |
 | I9 | La page « Collecte des données » parcourait cinq fois toute la table `observations` à chaque expiration du cache (≈ 44 s de requêtes sur la copie de production) | Totaux lus dans `MAX(rowid)`, `trip_status` et `agg_daily`, répartition horaire bornée aux 7 derniers jours (≈ 1,6 s) ; tests `TestLoadCollectionStats` |
 | I10 | Tables `agg_daily`, `agg_hourly`, `agg_daily_stop` et `agg_hourly_stop` définies deux fois (`SCHEMA_DDL` et `AGG_DDL`) | `SCHEMA_DDL` inclut `AGG_DDL`, seule définition des tables agrégées |
+| I11 | Section 18.4 : recalcul complet des agrégats « via le collecteur », qui ne recalcule plus rien depuis le 01/10/2026 | Section 18.4 corrigée (shell Python ; `quality_days` pour la méthode 2.0) |
+| I12 | Rattrapage de l'historique de la méthode 2.0 : les transactions des jours s'enchaînaient sans pause. Le 02/10/2026 entre 0 h 12 et 0 h 14, le collecteur a attendu le verrou d'écriture : journal du relevé de 0 h 11 non écrit (« database is locked »), 175 s entre deux relevés réussis pour un seuil de trou de 180 s | Pause d'une seconde entre deux jours rattrapés (`BACKFILL_PAUSE_SECONDS`, section 10.2) ; test `TestHistoriqueV2::test_pause_entre_deux_jours_pour_laisser_ecrire_le_collecteur` |
 
 ### 26.4 Dette documentaire
 

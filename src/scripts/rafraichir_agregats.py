@@ -13,6 +13,7 @@ DB_PATH = PROJECT_ROOT / "data" / "urban_vision.db"
 LOG_PATH = PROJECT_ROOT / "data" / "collect.log"
 DB_BUSY_TIMEOUT_MS = 120_000
 REFRESH_WARN_SECONDS = 60
+BACKFILL_PAUSE_SECONDS = 1.0
 
 logger = logging.getLogger("rafraichir_agregats")
 
@@ -47,6 +48,7 @@ def ensure_v2_history(conn, today: str) -> int:
     start = time.monotonic()
     for day in missing:
         dbio.refresh_v2(conn, days=[day])
+        time.sleep(BACKFILL_PAUSE_SECONDS)
     dbio.refresh_quality_days(conn, None, today)
     conn.commit()
     logger.info("Méthode 2.0 : historique calculé en %.0f s", time.monotonic() - start)
