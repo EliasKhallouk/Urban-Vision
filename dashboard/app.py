@@ -55,6 +55,7 @@ DB_PATH = Path(__file__).resolve().parents[1] / "data" / "urban_vision.db"
 FRESHNESS_BUFFER_SECONDS = 20 * 60
 CACHE_TTL_SECONDS = 60
 MIN_OBSERVATIONS = 50
+COLLECTION_HOURLY_DAYS = 7
 
 # Constantes couleur : importées du module partagé reports/palette.py pour garantir
 # une seule source de vérité (palette et seuils de couleur identiques aux rapports).
@@ -184,8 +185,6 @@ DEFAULT_PRESET = "7 jours"
 INDEX_DDL = [
     "CREATE INDEX IF NOT EXISTS idx_observations_last_seen_at ON observations(last_seen_at)",
     "CREATE INDEX IF NOT EXISTS idx_observations_route ON observations(route_id)",
-    "CREATE INDEX IF NOT EXISTS idx_observations_sched_delay"
-    " ON observations(schedule_relationship, departure_delay, last_seen_at, route_id)",
     # Couvre les vues bornées par `departure_time >= ?` (période Grafana) : le
     # scan ne lit que la tranche d'index sans accéder aux lignes de la table.
     "CREATE INDEX IF NOT EXISTS idx_observations_departure_time"
@@ -1000,27 +999,20 @@ def load_active_alerts(_conn, now_ts: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_collection_stats(_conn) -> dict:
+    first = _conn.execute("SELECT MIN(last_seen_at) FROM observations").fetchone()[0]
+    last = _conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()[0]
+    total = _conn.execute("SELECT MAX(rowid) FROM observations").fetchone()[0] or 0
+    n_trajets = _conn.execute("SELECT COUNT(*) FROM trip_status").fetchone()[0]
+    n_lignes, analysed = _conn.execute("SELECT COUNT(DISTINCT route_id), COALESCE(SUM(obs), 0) FROM agg_daily").fetchone()
     hourly = pd.read_sql_query(
         """
         SELECT CAST(strftime('%H', datetime(last_seen_at, 'unixepoch', 'localtime')) AS INTEGER) AS heure,
                COUNT(*) AS observations
         FROM observations
+        WHERE last_seen_at >= ?
         GROUP BY heure ORDER BY heure
-        """, _conn,
+        """, _conn, params=(int(last or 0) - COLLECTION_HOURLY_DAYS * 86400,),
     )
-    first = _conn.execute("SELECT MIN(last_seen_at) FROM observations").fetchone()[0]
-    last = _conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()[0]
-    total = _conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
-    n_trajets = _conn.execute("SELECT COUNT(DISTINCT trip_id || start_date) FROM observations").fetchone()[0]
-    n_lignes = _conn.execute("SELECT COUNT(DISTINCT route_id) FROM observations").fetchone()[0]
-    cutoff = None if last is None else int(last) - FRESHNESS_BUFFER_SECONDS
-    if cutoff is None:
-        analysed = 0
-    else:
-        analysed = _conn.execute(
-            "SELECT COUNT(*) FROM observations WHERE last_seen_at < ? AND schedule_relationship = 'SCHEDULED' AND departure_delay IS NOT NULL",
-            (cutoff,),
-        ).fetchone()[0]
     return {
         "hourly": hourly,
         "first_ts": first, "last_ts": last,
@@ -1942,15 +1934,15 @@ def main() -> None:
             stats = load_collection_stats(conn)
             st.markdown("### Suivi de la collecte")
             st.markdown('<div class="section-note">Volume et continuité des données collectées via les flux GTFS-RT TripUpdates.</div>', unsafe_allow_html=True)
-            st.caption("**Observation (brute)** : toute ligne reçue du flux, quelle que soit sa nature. **Passage analysé** : observation SCHEDULED avec retard connu, hors 20 dernières minutes — c'est la définition utilisée partout dans la Vue réseau. Les arrêts SKIPPED ne comptent pas comme passages analysés mais sont suivis à part.")
+            st.caption("**Observation (brute)** : toute ligne reçue du flux, quelle que soit sa nature. **Passage analysé** : passage programmé (SCHEDULED) dont le retard est connu, compté dans les agrégats quotidiens. Les arrêts SKIPPED ne comptent pas comme passages analysés mais sont suivis à part.")
             render_kpis([
                 ("Observations (brutes)", f"{stats['total']:,}".replace(",", " "), None, "neutral"),
-                ("Passages analysés", f"{stats['analysed']:,}".replace(",", " "), "stabilisés, horaires < 5 min", "neutral"),
-                ("Trajets distincts", f"{stats['trajets']:,}".replace(",", " "), None, "neutral"),
+                ("Passages analysés", f"{stats['analysed']:,}".replace(",", " "), "retard connu", "neutral"),
+                ("Courses suivies", f"{stats['trajets']:,}".replace(",", " "), None, "neutral"),
                 ("Première date", format_date(stats["first_ts"]), None, "neutral"),
                 ("Dernière date", format_date(stats["last_ts"]), None, "neutral"),
             ])
-            st.markdown('<div class="section-note">Les « Observations brutes » comptent toutes les lignes reçues du flux. Les « Passages analysés » reprennent la définition de la Vue réseau : passages programmés (SCHEDULED) avec retard connu, hors 20 dernières minutes. Les arrêts sautés (SKIPPED) ne sont pas comptés comme passages mais restent suivis séparément.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-note">Les « Observations brutes » comptent toutes les lignes reçues du flux. Les « Courses suivies » comptent les courses (voyage et jour) dont le flux a publié le statut, y compris les courses supprimées.</div>', unsafe_allow_html=True)
             left, right = st.columns(2, gap="large")
             with left:
                 st.markdown("#### Observations par minute")
@@ -1967,7 +1959,7 @@ def main() -> None:
                     else:
                         hc_render(collection_minutely_chart(minutely), height=340, use_stock=True)
             with right:
-                st.markdown("#### Répartition horaire")
+                st.markdown(f"#### Répartition horaire ({COLLECTION_HOURLY_DAYS} derniers jours)")
                 hourly = stats["hourly"]
                 if hourly.empty:
                     st.info("Aucune donnée horaire.")
