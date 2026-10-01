@@ -1647,7 +1647,7 @@ d'un lot complet sur la VM : voir 26.2 U11.
 
 | Symptôme | Cause probable | Actions |
 |---|---|---|
-| `sqlite3.OperationalError: database is locked` côté alertes | Verrou d'écriture tenu par le recalcul des agrégats (≈ 200 s avant le correctif de la section 9.3, quelques secondes depuis, dans son propre processus) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Maigrir : `AGGREGATE_REFRESH_INTERVAL_SECONDS=300` |
+| `sqlite3.OperationalError: database is locked` côté alertes | Verrou d'écriture tenu par le recalcul des agrégats (≈ 200 s avant le correctif de la section 9.3, quelques secondes depuis, dans son propre processus) | C'est géré par `busy_timeout` (180 s) + `rollback`/reprise ; consulter `data/alerts.log`. Le recalcul tourne toutes les 5 min dans son propre processus (timer `urban-vision-rafraichir`, section 10.2) |
 | Base `urban_vision.db` absente ou vide | Init jamais faite / données perdues | `python src/scripts/db.py` (schéma + migration) puis relancer collecte et gtfs statique |
 | Dashboard vide (warnings « pas d'observations ») | DB vide OU agrégats vides | Vérifier collecte (`tail -f data/collect.log`) ; le dashboard reconstruit les agrégats si vides, sinon relancer `python src/scripts/db.py` puis vérifier |
 | `xelatex: command not found` | LaTeX absent | `apt install texlive-* fonts-inter` cf. `apt-requirement.txt` |
