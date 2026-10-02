@@ -411,9 +411,20 @@ def is_dominant_hotspot(hotspot: dict | None, carried_s: float | None) -> bool:
     return hotspot["gain_s"] / float(carried_s) >= HOTSPOT_OF_CARRIED
 
 
+def segment_path(origin: str, target: str) -> str:
+    """« A → B » ; un seul nom quand les deux arrêts portent le même nom (deux quais d'un même arrêt)."""
+    return origin if origin == target else f"{origin} → {target}"
+
+
+def segment_title(origin: str, target: str) -> str:
+    return f"Arrêt {origin}" if origin == target else f"Tronçon {origin} → {target}"
+
+
 def _segment_label(hotspot: dict) -> str:
     commune = hotspot.get("commune")
     where = f" ({commune})" if isinstance(commune, str) and commune else ""
+    if hotspot["from"] == hotspot["to"]:
+        return f"à l'arrêt {hotspot['from']}{where}"
     return f"entre {hotspot['from']} et {hotspot['to']}{where}"
 
 
@@ -504,7 +515,7 @@ def stop_hints(cause: dict, hotspot: dict | None, prev_stop: str | None, stop_na
     """Pistes d'action de la fiche arrêt (indices, pas de conclusion)."""
     hints = []
     if cause["verdict"] in ("local", "mixte") and prev_stop:
-        hints.append(f"Tronçon {prev_stop} → {stop_name} : piste d'aménagement de voirie "
+        hints.append(f"{segment_title(prev_stop, stop_name)} : piste d'aménagement de voirie "
                      "(priorité aux feux, voie réservée), de la compétence de la commune ou de "
                      "Bordeaux Métropole.")
     line = f" Voir la fiche de la ligne {responsible['ligne']}." if responsible else ""
@@ -574,7 +585,7 @@ def line_hints(origin: dict, skips: dict, cancelled: int, peak: dict | None = No
         for h in origin["hotspots"][:2]:
             commune = h.get("commune") if isinstance(h.get("commune"), str) else None
             who = f"commune de {commune} ou Bordeaux Métropole" if commune else "Bordeaux Métropole"
-            hints.append(f"Tronçon {h['from']} → {h['to']} : point noir de circulation ({who}, voirie).")
+            hints.append(f"{segment_title(h['from'], h['to'])} : point noir de circulation ({who}, voirie).")
     elif verdict == "diffus":
         hints.append("Retard réparti sur tout le parcours : temps de parcours prévu à réexaminer "
                      "(grille horaire, Bordeaux Métropole et l'exploitant).")
@@ -905,7 +916,7 @@ def commune_sentence(info: dict | None) -> str | None:
             f"{format_pct(info['share'] * 100)} de son retard")
     if info["hotspot"] and info["share"] >= 0.05:
         h = info["hotspot"]
-        text += (f" ; tronçon le plus pénalisant de la commune : {h['from']} → {h['to']} "
+        text += (f" ; tronçon le plus pénalisant de la commune : {segment_path(h['from'], h['to'])} "
                  f"({format_seconds(h['gain_s'], signed=True)} en moyenne).")
     else:
         text += " : l'essentiel se forme ailleurs sur le parcours."

@@ -502,3 +502,16 @@ class TestCommune:
         assert dg.commune_sentence(info) == "La ligne ne dessert pas Mérignac sur la période."
         low = dg.commune_share(self._seg(), "Talence")
         assert dg.commune_sentence(low).endswith(": l'essentiel se forme ailleurs sur le parcours.")
+
+
+class TestTronconsMemeNom:
+    def test_deux_quais_du_meme_arret(self):
+        assert dg.segment_path("Allende", "Allende") == "Allende"
+        assert dg.segment_title("Allende", "Allende") == "Arrêt Allende"
+        assert dg._segment_label({"from": "Allende", "to": "Allende", "commune": "Lormont"}) == \
+            "à l'arrêt Allende (Lormont)"
+
+    def test_troncon_ordinaire(self):
+        assert dg.segment_path("Avenue de Paris", "La Ramade") == "Avenue de Paris → La Ramade"
+        assert dg.segment_title("Avenue de Paris", "La Ramade") == "Tronçon Avenue de Paris → La Ramade"
+        assert dg._segment_label({"from": "A", "to": "B", "commune": None}) == "entre A et B"

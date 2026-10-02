@@ -2438,7 +2438,7 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
                        f"de retard.{commune_note}")
             if d["origin"]["hotspots"]:
                 top = pd.DataFrame(d["origin"]["hotspots"])
-                top["Tronçon"] = top["from"] + " → " + top["to"]
+                top["Tronçon"] = [dg.segment_path(a, b) for a, b in zip(top["from"], top["to"])]
                 top["Retard pris"] = top["gain_s"].map(lambda v: format_seconds(v, signed=True))
                 st.dataframe(top[["Tronçon", "commune", "Retard pris"]].rename(columns={"commune": "Commune"}),
                              hide_index=True, width="stretch")
