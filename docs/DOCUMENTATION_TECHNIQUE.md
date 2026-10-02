@@ -238,7 +238,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 26 fichiers, 474 tests pytest
+└── tests/                          # 26 fichiers, 475 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -437,6 +437,7 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
 | Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
 | `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
+| `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés (tronçons, méthode 2.0), pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
 | `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:383` |
 | Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
 | `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:62` |
@@ -1002,15 +1003,17 @@ dernier contrôle.
 Le recalcul de routine est lancé toutes les 5 min par
 `urban-vision-rafraichir.timer` : `rafraichir_agregats.py` recalcule les
 agrégats puis les tronçons (`refresh_segments`) d'hier et d'aujourd'hui, après
-avoir rattrapé jour par jour `agg_daily_segment` s'il est vide, journalise la durée dans `data/collect.log` (« Agrégats rafraîchis
+avoir rattrapé jour par jour `agg_daily_segment` s'il est vide (pause
+d'une seconde entre deux jours, `BACKFILL_PAUSE_SECONDS`), journalise la durée dans `data/collect.log` (« Agrégats rafraîchis
 en X s », warning « Rafraîchissement des agrégats lent » au-delà de 60 s) et
 sort en code 1 en cas d'échec, ce que la veille signale (« Tâche planifiée en
 échec »).
 
 Ensuite, `ensure_v2_history` calcule la méthode 2.0 des jours de `agg_daily`
 antérieurs à aujourd'hui qui n'ont pas encore de ligne dans `quality_days`,
-un jour à la fois pour ne pas bloquer la collecte (≈ 2 s par jour sur la copie
-de production), puis réévalue la qualité de tous les jours ; c'est ce qui
+un jour à la fois, avec la même pause d'une seconde entre deux jours pour que
+le collecteur obtienne le verrou d'écriture (≈ 4 s par jour en production),
+puis réévalue la qualité de tous les jours ; c'est ce qui
 construit l'historique au premier passage après un déploiement. Un jour sans
 course connue dans `trip_status` reçoit quand même sa ligne de qualité : il
 n'est pas recalculé à chaque passage. `PRAGMA optimize` suit. Échec
@@ -2263,15 +2266,17 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 474, isolés (suite `pytest` complète : 474 passed), flux synthétiques
+- Tests : 475, isolés (suite `pytest` complète : 475 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
   (gitignoré).
-- Git : branche `main`, remote GitHub ; production sur le commit `3afe0d3`
-  (déployé le 01/10/2026 à 22 h 20 par `deploy/deployer.sh` : sauvegardes,
-  archive du GTFS, journal de collecte, recalcul par timer, configuration
-  versionnée).
+- Git : branche `main`, remote GitHub ; production sur le commit `14a60d5`
+  de `main` (méthode 2.0, `915fde6`, déployée le 02/10/2026 à 0 h 09 par
+  `deploy/deployer.sh --sans-pull` après une sauvegarde ; pause du rattrapage,
+  `14a60d5`, à 0 h 24 avec `--sans-redemarrage` ; protection des données,
+  `3afe0d3`, le 01/10/2026 à 22 h 20). La branche `refonte-ux-dashboard`
+  n'est pas déployée.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -2285,7 +2290,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.2 Environnement de production
 
-État relevé sur la VM de production le 16/09/2026, mis à jour le 01/10/2026 :
+État relevé sur la VM de production le 16/09/2026, mis à jour le 02/10/2026 :
 
 | # | Point | État en production |
 |---|---|---|
@@ -2297,15 +2302,15 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U6 | `reports/recipients.json` | Absent sur la VM ; la génération mensuelle passe par `--network` / `--commune`, ou exige `--recipients-file` |
 | U7 | `xelatex` + fonts | `/usr/bin/xelatex` et `/usr/bin/lualatex` présents ; 38 polices Inter installées (`fc-list`) |
 | U8 | Veille des visiteurs | Modifiée le 16/09/2026 (déployée sur VM, sha256 vérifié) : filtre **Nouvelle-Aquitaine** en table principale du HTML (§17.2) ; IP utilisateur `90.120.193.41` en **violet** ; coordonnées `lat/lon/zip` (ip-api) + **carte Leaflet** (tuiles **CARTO**, remplacées suite au blocage tile.openstreetmap.org 16/09) ; BigDataCloud actif depuis le 17/09 (clé `root:600`), localité + CP dans la colonne « Ville » ; **bannière « Dernier visiteur en France »** (toutes régions) ajoutée en tête le 17/09 ; ré-essai BigDataCloud 2 h après erreur transitoire (403) ; les IP « probable bot » (profil `p-bot`, orange) sont exclues de la passe BigDataCloud |
-| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus du 22/09/2026 au 01/10/2026 à 12 h 01 (I8, 26.3). Correctif déployé le 01/10/2026 à 12 h 09 (seul `urban-vision-collect` redémarré) : de 12 h 09 à 14 h 16, 128 relevés, aucun trou, aucun warning, plus grand écart entre deux relevés 80 s, rafraîchissement des agrégats 16,8 à 19,0 s ; agrégats du 30/09 identiques au comptage direct dans `observations` (251 591 passages) ; dashboard HTTPS 200 Depuis le déploiement de `3afe0d3` (01/10/2026, 22 h 20) : une ligne de `collection_runs` par relevé (écriture moyenne ≈ 0,8 s, aucune erreur ni écart supérieur à 60 s sur les 20 premières minutes), prévisions retenues aux horizons 10, 5 et 2 min, recalcul des agrégats dans `urban-vision-rafraichir` (19,3 s au premier passage), collecteur sans recalcul |
+| U9 | Collecte | 3 services `active` ; base 3,6 Go (12,9 millions d'observations), WAL 143 Mo ; trous de collecte de 3 à 5 min presque continus du 22/09/2026 au 01/10/2026 à 12 h 01 (I8, 26.3). Correctif déployé le 01/10/2026 à 12 h 09 (seul `urban-vision-collect` redémarré) : de 12 h 09 à 14 h 16, 128 relevés, aucun trou, aucun warning, plus grand écart entre deux relevés 80 s, rafraîchissement des agrégats 16,8 à 19,0 s ; agrégats du 30/09 identiques au comptage direct dans `observations` (251 591 passages) ; dashboard HTTPS 200 Depuis le déploiement de `3afe0d3` (01/10/2026, 22 h 20) : une ligne de `collection_runs` par relevé (écriture moyenne ≈ 0,8 s, aucune erreur ni écart supérieur à 60 s sur les 20 premières minutes), prévisions retenues aux horizons 10, 5 et 2 min, recalcul des agrégats dans `urban-vision-rafraichir` (19,3 s au premier passage), collecteur sans recalcul Depuis `915fde6` (02/10/2026, 0 h 09) : `idx_observations_sched_delay` supprimé (100 082 pages de 4 Ko libérées) ; `ANALYZE` lancé une fois à la main (75 s pendant lesquelles les écritures du collecteur attendent) ; historique de la méthode 2.0 calculé au premier passage du recalcul (66 jours en 266 s ; `quality_days` : 08/09 et 24/09 `incomplet`, 21/08 `degrade`, 14 jours `non_evalue`, 50 `ok`) ; recalcul courant, méthode 2.0 comprise, 18 à 19 s ; septembre 2026 : score 2.0 75,1 ± 1,2, ponctualité stricte 78,4 %, service assuré 95,9 %, comme sur la copie locale ; aucun trou de collecte depuis le 01/10/2026 à 12 h 01. |
 | U10 | Veille de la collecte | Installée le 01/10/2026 : `urban-vision-veille-collecte.timer` toutes les 5 min, identifiants dans `/etc/urban-vision/alertes.env` (`root:600`, `UV_SMTP_USER` et `UV_SMTP_PASSWORD`, serveur Gmail par défaut) ; premier passage : 4 conditions `ok` ; email de test envoyé le 01/10/2026. Deux copies laissées par l'éditeur (`alertes.env.save`, `alertes.env.save.1`) restent dans le dossier : à supprimer. Sortie SMTP vers `smtp.gmail.com` ouverte sur 465 et 587 Depuis `3afe0d3` : 7 conditions (journal de collecte, flux figé, sauvegarde, tâches planifiées en plus), unité autorisée en `AF_UNIX` pour interroger systemd ; toutes `ok` au premier passage. `UV_HEARTBEAT_URL` non défini (pas de sonde externe) |
-| U11 | Tests et rapports sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed tant que `matplotlib` manquait (`test_monthly_report.py` non importable), 262 passed après son installation (`81eb95b`). Rapports d'août et de septembre générés le 01/10/2026 sur la VM (`--compile --pdf-only`, 34 PDF chacun) : 40 min pour août, 78 min pour septembre, 1 h 35 min de CPU au total, aucun trou de collecte pendant la génération ; les 6 anciens PDF d'août sont dans `reports/output/corbeille/2026-08-ancien/`. Timer `urban-vision-rapports.timer` installé, prochain lancement le 01/11/2026 à 3 h Rapports d'août et de septembre relancés le 01/10/2026 à 22 h 22 (unité transitoire `urban-vision-rapports-regeneration`) pour la ligne « trous de collecte » corrigée |
-| U12 | Protection des données | Première sauvegarde le 01/10/2026 à 22 h 11 : 3 628 Mo compressés en 955 Mo (zstd) en 5 min 33 s, restauration contrôlée en 3 min 13 s (12 983 514 observations) ; timers `urban-vision-sauvegarde` (2 h 30) et `urban-vision-archive-gtfs` (6 h 15) actifs ; première version du GTFS archivée (`gtfs_2026-10-01_3ea3193653b8.zip`, valide du 01/10 au 30/12/2026). Copie hors VM non configurée (`/etc/urban-vision/sauvegarde.env` absent) |
+| U11 | Tests et rapports sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed tant que `matplotlib` manquait (`test_monthly_report.py` non importable), 262 passed après son installation (`81eb95b`). Rapports d'août et de septembre générés le 01/10/2026 sur la VM (`--compile --pdf-only`, 34 PDF chacun) : 40 min pour août, 78 min pour septembre, 1 h 35 min de CPU au total, aucun trou de collecte pendant la génération ; les 6 anciens PDF d'août sont dans `reports/output/corbeille/2026-08-ancien/`. Timer `urban-vision-rapports.timer` installé, prochain lancement le 01/11/2026 à 3 h Rapports d'août et de septembre relancés le 01/10/2026 à 22 h 22 (unité transitoire `urban-vision-rapports-regeneration`) pour la ligne « trous de collecte » corrigée Cette régénération s'est terminée le 02/10/2026 à 0 h 01 (codes retour 0, 34 PDF par mois, 1 h 28 min de CPU). Le 02/10/2026 : suite lancée sur une copie de `915fde6` (Python 3.12.14, SQLite 3.53.1, pytest hors du venv) : 341 passed en 18 s ; rapports réseau d'août et de septembre régénérés avec la page « Méthode 2.0 » (unité transitoire `urban-vision-rapports-v2`, 68 s et 85 s) ; les rapports communaux de ces deux mois n'ont pas cette page. |
+| U12 | Protection des données | Première sauvegarde le 01/10/2026 à 22 h 11 : 3 628 Mo compressés en 955 Mo (zstd) en 5 min 33 s, restauration contrôlée en 3 min 13 s (12 983 514 observations) ; timers `urban-vision-sauvegarde` (2 h 30) et `urban-vision-archive-gtfs` (6 h 15) actifs ; première version du GTFS archivée (`gtfs_2026-10-01_3ea3193653b8.zip`, valide du 01/10 au 30/12/2026). Copie hors VM non configurée (`/etc/urban-vision/sauvegarde.env` absent) Sauvegarde avant le déploiement de la méthode 2.0 le 02/10/2026 à 0 h 01 (955 Mo, 6 min 46 s, contrôle ok). |
 | U13 | Configuration versionnée | Unités, vhost et rotation installés le 01/10/2026 par `deploy/deployer.sh` ; en-têtes HTTP actifs (HSTS, `nosniff`, `SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`) ; rotation hebdomadaire de `collect.log` et `alerts.log` ; crontab root identique à `deploy/cron/root.crontab` ; copie de l'ancien vhost conservée en `urban-vision.avant-<date>` |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 le 02/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2322,6 +2327,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I12 | La vue « Suivi de la collecte » parcourait cinq fois toute la table `observations` à chaque expiration du cache (≈ 44 s de requêtes sur la copie de production) | Totaux lus dans `MAX(rowid)`, `trip_status` et `agg_daily`, répartition horaire bornée aux 7 derniers jours (≈ 1,6 s) ; tests `TestLoadCollectionStats` |
 | I13 | Tables `agg_daily`, `agg_hourly`, `agg_daily_stop`, `agg_hourly_stop` et `agg_daily_segment` définies deux fois (`SCHEMA_DDL` et `AGG_DDL`) | `SCHEMA_DDL` inclut `AGG_DDL`, seule définition des tables agrégées |
 | I14 | Sections 3 et 18.4 : le rattrapage de `agg_daily_segment` était attribué au collecteur (`collect.py::ensure_segments`, redémarrage de `urban-vision-collect`), alors qu'il est fait par le recalcul planifié depuis le 01/10/2026 | Sections 3 et 18.4 corrigées (`rafraichir_agregats.py::ensure_segments`) |
+| I15 | Rattrapage de l'historique de la méthode 2.0 : les transactions des jours s'enchaînaient sans pause. Le 02/10/2026 entre 0 h 12 et 0 h 14, le collecteur a attendu le verrou d'écriture : journal du relevé de 0 h 11 non écrit (« database is locked »), 175 s entre deux relevés réussis pour un seuil de trou de 180 s. `ensure_segments` avait le même défaut | Pause d'une seconde entre deux jours rattrapés dans `ensure_v2_history` et `ensure_segments` (`BACKFILL_PAUSE_SECONDS`, section 10.2) ; tests `TestHistoriqueV2::test_pause_entre_deux_jours_pour_laisser_ecrire_le_collecteur` et `TestRattrapageTroncons::test_table_vide_recalculee_jour_par_jour` |
 
 ### 26.4 Dette documentaire
 

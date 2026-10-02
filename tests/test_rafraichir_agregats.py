@@ -64,10 +64,13 @@ class TestRattrapageTroncons:
         _segment_obs(conn)
         dbio.refresh_aggregates(conn, days=None)
         calls = []
+        pauses = []
         real = dbio.refresh_segments
         monkeypatch.setattr(dbio, "refresh_segments", lambda c, days=None: (calls.append(days), real(c, days=days)))
+        monkeypatch.setattr(ra.time, "sleep", pauses.append)
         assert ra.ensure_segments(conn) == 1
         assert calls == [["2026-09-11"]]
+        assert pauses == [ra.BACKFILL_PAUSE_SECONDS]
         assert conn.execute("SELECT SUM(pairs), SUM(sum_gain) FROM agg_daily_segment").fetchone() == (1, 60)
 
     def test_table_remplie_laissee_intacte(self, conn, monkeypatch):

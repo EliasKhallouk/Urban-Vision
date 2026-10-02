@@ -359,6 +359,25 @@ class TestIndicateursSurLaBase:
 
 
 class TestHistoriqueV2:
+    @pytest.fixture(autouse=True)
+    def _pauses(self, monkeypatch):
+        import rafraichir_agregats as ra
+
+        self.pauses = []
+        monkeypatch.setattr(ra.time, "sleep", self.pauses.append)
+
+    def test_pause_entre_deux_jours_pour_laisser_ecrire_le_collecteur(self, conn):
+        import db as dbio
+        import rafraichir_agregats as ra
+
+        _seed_regularity(conn)
+        dbio.refresh_aggregates(conn, days=None)
+        conn.execute("DELETE FROM quality_days")
+        conn.commit()
+        assert ra.ensure_v2_history(conn, "2026-10-01") == 2
+        assert self.pauses == [ra.BACKFILL_PAUSE_SECONDS] * 2
+        assert ra.BACKFILL_PAUSE_SECONDS > 0
+
     def test_calcule_les_jours_manquants_une_seule_fois(self, conn):
         import db as dbio
         import rafraichir_agregats as ra
