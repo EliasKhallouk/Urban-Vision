@@ -127,7 +127,7 @@ class TestModeCharts:
         )
         config = hc.mode_comparison_chart(df)
         assert config["xAxis"]["categories"] == [
-            "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min", "Arrêts sautés"
+            "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min", "Arrêts non desservis"
         ]
         bus = config["series"][0]
         assert bus["name"] == "■ Bus"

@@ -45,12 +45,16 @@ quand.
 - **Tableau de bord web public** : carte par commune avec, pour chaque arrêt,
   une fiche qui explique d'où vient le problème (ligne en cause, retard né sur
   place ou venu de plus loin, heures et jours concernés) ; fiche de chaque
-  ligne (où le retard se forme, arrêts sautés, courses supprimées) ; créneaux
-  et tendances ; réseau et modes de transport ; perturbations ; méthode et
-  données ouvertes.
+  ligne (où le retard se forme, arrêts non desservis, courses supprimées) ;
+  créneaux et tendances ; réseau et modes de transport ; perturbations ;
+  méthode et données ouvertes. Une **vue rapide**, par défaut, dit l'essentiel
+  en mots (« fiable », « à surveiller », « problématique ») ; la **vue
+  détaillée** ajoute les graphiques d'analyse. Un guide de lecture s'affiche à
+  la première visite.
   → <https://urban-vision.duckdns.org>
 - **Rapports mensuels PDF**, un pour le réseau, un pour chacune des
-  28 communes de Bordeaux Métropole.
+  28 communes de Bordeaux Métropole, téléchargeables dans le tableau de bord
+  (page « Rapports mensuels »).
 - **Indicateur clair** : un score de fiabilité par ligne, conçu pour être
   lisible par tous (pas seulement par les techniciens).
 - **Données ouvertes** : collectées à partir des flux publics GTFS-RT de TBM,
@@ -62,12 +66,14 @@ quand.
   maintenance) : [`docs/DOCUMENTATION_TECHNIQUE.md`](docs/DOCUMENTATION_TECHNIQUE.md)
 - 🔧 **Prise en main pour développeurs** : une fois sur la machine, `docs/DOCUMENTATION_TECHNIQUE.md`
   (§ 5 Installation et § 13 Référence des scripts) donne toutes les commandes.
-- 🧪 **Tests** : suite `pytest` complète 475 tests, isolée de toute donnée réelle.
+- 🧪 **Tests** : suite `pytest` complète 492 tests, isolée de toute donnée réelle.
 
 ## Le projet
 
 - **Contexte** : renseigner l'évolution de la fiabilité du réseau de
   Bordeaux Métropole, mois après mois, avec une mesure stable et comparable.
 - **Auteur** : Elias Khallouk.
-- **Licence** : projet personnel, disponible publiquement sur
-  <https://github.com/EliasKhallouk/Urban-Vision>.
+- **Licences** : code sous [GNU AGPL-3.0](LICENSE), disponible sur
+  <https://github.com/EliasKhallouk/Urban-Vision> ; rapports et données
+  dérivées sous Licence Ouverte 2.0, comme les données TBM dont ils sont
+  issus (citer « Urban Vision, d'après les données TBM »).

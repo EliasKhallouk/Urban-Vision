@@ -134,6 +134,9 @@ def _accessibility_description(chart_config: dict) -> str:
     return f"Graphique en {base} : {', '.join(str(n) for n in names)}"
 
 
+HIGHCHARTS_CDN = "https://cdn.jsdelivr.net/npm/highcharts@13.1.1"
+
+
 def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
     config = dict(chart_config)
     acc = dict(config.get("accessibility") or {})
@@ -142,10 +145,10 @@ def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
     config["accessibility"] = acc
     chart_id = "hc_" + str(abs(hash(json.dumps(config, sort_keys=True, default=str, ensure_ascii=False))))[:10]
     constructor = "stockChart" if use_stock else "chart"
-    scripts = '<script src="https://code.highcharts.com/stock/highstock.js"></script>'
+    scripts = f'<script src="{HIGHCHARTS_CDN}/highstock.js"></script>'
     if not use_stock:
-        scripts += '\n<script src="https://code.highcharts.com/highcharts-more.js"></script>'
-        scripts += '\n<script src="https://code.highcharts.com/modules/accessibility.js"></script>'
+        scripts += f'\n<script src="{HIGHCHARTS_CDN}/highcharts-more.js"></script>'
+        scripts += f'\n<script src="{HIGHCHARTS_CDN}/modules/accessibility.js"></script>'
     return f"""<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8">
 {scripts}
@@ -291,7 +294,7 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
     metrics = [("pct_a_l_heure", "Ponctualité ≤ 5 min", True),
                ("pct_retard_5min", "Retards > 5 min", False),
                ("pct_avance_1min", "En avance > 1 min", False),
-               ("pct_arrets_sautes", "Arrêts sautés", False)]
+               ("pct_arrets_sautes", "Arrêts non desservis", False)]
     kinds = {"pct_a_l_heure": "score", "pct_retard_5min": "pourcent",
              "pct_avance_1min": "pourcent", "pct_arrets_sautes": "pourcent"}
     series = []
@@ -392,7 +395,7 @@ def engagement_trend_chart(trend: pd.DataFrame, metric: str) -> dict:
     titles = {
         "pct_a_l_heure": "Ponctualité ≤ 5 min (%)",
         "pct_retard_5min": "Retards > 5 min (%)",
-        "pct_arrets_sautes": "Arrêts sautés (%)",
+        "pct_arrets_sautes": "Arrêts non desservis (%)",
         "retard_moyen_s": "Retard moyen (s)",
     }
     y_axis = {"title": {"text": titles[metric]}, "min": 0}
@@ -605,7 +608,7 @@ def slot_profile_chart(sp: pd.DataFrame, slot_label: str, highlight_stop_id: str
 
 def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = None,
                        commune_label: str | None = None, highlight_stop_id: str | None = None) -> dict:
-    """Taux d'arrêts sautés arrêt par arrêt le long d'une direction (palier « pourcent »)."""
+    """Taux d'arrêts non desservis arrêt par arrêt le long d'une direction (palier « pourcent »)."""
     p = profile.sort_values("order").reset_index(drop=True)
     rates = (p["skipped"] / p["eligible"].where(p["eligible"] > 0) * 100).fillna(0.0)
     data = [{"y": round(float(r), 1), "color": palette_hex(round(float(r), 1), "pourcent"),
@@ -615,15 +618,15 @@ def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = Non
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
         "xAxis": _profile_axis(p, highlight_stop_id, commune_stop_ids, commune_label),
-        "yAxis": {"title": {"text": "Arrêts sautés (%)"}, "min": 0},
-        "series": [{"name": "Arrêts sautés", "data": data,
+        "yAxis": {"title": {"text": "Arrêts non desservis (%)"}, "min": 0},
+        "series": [{"name": "Arrêts non desservis", "data": data,
                     "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b> ({point.skipped} passages non desservis)"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
     }
 
 
 def stop_lines_chart(lines: pd.DataFrame) -> dict:
-    """Passages > 5 min et arrêts sautés par ligne à un arrêt (nombres absolus)."""
+    """Passages > 5 min et arrêts non desservis par ligne à un arrêt (nombres absolus)."""
     df = lines.sort_values("cnt_gt300", ascending=False)
     categories = [f"{mode_glyph(rt)} {l}" for rt, l in zip(df["route_type"], df["ligne"])]
     return {
@@ -633,7 +636,7 @@ def stop_lines_chart(lines: pd.DataFrame) -> dict:
         "yAxis": {"title": {"text": "Passages"}, "min": 0, "allowDecimals": False},
         "series": [
             {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": BLACK_FOREST},
-            {"name": "Arrêts sautés", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35},
+            {"name": "Arrêts non desservis", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35},
         ],
         "plotOptions": {"bar": {"stacking": "normal", "borderRadius": 3, "groupPadding": 0.1}},
         "legend": {"enabled": True},

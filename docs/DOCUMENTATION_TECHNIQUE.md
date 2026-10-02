@@ -136,7 +136,7 @@ Flux de traitement en résumé :
    aujourd'hui (`rafraichir_agregats.py`, hors de la boucle de collecte) ;
    le dashboard les reconstruit intégralement s'ils sont vides/incomplets.
    `refresh_segments()` calcule en plus `agg_daily_segment` (retard pris
-   tronçon par tronçon, retard déjà présent en arrivant, arrêts sautés par
+   tronçon par tronçon, retard déjà présent en arrivant, arrêts non desservis par
    direction), au même rythme ; son rattrapage complet est fait par le
    recalcul planifié quand la table est vide
    (`rafraichir_agregats.py::ensure_segments`), jamais par le dashboard.
@@ -188,7 +188,7 @@ Urban-Vision/
 │   ├── urban-vision-logo-color.png
 │   └── urban-vision-logo-white.png # utilisé par le dashboard et les rapports
 ├── dashboard/
-│   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches)
+│   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches, 3398 lignes)
 │   ├── carte.py                    # carte des arrêts : composant st.components.v2, données, icônes
 │   ├── carte_arrets.js             # JavaScript du composant (deck.gl + MapLibre)
 │   ├── diagnostic.py               # logique pure des fiches arrêt / ligne (verdicts, phrases)
@@ -212,6 +212,7 @@ Urban-Vision/
 ├── docs/
 │   └── DOCUMENTATION_TECHNIQUE.md  # documentation technique (ce document)
 ├── pytest.ini                      # testpaths=tests, addopts=-q
+├── LICENSE                         # licence du code : GNU AGPL-3.0
 ├── README.md                       # README racine (synthèse + pointeur docs/)
 ├── reports/
 │   ├── generate_all_reports.py     # réseau + toutes les communes
@@ -238,7 +239,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 26 fichiers, 475 tests pytest
+└── tests/                          # 26 fichiers, 492 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -442,10 +443,12 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
 | `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:62` |
 | `KEEP_DAILY` / `KEEP_MONTHLY` | 7 sauvegardes quotidiennes, 6 mensuelles | `sauvegarde.py:20-21` |
-| `FRESHNESS_BUFFER_SECONDS` | 1200 s (20 min) | `analyze.py:17`, `generate_monthly_report.py:57`, `app.py:71` |
-| `CACHE_TTL_SECONDS` (dashboard) | 60 s | `app.py:72` |
-| `MIN_OBSERVATIONS` (dashboard) | 50 | `app.py:73` |
-| `COLLECTION_HOURLY_DAYS` (dashboard) | 7 jours (répartition horaire du « Suivi de la collecte ») | `app.py:74` |
+| `FRESHNESS_BUFFER_SECONDS` | 1200 s (20 min) | `analyze.py:17`, `generate_monthly_report.py:57`, `app.py:72` |
+| `CACHE_TTL_SECONDS` (dashboard) | 60 s | `app.py:73` |
+| `MIN_OBSERVATIONS` (dashboard) | 50 (aussi : arrêts listés dans « Arrêts les plus touchés » d'une fiche ligne) | `app.py:74` |
+| `COLLECTION_HOURLY_DAYS` (dashboard) | 7 jours (répartition horaire du « Suivi de la collecte ») | `app.py:75` |
+| `HIGHCHARTS_CDN` | Highcharts 13.1.1 servi par jsDelivr | `highcharts.py:137` |
+| Veille des visiteurs (`RETENTION_DAYS`, `GEO_MAX_PER_RUN`) | 30 jours de conservation, 50 géolocalisations au plus par passage | `veille_visiteurs.py:41-43` |
 | `timeout` HTTP (collecte) | 15 s | `collect.py:44`, `collect_alerts.py:59` |
 | `timeout` HTTP (gtfs statique) | 30 s | `gtfs_static.py:25` |
 | Seuil « ponctuel » (retard ≤ 5 min) | 300 s | commun (SQL, rapport, palette) |
@@ -460,6 +463,11 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 
 Référence unique des couleurs **et** des seuils KPI, partagée par le dashboard,
 les graphiques Highcharts et les rapports (via un ajout au `sys.path`).
+
+Mots affichés au lecteur (`TIER_LABELS`, `tier_label(value, kind)`) : palier
+positif = « fiable », moyen = « à surveiller », négatif = « problématique ».
+Le dashboard n'affiche jamais le nom interne d'un palier ni celui de sa
+couleur (légendes `render_tier_legend`, cartes « État », tableaux).
 
 Couleurs
 
@@ -581,7 +589,7 @@ d'observations) +
 collecteurs (`PRAGMA journal_mode=WAL;`) et par les tests ; le dashboard
 n'active pas WAL lui-même mais émet `PRAGMA busy_timeout` (120 s) et
 `cache_size=-65536`, `mmap_size=268435456`, `temp_store=MEMORY`
-(`app.py:287-292`).
+(`app.py:280-285`).
 
 > En WAL, l'écrivain tient des verrous courts ; le collecteur (écrivain
 > régulier, y compris le recalcul incrémental des agrégats : 17 à 19 s en
@@ -786,7 +794,7 @@ Détails des requêtes SQL d'agrégation (`db.py`)
 - Requêtes incrémentales (`incremental_statements(days)`) : elles ne lisent
   `observations` que par deux index bornés, `idx_observations_departure_time`
   pour les délais (plage `departure_time` des jours traités) et
-  `idx_observations_last_seen_at` pour les arrêts sautés (jours traités ±
+  `idx_observations_last_seen_at` pour les arrêts non desservis (jours traités ±
   `SKP_LAST_SEEN_MARGIN_SECONDS`, 1 jour ; dans la base, `last_seen_at` est
   compris entre +3,7 h et +28,4 h après le début du jour de service). Le `+`
   de `+o.schedule_relationship` empêche SQLite d'utiliser un index commençant
@@ -794,7 +802,7 @@ Détails des requêtes SQL d'agrégation (`db.py`)
   Les CTE `metrics`, `skpagg` et `hist` sont fusionnées par `UNION ALL` +
   `GROUP BY`, sans jointure.
 - Jour-service : dérivé de `departure_time` (local) pour les délais, et de
-  `start_date` pour les arrêts sautés ; deux clauses bornées
+  `start_date` pour les arrêts non desservis ; deux clauses bornées
   (`::SCHED_BOUNDS::` / `::SKP_BOUNDS::`) paramétrées par le mode d'exécution.
 - Méthode 2.0 (`refresh_v2(days)`, mêmes modes complet et incrémental) :
   `_TRIPS_SQL` compte les courses de `trip_status` par jour de course
@@ -876,7 +884,7 @@ le dashboard territorial et les rapports (colonne « direction »).
   choisissaient `idx_observations_sched_delay` (égalité sur
   `schedule_relationship`) et parcouraient donc tous les passages `SCHEDULED`
   de l'historique au lieu des deux jours traités ; le filtre `start_date` des
-  arrêts sautés n'était porté par aucun index, et la jointure non indexée de
+  arrêts non desservis n'était porté par aucun index, et la jointure non indexée de
   `_DAILY_STOP_SQL` sur ses CTE était quadratique. La durée du
   rafraîchissement suivait la taille de la base (≈ 150 s mi-septembre, ≈ 200 s
   fin septembre en production) ; au-delà de 180 s, chaque rafraîchissement
@@ -892,7 +900,7 @@ le dashboard territorial et les rapports (colonne « direction »).
   observations bornées par `departure_time`, élargie de
   `SEGMENT_LOOKBACK_SECONDS` = 3 h pour les voyages à cheval sur minuit) prend
   ≈ 1,6 s sur le poste de développement pour deux jours (5,2 s avant que sa
-  partie « arrêts sautés » soit bornée par `last_seen_at`, comme les agrégats ;
+  partie « arrêts non desservis » soit bornée par `last_seen_at`, comme les agrégats ;
   `incremental_segment_statement`) ; le recalcul complet (~7 semaines) ~33 s.
   La requête assemble ses parties par `UNION ALL` + `GROUP BY` et lit
   `observations` par `idx_observations_departure_time` (`+o.schedule_relationship`). Durée
@@ -1035,11 +1043,11 @@ lecture des `agg_*` puis de regroupements en mémoire :
 ### 10.3 Méthode de la fiabilité (formule centrale)
 
 ```
-Score de fiabilité = max(0 ; Ponctualité − 2 × Taux d'arrêts sautés)
+Score de fiabilité = max(0 ; Ponctualité − 2 × Taux d'arrêts non desservis)
 ```
 
 - **Ponctualité** : % de passages avec retard ≤ 5 min (300 s).
-- **Taux d'arrêts sautés** : `SKIPPED / (SCHEDULED + SKIPPED)` (en %).
+- **Taux d'arrêts non desservis** : `SKIPPED / (SCHEDULED + SKIPPED)` (en %).
 - Un score faible = ligne prioritaire à corriger. Seuils de lecture : ≥ 80
   (positif), 50–80 (moyen), < 50 (négatif).
 
@@ -1133,16 +1141,47 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 ### 11.3 Structure des vues
 
-Navigation par `st.radio` dans la sidebar (pas d'onglets natifs), 6 pages
-organisées par question (`NAV_ITEMS`, une fonction `render_page_*` par page,
-aiguillage par le dictionnaire `PAGES` ; contexte commun `PageContext`). Chaque
+Navigation par `st.radio` dans la sidebar (pas d'onglets natifs), 8 pages :
+6 pages d'analyse organisées par question, puis « Rapports mensuels » et
+« À propos » (`NAV_ITEMS`, une fonction `render_page_*` par page, aiguillage
+par le dictionnaire `PAGES` ; contexte commun `PageContext`). Chaque
 page suit le même ordre de lecture : une phrase de verdict (bloc `insight`), le
 graphique principal, puis le détail en blocs repliables. Seule la page active
 est calculée ; les pages qui regroupent plusieurs vues passent par
 `st.segmented_control`, qui ne calcule que la vue affichée.
 
+**Vue rapide et vue détaillée.** Un interrupteur « Vue détaillée » sous la
+navigation (`detailed_view`, transmis aux pages par `PageContext.detailed`)
+choisit le niveau de lecture ; la vue rapide est celle par défaut, pour un
+lecteur qui n'est pas analyste :
+
+- **bandeau** (`header_kpis`) : en vue rapide, quatre cartes en mots, « État »
+  (« Fiable », « À surveiller » ou « Problématique », score sur 100 en
+  dessous : `status_kpi`), « À l'heure », « Retard moyen » et « Arrêts non
+  desservis » ; en vue détaillée, les cinq mesures d'origine et leurs
+  définitions techniques (SCHEDULED, SKIPPED). Chaque carte porte une aide
+  au survol (`HELP_TEXTS`, pastille « ? » de `kpi_card`). Les pages
+  d'information (`INFO_PAGES` : « Rapports mensuels », « À propos ») n'ont ni
+  titre ni bandeau ;
+- **vue rapide** : verdict en phrase, graphique principal et, dans les
+  fiches, état, évolution, « En bref » et « Pistes ». Restent réservés à la
+  vue détaillée : les blocs repliables (comparaison des communes, tableaux
+  complets), la carte de risque des lignes, les sous-vues des fiches (où,
+  quand, quel type, contexte), la règle de choix des priorités, la phrase
+  « Méthode 2.0 » de la fiche ligne et les colonnes techniques du tableau des
+  lignes (`lines_table` : en vue rapide, ligne, état et score) ;
+- **guide de lecture** (`show_guide`, boîte `st.dialog`) : trois étapes
+  (`GUIDE_STEPS` : choisir territoire et période, lire l'état en un mot,
+  cliquer pour comprendre), affichées au premier chargement de la session
+  sauf sur un lien direct vers une fiche (`should_show_guide`), et
+  rouvrables par le bouton « Guide de lecture » de la sidebar ;
+- **vocabulaire** : « arrêt non desservi » remplace « arrêt sauté » partout
+  (dashboard et rapports) ; le lexique (`LEXIQUE`) est la première vue de
+  « Données & méthode ».
+
 1. **Mon territoire** — verdict (score du réseau, ou de la commune comparé au
-   réseau), bloc **À surveiller** (`diagnostic.watchlist` : la ligne dont la
+   réseau, tous deux calculés par `network_score` sur les totaux, comme le
+   bandeau), bloc **Priorités du moment** (`diagnostic.watchlist` : la ligne dont la
    baisse de score par rapport à la période de comparaison pèse le plus,
    baisse × passages, pour une baisse d'au moins
    5 points ; l'arrêt et la ligne qui cumulent le plus de passages > 5 min
@@ -1161,7 +1200,7 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
      voisins dans la direction réelle de sa position tant qu'ils sont à moins
      de 30 px les uns des autres (`MIN_SEP_PX`), puis à sa place exacte ;
    - couleur = palier du score de fiabilité du quai, toutes lignes confondues
-     (ponctualité ≤ 5 min − 2 × arrêts sautés, borné 0–100) ; forme = mode de
+     (ponctualité ≤ 5 min − 2 × arrêts non desservis, borné 0–100) ; forme = mode de
      la ligne principale ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m
      selon les passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
      (`STOP_SIZE_PIXELS`) ; icônes tirées d'un atlas PNG unique
@@ -1211,10 +1250,10 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
      (repliable). Créneaux : Matin 06–10, Journée 10–16, Pointe du soir 16–20,
      Soirée & nuit 20–06 (lundi–vendredi) et Week-end. Loaders
      `load_period_stats`, `load_period_mode`, `load_period_lines` sur
-     `agg_hourly` ; les arrêts sautés n'y sont pas décomptés.
+     `agg_hourly` ; les arrêts non desservis n'y sont pas décomptés.
    - *Dans le temps* : la période est comparée à sa période de comparaison
      (le mois précédent pour un mois, voir le sélecteur de période ci-dessous).
-     Verdict (ponctualité et arrêts sautés), ponctualité jour par jour
+     Verdict (ponctualité et arrêts non desservis), ponctualité jour par jour
      (`engagement_trend_chart`, moyenne glissante 7 jours), autre indicateur au
      choix (repliable), lignes qui se dégradent ou s'améliorent
      (`engagement_progression_chart`, détail repliable). Loaders
@@ -1230,8 +1269,9 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-6. **Données & méthode** — trois vues : *Méthode* (définitions, seuils,
-   stabilisation 20 min, lecture des fiches, arrêts sautés, bloc « Méthode 2.0
+6. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, mots du
+   tableau de bord et des rapports en langage courant), *Méthode* (définitions, seuils,
+   stabilisation 20 min, lecture des fiches, arrêts non desservis, bloc « Méthode 2.0
    (en test) » : score 2.0 ± marge, ponctualité stricte ± marge, service
    assuré, départs en avance, jours exclus ou dégradés et lignes écartées de
    la période et du territoire, loader `load_method_v2`), *Données
@@ -1240,6 +1280,18 @@ est calculée ; les pages qui regroupent plusieurs vues passent par
    §11.6) et *Suivi de la collecte* (observations brutes, passages analysés,
    courses suivies, observations par minute sur 7 jours glissants en
    Highcharts Stock, répartition horaire des 7 derniers jours).
+
+7. **Rapports mensuels** — `render_page_reports` : choix du mois
+   (`list_reports(REPORTS_DIR)` parcourt `reports/output/AAAA-MM/` et ne
+   retient que les mois qui ont au moins un PDF, du plus récent au plus
+   ancien) ; bouton de téléchargement du rapport réseau et, pour une commune
+   choisie (présélectionnée sur le territoire de la barre du haut ; dossiers
+   nommés par `generate_all_reports.slug`, noms affichés depuis
+   `stop_municipalities`), de son rapport. Mention de la licence et de la
+   citation attendue.
+8. **À propos** — `render_page_about` : objet du projet, indépendance,
+   contact, sources et licences, mentions légales et confidentialité
+   (section 16).
 
 Sélecteur de période (`period_picker`, liste « Période » de la barre du
 haut) : les **mois complets** couverts par les données, du plus récent au
@@ -1262,7 +1314,11 @@ Top bar persistante : identité, filtre « Territoire » (communes issues de
 ### 11.4 Graphiques Highcharts (`dashboard/highcharts.py`)
 
 Injection de HTML via `st.components.v1.html` : charge
-`highstock.js` (et `highcharts-more.js` pour les bulles) depuis le CDN,
+`highstock.js` (et `highcharts-more.js` pour les bulles) depuis jsDelivr,
+version figée 13.1.1 (`HIGHCHARTS_CDN`). `code.highcharts.com` n'est plus
+utilisé : son usage en production n'est pas prévu par l'éditeur, et il
+refuse les navigateurs sans interface (« Violation of license/fair-usage
+policy »), ce qui empêchait aussi les contrôles automatiques de rendu ;
 applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
 70 %). Fonctions : `ranking_chart`, `scatter_chart`, `network_daily_chart`,
 `network_hourly_chart`, `commune_ranking_chart`, `mode_comparison_chart`,
@@ -1303,8 +1359,8 @@ consulté marqué d'un trait vertical, arrêts de la commune sélectionnée sur
 fond Cornsilk bordé via `commune_bands`), `slot_profile_chart` (retard moyen à
 chaque arrêt sur un créneau jour × heure, comparé au reste du temps en
 tirets), `skip_profile_chart` (taux
-d'arrêts sautés arrêt par arrêt, palier `pourcent`), `stop_lines_chart`
-(passages > 5 min et arrêts sautés par ligne, en nombre), `risk_by_label_chart`
+d'arrêts non desservis arrêt par arrêt, palier `pourcent`), `stop_lines_chart`
+(passages > 5 min et arrêts non desservis par ligne, en nombre), `risk_by_label_chart`
 (retards > 5 min par créneau ou par jour de la semaine), `daily_status_chart`
 (jour par jour, seuil du jour dégradé à 15 % tracé) et `cancellations_chart`
 (courses supprimées par jour).
@@ -1315,7 +1371,10 @@ médian de la classe (ex. `+1 à +2` → 90 s → palier « retard ») ; seules 
 
 ### 11.5 Dépendances externes du dashboard
 
-- CDN Highcharts (JS) — requiert un accès Internet coté navigateur.
+- Highcharts 13.1.1 depuis jsDelivr (JS) — requiert un accès Internet côté
+  navigateur. Licence Highcharts : gratuite pour un usage non commercial
+  (projet personnel, site d'une association) ; une licence est nécessaire
+  avant tout usage commercial (section 23).
 - Carte des arrêts : deck.gl 9.1.14 et MapLibre GL 4.7.1 chargés depuis
   jsDelivr par le navigateur, style vectoriel « Positron » de Carto
   (`basemaps.cartocdn.com/gl/positron-gl-style/style.json`). Les tuiles raster
@@ -1332,16 +1391,18 @@ médian de la classe (ex. `+1 à +2` → 90 s → palier « retard ») ; seules 
 Lecture seule des tables d'agrégation (jamais la table brute) ; intervalles
 demi-ouverts `[since, end)` sur `date_service`. Ecrit dans `data/open_data/`
 des **CSV UTF-8 (BOM, séparateur virgule, en-tête stable)** plus un
-`METADATA.json` (date de génération, bornes, nombre de lignes).
+`METADATA.json` (date de génération, bornes, nombre de lignes, licence
+« Licence Ouverte / Open Licence 2.0 (Etalab) » et source « Urban Vision,
+d'après les données TBM »).
 
 Quatre datasets :
 
 | Dataset | Fichier | Contenu |
 |---|---|---|
-| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), ponctualité ≤ 5 min, retards > 5 min, en avance, arrêts sautés, histogramme JSON |
+| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), ponctualité ≤ 5 min, retards > 5 min, en avance, arrêts non desservis, histogramme JSON |
 | `arrets_journalier` | `arrets-journalier.csv` | Par (date, ligne, arrêt) : + nom, commune, direction, coordonnées |
 | `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retard moyen, ponctualité, retards > 5 min |
-| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts sautés, nombre de lignes |
+| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts non desservis, nombre de lignes |
 
 Commandes :
 
@@ -1389,7 +1450,7 @@ boutons vers les **autres quais du même arrêt** (autre sens ou autres lignes
 regroupés sur la carte, avec leur score) et « ↑ Revenir à la carte », 5
 indicateurs (score comparé au réseau, **évolution** : score de la période
 moins celui de la période de comparaison, avec le score de comparaison ;
-passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
+passages > 5 min, arrêts non desservis, taille de l'échantillon), bloc
 « En bref », bloc « Pistes », bouton principal « Ouvrir la fiche de la ligne
 … » (ligne responsable ; la fiche ligne garde un bouton « ← Revenir à l'arrêt
 … »), puis 4 sous-vues :
@@ -1404,31 +1465,31 @@ passages > 5 min, arrêts sautés, taille de l'échantillon), bloc
 **Fiche ligne** — en-tête (glyphe, terminus, communes desservies, passages par
 jour), 5 indicateurs (score comparé au réseau et à la médiane du mode, évolution
 par rapport à la période de comparaison, points perdus par les retards, points
-perdus par les arrêts sautés, courses supprimées), « En bref », « Pistes », puis
+perdus par les arrêts non desservis, courses supprimées), « En bref », « Pistes », puis
 4 sous-vues : **Retards : où ?**
 (profil de **tous les arrêts de la ligne sur le réseau**, par direction ; ouverte depuis une fiche arrêt, la fiche présélectionne la direction où se trouve l'arrêt (`stop_direction_in`, dans les trois sous-vues à choix de direction) et le marque d'un trait vertical sur les profils ; 3
 tronçons qui prennent le plus de retard avec leur commune), **Service non
-rendu** (courses supprimées par jour, arrêts sautés le long de la ligne),
+rendu** (courses supprimées par jour, arrêts non desservis le long de la ligne),
 **Quand ?** (grille jour × heure, moment qui ressort, puis profil du créneau
 le long de la ligne et tronçon où le retard s'aggrave à ce moment-là :
 `slot_hotspot`), **Contexte**. Quand une commune est sélectionnée, ses arrêts
 sont sur fond Cornsilk dans les profils et « En bref » donne la part du retard
 de la ligne prise sur la commune et son tronçon le plus pénalisant
 (`commune_share`). En bas, les 10 arrêts les plus touchés (passages > 5 min +
-arrêts sautés) ; une sélection ouvre la fiche arrêt.
+arrêts non desservis) ; une sélection ouvre la fiche arrêt.
 
 Règles (`diagnostic.py`, constantes en tête de module) :
 
 | Règle | Définition |
 |---|---|
-| Ligne responsable d'un arrêt | la plus grande somme passages > 5 min + arrêts sautés, **en nombre** |
+| Ligne responsable d'un arrêt | la plus grande somme passages > 5 min + arrêts non desservis, **en nombre** |
 | Retard local / importé (`locate_cause`) | sur la ligne responsable : part du retard pris sur le tronçon dans (retard importé + retard pris) ; ≥ 50 % → local, < 25 % → importé, sinon mixte ; aucun verdict si le retard moyen à l'arrêt est < 60 s |
 | Tronçon amont dominant | le tronçon amont qui prend le plus de retard n'est cité comme origine que s'il pèse au moins 25 % du retard importé (`is_dominant_hotspot`) ; sinon « accumulation progressive » |
 | Jour dégradé, récurrence | part des passages > 5 min ≥ 15 % (palier négatif `pourcent`), jours d'au moins 5 passages ; ponctuel < 25 % des jours, fréquent < 50 %, chronique au-delà ; aucun verdict sous 5 jours observés |
 | Concentration | créneau (ou jour) dont la part de passages > 5 min atteint 1,5 fois celle du reste et au moins 5 % |
-| Répartition des points perdus | score = ponctualité − 2 × arrêts sautés : points perdus par les retards = 100 − ponctualité, par le service non rendu = 2 × taux d'arrêts sautés |
+| Répartition des points perdus | score = ponctualité − 2 × arrêts non desservis : points perdus par les retards = 100 − ponctualité, par le service non rendu = 2 × taux d'arrêts non desservis |
 | Origine du retard d'une ligne | par direction : « départ » si le retard au premier arrêt atteint 50 % du maximum atteint, « localisé » si les 3 tronçons qui prennent le plus de retard en concentrent ≥ 50 %, sinon « diffus » ; aucun verdict si le maximum reste < 60 s |
-| Arrêts sautés | « extrémités » (≥ 60 % des sauts sur les 15 % premiers ou derniers arrêts), « bloc » (≥ 60 % sur une suite d'arrêts consécutifs à taux double de la moyenne), sinon « dispersé » ; rien sous 0,5 % |
+| Arrêts non desservis | « extrémités » (≥ 60 % des sauts sur les 15 % premiers ou derniers arrêts), « bloc » (≥ 60 % sur une suite d'arrêts consécutifs à taux double de la moyenne), sinon « dispersé » ; rien sous 0,5 % |
 | Déséquilibre de direction | une direction porte ≥ 65 % des passages > 5 min de la ligne |
 | Moment de la semaine (`find_peak`) | case jour × heure d'au moins 10 passages et 3 par occurrence en moyenne, part > 5 min dans le palier négatif et au moins 1,5 fois celle du reste de la semaine ; parmi ces cases, celle qui cumule le plus de passages > 5 min ; « récurrent » si l'heure a été dégradée (≥ 3 passages, ≥ 15 % > 5 min) au moins une fois sur deux sur au moins 3 occurrences, « ponctuel » sinon, « à confirmer » sous 3 occurrences ; « période courte » si aucune case n'a 3 occurrences. Un pic récurrent remplace, dans « En bref », la phrase de concentration par créneau |
 | Répercussion d'un créneau (`propagation`) | retard moyen de chaque arrêt de la direction sur le créneau (au moins 2 passages), comparé au reste du temps ; autour de l'arrêt, on suit les arrêts voisins tant que leur surcroît reste ≥ 50 % de celui de l'arrêt et ≥ 60 s ; aucun verdict sous 60 s de surcroît à l'arrêt |
@@ -1458,6 +1519,12 @@ Trois scripts dans `reports/` :
 -halt-on-error`) puis nettoie `.aux`/`.log`. Sans `--compile`, seul le `.tex`
 est écrit. Nom de sortie :
 `urban-vision-<AAAA-MM>-<slug du destinataire>.{tex,pdf}`.
+
+Publication : les PDF de `reports/output/` sont téléchargeables dans le
+dashboard (page « Rapports mensuels », section 11.3). La ligne « Source » de
+chaque rapport mentionne la Licence Ouverte 2.0 des données TBM et la
+citation attendue en cas de réutilisation (« Urban Vision, d'après les
+données TBM »).
 
 ### 12.2 Commande d'exemple
 
@@ -1511,7 +1578,7 @@ intermédiaires sont conservés pour le diagnostic.
   Flex'Night) ne sont **pas traitées** dans ces requêtes ni dans les classements
   ni dans le graphique « Arrêts les plus problématiques ».
 - **KPIs** : `kpis()` calcule passages, ponctualité, retard moyen/médian, > 5 min,
-  arrêts sautés + taux, **fiabilité**. `comparison()` calcule la variation
+  arrêts non desservis + taux, **fiabilité**. `comparison()` calcule la variation
   vs mois précédent. Les rapports communaux comparent **aussi** la ligne au
   réseau (valeurs en olive « Réseau : … »).
 - **Synthèse exécutive** : texte rédigé selon des seuils de ponctualité
@@ -1713,6 +1780,24 @@ Chaîne en production :
   VM** (pas de cron, timer, unité ou script DuckDNS) — cohérent avec une IP
   publique statique ; le token DuckDNS n'est pas présent sur la machine.
 
+**Passer à un nom de domaine propre** (par exemple `urban-vision.fr`) :
+
+1. chez le registraire, créer un enregistrement A (et AAAA si besoin) du
+   domaine et de `www` vers l'IP publique de la VM, puis attendre sa
+   propagation (`dig +short urban-vision.fr`) ;
+2. dans `deploy/nginx/urban-vision`, ajouter le nouveau nom au `server_name`
+   des deux blocs, déployer (`deploy/deployer.sh`, qui teste `nginx -t`),
+   puis émettre le certificat :
+   `sudo certbot --nginx -d urban-vision.fr -d www.urban-vision.fr`
+   (`certbot.timer` le renouvellera) ;
+3. faire de l'ancien nom une redirection : un bloc `server` dédié à
+   `urban-vision.duckdns.org` qui répond
+   `return 301 https://urban-vision.fr$request_uri;` (en gardant son
+   certificat, renouvelé par certbot), pour que les liens déjà diffusés
+   fonctionnent ;
+4. mettre à jour l'adresse dans `deploy/deployer.sh` (contrôle HTTPS), la
+   page « À propos » (`render_page_about`), le README et ce document.
+
 ---
 
 ## 16. Réseau et sécurité
@@ -1742,6 +1827,15 @@ Chaîne en production :
 - Exposition : le dashboard étant public, les données qu'il affiche (retards,
   alertes) sont considérées publiques ; il n'y a ni authentification ni clé
   d'API applicative.
+- **Données personnelles des visiteurs** (décrites sur la page « À propos ») :
+  journaux nginx avec l'adresse IP complète, conservés 14 jours
+  (`/etc/logrotate.d/nginx` : `daily`, `rotate 14`) ; rapport GoAccess avec
+  adresses anonymisées (`--anonymize-ip`, §17.1) ; veille des visiteurs sur
+  adresses tronquées, conservées 30 jours, géolocalisées en HTTPS (§17.2) ;
+  télémétrie Streamlit désactivée (`gatherUsageStats = false`) ; cookie
+  technique `_streamlit_xsrf` (protection XSRF) ; le navigateur charge des
+  ressources sur `cdn.jsdelivr.net` et `basemaps.cartocdn.com`. Serveur dans la
+  région OCI de Paris (`eu-paris-1`).
 
 ---
 
@@ -1776,11 +1870,13 @@ fausse alerte. Volumes en production au 01/10/2026 : `collect.log` ≈ 8,5 Mo et
 ### 17.1 Dashboards GoAccess des connexions nginx
 
 Le trafic HTTP/HTTPS est analysé avec **GoAccess** (`--ignore-crawlers` pour
-n'exclure que les bots — les visites « humaines » uniquement). Le HTML généré
+n'exclure que les bots — les visites « humaines » uniquement ;
+`--anonymize-ip` pour ne faire figurer dans le rapport que des adresses
+tronquées, depuis le 02/10/2026). Le HTML généré
 est placé dans `reports/analytics/` (gitignoré) :
 
 ```bash
-sudo goaccess --log-format=COMBINED --ignore-crawlers /var/log/nginx/access.log \
+sudo goaccess --log-format=COMBINED --ignore-crawlers --anonymize-ip /var/log/nginx/access.log \
   -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
 sudo chown -R ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics
 ```
@@ -1788,7 +1884,7 @@ sudo chown -R ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics
 Rafraîchissement automatique toutes les 5 min (cron root) :
 
 ```bash
-sudo crontab -e   # ligne : */5 * * * * goaccess --log-format=COMBINED --ignore-crawlers \
+sudo crontab deploy/cron/root.crontab   # ligne : */5 * * * * goaccess --log-format=COMBINED --ignore-crawlers --anonymize-ip \
 # /var/log/nginx/access.log -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
 ```
 
@@ -1804,8 +1900,15 @@ pour répondre « qui s'est connecté, et à quelle heure », on parse le log br
 ### 17.2 Veille des visiteurs humains — dernières connexions
 
 Le script `src/scripts/veille_visiteurs.py` (stdlib uniquement) détecte les
-**visites humaines** et conserve pour chaque IP la première et la dernière
-connexion. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
+**visites humaines** et conserve pour chaque adresse tronquée la première et
+la dernière connexion.
+
+**Minimisation (depuis le 02/10/2026)** : l'adresse IP est tronquée dès la
+lecture du journal (`anonymize_ip` : dernier octet à zéro en IPv4, préfixe
+/48 en IPv6) ; aucune adresse complète n'est enregistrée, envoyée à un tiers
+ni affichée. À chaque passage, `minimize` tronque aussi les adresses d'un
+état plus ancien (en fusionnant les fiches d'un même réseau : `merge_records`)
+et oublie les visiteurs absents depuis `RETENTION_DAYS` = 30 jours. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
 
 - **Filtre d'entrée** : requêtes `GET/POST/HEAD` avec statut `200/101/206/304`,
   User-Agent « navigateur » (Chrome/Firefox/Safari/Edge/OPR avec numéro de
@@ -1814,9 +1917,14 @@ connexion. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
 - **Traitement incrémental** : l'état est conservé dans
   `reports/analytics/veille_state.json` (gitignoré) ; le script ne ré-examine
   que les lignes postérieures au dernier horodatage traité.
-- **Géolocalisation** : pour toute IP jamais vue, appel ponctuel de l'API gratuite
-  `ip-api.com/batch` (champs pays/ville/ISP/AS + `lat`/`lon`/`zip`) — hors IPv6.
-  Une passe couvre ≤ 500 IP inconnues, ré-essai après 1 h en cas d'échec.
+- **Géolocalisation** : pour toute adresse tronquée jamais vue, appel HTTPS de
+  `ipwho.is` (gratuit, sans clé, usage non commercial ; `GEO_URL`, champs
+  pays, région, ville, coordonnées, code postal, fournisseur et AS, convertis
+  par `parse_geo` au format de l'état) — hors IPv6. Au plus
+  `GEO_MAX_PER_RUN` = 50 appels par passage (≈ 25 nouveaux réseaux par jour
+  en production fin septembre 2026), ré-essai après 1 h en cas d'échec.
+  `ip-api.com`, utilisé jusqu'au 01/10/2026, n'acceptait que le HTTP en
+  version gratuite.
 - **Précision affinée (région NA)** : le script lit la clé `BigDataCloud` via
   `bdc_key()` — d'abord la variable d'environnement `BDC_API_KEY`, sinon le
   fichier `BDC_API_KEY_FILE` (défaut `/etc/urban-vision/bdc.key`). Cette passe
@@ -1837,18 +1945,18 @@ connexion. Il s'applique aux logs nginx complets (`access.log*`, gzip inclus) :
   et `regionName` contenant « AQUITAINE ») — et place le reste (autres régions
   France, hors France ou non géolocalisé) dans des sections dépliables. Chaque
   ligne porte une couleur de fond + barre latérale associables : **violet** =
-  IP de l'utilisateur (`SELF_IPS`, actuellement `90.120.193.41`), vert =
+  réseau de l'utilisateur (`SELF_IPS`, actuellement `90.120.193.0`), vert =
   résidentiel/entreprise, orange = hébergeur/cloud probable, gris = hors
   France ou non géolocalisé. La colonne « Ville » affiche la **localité
   affinée** BigDataCloud quand elle existe, suivie du code postal, avec la
-  commune ip-api en indicatif gris (`≈ Le Bouscat`) si elle diffère. Badge
+  commune ipwho.is en indicatif gris (`≈ Le Bouscat`) si elle diffère. Badge
   « aujourd'hui » sur les visiteurs actifs le jour même.
 - **Carte des connexions** : une section dépliable (ouverte) affiche une carte
   Leaflet avec des tuiles **CARTO basemaps** (données OpenStreetMap,
   attribution incluse) et un point coloré par IP de Nouvelle-Aquitaine
   (infobulle : commune, code postal, localité affinée, IP, ISP, plage de
   connexion et nombre de requêtes). Coordonnées prises dans `geo.bdc`
-  (BigDataCloud) puis `geo` (ip-api) si le champ affiné est absent.
+  (BigDataCloud) puis `geo` (ipwho.is) si le champ affiné est absent.
 
 Déploiement en production (VM `ek-hub`) :
 
@@ -1856,7 +1964,7 @@ Déploiement en production (VM `ek-hub`) :
 sudo install -o ubuntu -g ubuntu -m 755 \
   src/scripts/veille_visiteurs.py \
   /home/ubuntu/Urban-Vision/src/scripts/
-# crontab root (inchangé, aucun secret) :
+# crontab root (deploy/cron/root.crontab, aucun secret) :
 # */5 * * * * /usr/bin/python3 \
 #   /home/ubuntu/Urban-Vision/src/scripts/veille_visiteurs.py \
 #   && chown ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics/veille_state.json \
@@ -2086,7 +2194,7 @@ dont le véhicule est sorti du flux temps réel depuis au moins 20 minutes
 (buffer de stabilisation) : le retard est alors considéré définitif.
 
 **Comment se calcule le score de fiabilité ?**
-`max(0 ; ponctualité − 2 × taux d'arrêts sautés)`, avec ponctualité = % de
+`max(0 ; ponctualité − 2 × taux d'arrêts non desservis)`, avec ponctualité = % de
 passages à ≤ 5 min de retard (voir section 10.3).
 
 **Le dashboard et les rapports utilisent-ils les mêmes chiffres ?**
@@ -2189,6 +2297,13 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
     pas comptés comme non desservis ; la marge ne couvre que la variabilité
     entre jours, pas les erreurs systématiques du flux. Sur une ligne qui n'a
     circulé que 2 ou 3 jours, la marge de Student est large et peu informative.
+15. **Licence Highcharts** : gratuite pour un usage non commercial seulement.
+    Proposer le service contre rémunération (par exemple à une collectivité)
+    suppose une licence Highcharts ou le passage à une bibliothèque libre
+    (Apache ECharts).
+16. **Vue rapide non éprouvée** : la vue rapide, le guide et le lexique
+    (section 11.3) n'ont pas encore été testés auprès de lecteurs non
+    analystes ; seuls ces tests diront où un élu ou un agent bloque encore.
 
 ---
 
@@ -2230,11 +2345,13 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | **ServiceAlerts** | flux GTFS-RT des alertes (travaux, incidents). |
 | **Observation (brute)** | une ligne `trip_update.stop_time_update` enregistrée (peu importe le statut). |
 | **Passage analysé** | observation `SCHEDULED`, retard et heure de départ connus, stabilisée ≥ 20 min. |
-| **Arrêt sauté** | événement `SKIPPED` sur un arrêt prévu. |
+| **Arrêt non desservi** | événement `SKIPPED` sur un arrêt prévu. |
 | **Ponctualité** | % de passages avec retard ≤ 300 s. |
-| **Score de fiabilité** | `max(0 ; ponctualité − 2 × taux d'arrêts sautés)`. |
+| **Score de fiabilité** | `max(0 ; ponctualité − 2 × taux d'arrêts non desservis)`. |
+| **Fiable / à surveiller / problématique** | état affiché selon le score : à partir de 80, de 50 à 80, sous 50 (`palette.tier_label`). |
+| **Vue rapide / vue détaillée** | deux niveaux de lecture du dashboard ; la vue rapide garde les phrases et le graphique principal (section 11.3). |
 | **Score 2.0** | passages assurés et partis entre 1 min d'avance et 5 min de retard, rapportés aux passages attendus, courses supprimées comprises (section 10.4, en test). |
-| **Service assuré** | part des passages attendus effectivement desservis (ni course supprimée, ni arrêt sauté). |
+| **Service assuré** | part des passages attendus effectivement desservis (ni course supprimée, ni arrêt non desservi). |
 | **Attente excédentaire** | temps d'attente moyen ajouté par l'irrégularité des passages d'une ligne fréquente, par rapport à la grille prévue. |
 | **Jour incomplet** | jour dont au moins 3 heures comptent moins de la moitié du volume habituel (`quality_days`) ; exclu de la méthode 2.0. |
 | **WAL** | Write-Ahead Log (mode journal SQLite, base lisible + écrivain concurrent). |
@@ -2266,7 +2383,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 475, isolés (suite `pytest` complète : 475 passed), flux synthétiques
+- Tests : 492, isolés (suite `pytest` complète : 492 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2310,14 +2427,14 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 le 02/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I21 le 02/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
 | I1 | `DB_PATH` de `gtfs_static.py` et `analyze.py` pointait vers `src/data/` (`parents[1]`) | `parents[2]` (aligné sur `collect.py`) + 2 tests de chemin ajoutés (`tests/test_gtfs_static.py`, `tests/test_analyze.py`) |
 | I3 | `src/sql/001_add_departure_time.sql` et `db.py` appliquaient la même `ALTER` | migration versionnée supprimée — `db.py` est l'unique mécanisme (PRAGMA + ALTER à l'import) |
 | I4 | Aide CLI `--compile` : « pdflatex » | texte d'aide = `xelatex/lualatex` (`generate_monthly_report.py`) |
-| I5 | Carte territoriale : la note annonçait « le score de la ligne principale » alors que la couleur valait la ponctualité ≤ 5 min de l'arrêt, sans les arrêts sautés | score de l'arrêt = ponctualité − 2 × arrêts sautés (même formule que les lignes), note et légende textuelle réécrites (§11.3) |
+| I5 | Carte territoriale : la note annonçait « le score de la ligne principale » alors que la couleur valait la ponctualité ≤ 5 min de l'arrêt, sans les arrêts non desservis | score de l'arrêt = ponctualité − 2 × arrêts non desservis (même formule que les lignes), note et légende textuelle réécrites (§11.3) |
 | I6 | Charte : fond de page Cornsilk (`.streamlit/config.toml`, `.stApp`) alors que la charte impose un fond blanc ; modes codés par couleur (tram en Copperwood, couleur du palier négatif) ; seuils KPI codés en dur dans « Analyse d'une ligne » | fond blanc ; modes codés par forme (§6.4) ; KPI par `palette.kpi_tier` |
 | I7 | Infobulles Highcharts : format `{point.z:,}` / `{point.passages:,}` (sans `f`, donc traité comme un format de date) — le nombre de passages ne s'affichait pas | `{…:,.0f}` partout, test de non-régression dans `tests/test_highcharts.py` |
 | I8 | Trous de collecte presque continus depuis le 22/09/2026 alors que le collecteur tournait : le rafraîchissement incrémental des agrégats (`db.py`) lisait tout l'historique (index `idx_observations_sched_delay`, filtre `start_date` sans index, jointure quadratique de `_DAILY_STOP_SQL`) ; sa durée (≈ 200 s) dépassait le seuil de trou (180 s) | Requêtes bornées par `idx_observations_departure_time` et `idx_observations_last_seen_at`, `+o.schedule_relationship`, `UNION ALL` + `GROUP BY` (section 9.3) ; durée du rafraîchissement journalisée par `collect.py` (warning au-delà de 60 s) ; veille email `veille_collecte.py` (section 9.4) ; tests `TestRefreshIncrementalBorne`. Déployé en production le 01/10/2026 à 12 h 09 ; aucun trou depuis |
@@ -2328,6 +2445,12 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I13 | Tables `agg_daily`, `agg_hourly`, `agg_daily_stop`, `agg_hourly_stop` et `agg_daily_segment` définies deux fois (`SCHEMA_DDL` et `AGG_DDL`) | `SCHEMA_DDL` inclut `AGG_DDL`, seule définition des tables agrégées |
 | I14 | Sections 3 et 18.4 : le rattrapage de `agg_daily_segment` était attribué au collecteur (`collect.py::ensure_segments`, redémarrage de `urban-vision-collect`), alors qu'il est fait par le recalcul planifié depuis le 01/10/2026 | Sections 3 et 18.4 corrigées (`rafraichir_agregats.py::ensure_segments`) |
 | I15 | Rattrapage de l'historique de la méthode 2.0 : les transactions des jours s'enchaînaient sans pause. Le 02/10/2026 entre 0 h 12 et 0 h 14, le collecteur a attendu le verrou d'écriture : journal du relevé de 0 h 11 non écrit (« database is locked »), 175 s entre deux relevés réussis pour un seuil de trou de 180 s. `ensure_segments` avait le même défaut | Pause d'une seconde entre deux jours rattrapés dans `ensure_v2_history` et `ensure_segments` (`BACKFILL_PAUSE_SECONDS`, section 10.2) ; tests `TestHistoriqueV2::test_pause_entre_deux_jours_pour_laisser_ecrire_le_collecteur` et `TestRattrapageTroncons::test_table_vide_recalculee_jour_par_jour` |
+| I16 | Page « Lignes » : la ligne « à examiner en premier » et la ligne ouverte par défaut étaient prises dans le classement complet, y compris les lignes sous 50 passages (sur la base de développement, S24 avec 25 passages et 1 jour de données) | Choix dans `visible_ranking`, comme le tableau des lignes |
+| I17 | Fiche ligne, « Arrêts les plus touchés » : des arrêts d'un seul passage y figuraient à 0/100 | Seuil `MIN_OBSERVATIONS` (50 passages), message si aucun arrêt ne l'atteint |
+| I18 | Légendes et textes du dashboard : noms internes des couleurs (« Olive Leaf ≥ 80 », « en Copperwood », « Fond Cornsilk ») et paliers « positif / moyen / négatif » affichés aux lecteurs | Mots courants (`palette.tier_label`, `render_tier_legend`), couleurs décrites en clair (« orange foncé », « crème ») ; test `TestMotsDesPaliers` |
+| I19 | Verdict de « Mon territoire » pour une commune : moyenne pondérée des scores d'arrêts, différente du score du bandeau (calculé sur les totaux) | `network_score` pour le verdict, le bandeau et la comparaison au réseau ; `_territorial_score` supprimé |
+| I20 | Highcharts chargé depuis `code.highcharts.com`, dont l'usage en production n'est pas prévu et qui refuse les navigateurs sans interface | jsDelivr, version figée 13.1.1 (`HIGHCHARTS_CDN`, §11.4) |
+| I21 | Veille des visiteurs : adresses IP complètes conservées sans limite de durée et envoyées sans chiffrement (HTTP) à ip-api.com ; rapport GoAccess avec adresses complètes | Adresses tronquées dès la lecture, conservation 30 jours, géolocalisation HTTPS (ipwho.is), GoAccess `--anonymize-ip` (§17) ; tests `TestMinimisation` |
 
 ### 26.4 Dette documentaire
 
@@ -2372,6 +2495,15 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    déploiement de `agg_daily_segment` (durées journalisées dans `collect.log`
    par `rafraichir_agregats.py`, §10.2) ; si un passage dépasse ~30 s, espacer
    le recalcul des tronçons.
+8. **Tester la vue rapide auprès de 3 à 5 lecteurs non analystes** (agents ou
+   élus, proches non spécialistes) avant tout nouvel écran, sur des tâches
+   précises (« trouver la ligne la plus problématique de ma commune »,
+   « dire pourquoi », « retrouver le rapport du mois dernier »), sans les aider,
+   en notant où ils bloquent.
+9. **Prendre une licence Highcharts ou passer à Apache ECharts** avant tout
+   usage commercial du service (§23, point 15).
+10. **Prendre un nom de domaine propre** quand le projet est présenté aux
+    communes (procédure en section 15).
 
 ---
 

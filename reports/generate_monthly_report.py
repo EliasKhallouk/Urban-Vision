@@ -56,7 +56,7 @@ DEFAULT_DB = PROJECT_ROOT / "data" / "urban_vision.db"
 DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "output"
 FRESHNESS_BUFFER_SECONDS = 20 * 60
 # Seuil de volume pour classer une ligne (aligné sur le dashboard app.py:57) :
-# en dessous, les pourcentages (arrêts sautés notamment) ne sont pas exploitables.
+# en dessous, les pourcentages (arrêts non desservis notamment) ne sont pas exploitables.
 MIN_PASSAGES_FOR_RANKING = 50
 FLEX_ROUTES_SQL = " AND o.route_id NOT IN (SELECT route_id FROM routes WHERE route_long_name LIKE '%Flex%')"
 SIGNIFICANT_GAP_SECONDS = 600
@@ -618,7 +618,7 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 {{\small
 \begin{{itemize}}[leftmargin=1.4em,itemsep=.15em]
 \item \textbf{{Fenêtre « à l'heure »}} : départ entre {ind.EARLY_TOLERANCE_SECONDS}~s d'avance et {ind.LATE_TOLERANCE_SECONDS // 60}~min de retard.
-\item \textbf{{Passages attendus}} : passages desservis ou sautés, plus les passages des courses supprimées. Ces derniers sont estimés au prorata du nombre moyen de passages par course de la ligne le même jour. Une course supprimée puis remplacée par une course ajoutée le même jour sur la même ligne n'est pas comptée comme perdue.
+\item \textbf{{Passages attendus}} : passages prévus (desservis ou non), plus les passages des courses supprimées. Ces derniers sont estimés au prorata du nombre moyen de passages par course de la ligne le même jour. Une course supprimée puis remplacée par une course ajoutée le même jour sur la même ligne n'est pas comptée comme perdue.
 \item \textbf{{Score 2.0}} = passages assurés et à l'heure / passages attendus. \textbf{{Service assuré}} = passages assurés / passages attendus. \textbf{{Ponctualité stricte}} = passages dans la fenêtre / passages observés.
 \item \textbf{{Marge ($\pm$)}} : intervalle de confiance à 95\,\% (loi de Student), les jours étant traités comme unités d'échantillonnage. La marge reflète la variabilité d'un jour à l'autre et non la précision de la mesure d'un passage ; elle s'élargit quand peu de jours sont disponibles.
 \item \textbf{{Jour incomplet}} : au moins {QUALITY_INCOMPLETE_HOURS} heures entre 5~h et 23~h avec moins de la moitié du volume habituel (médiane des trois mêmes jours de la semaine précédents). Un jour incomplet est exclu ; un jour avec une ou deux heures lacunaires est conservé et signalé.
@@ -648,7 +648,7 @@ def ranking_lines(lines: pd.DataFrame) -> pd.DataFrame:
     """Restreint le classement aux lignes à volume suffisant sur la période.
 
     Une ligne apparue quelques jours seulement produit des pourcentages
-    d'arrêts sautés hors d'échelle (ex. 1 saut sur 6 = 16,7 %). On conserve
+    d'arrêts non desservis hors d'échelle (ex. 1 saut sur 6 = 16,7 %). On conserve
     les lignes avec au moins MIN_PASSAGES_FOR_RANKING passages ; si aucune
     ligne n'atteint le seuil, on restitue l'ensemble (périmètres de très
     faible volume).
@@ -716,7 +716,7 @@ def executive_message(metrics: dict[str, float | int], lines: pd.DataFrame, scop
     else:
         assessment = f"{prefix}subit des retards critiques ({p:.1f}\\% de passages à l'heure)."
     if skip > 5:
-        assessment += f" Le taux d'arrêts sautés ({skip:.2f}\\% des passages) aggrave la situation."
+        assessment += f" Le taux d'arrêts non desservis ({skip:.2f}\\% des passages) aggrave la situation."
     return (
         f"{assessment} La principale alerte concerne la ligne {latex(worst.ligne)}, avec un score de fiabilité "
         f"de {worst.score:.1f}/100 et {worst.retard_5:.1f}\\% de passages au-delà de cinq minutes de retard."
@@ -1027,7 +1027,7 @@ Aucun passage programmé avec une heure de départ et un retard stabilisé n'a �
 Cette absence ne signifie pas nécessairement l'absence de desserte : elle peut résulter d'une couverture de collecte insuffisante, d'une période sans circulation, ou d'arrêts présents dans le GTFS mais non observés dans le flux temps réel.
 
 \vfill
-\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Le périmètre repose sur les arrêts géolocalisés dans la commune.
+\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM (Licence Ouverte 2.0), données arrêtées au {latex(collected_at)}. Rapport réutilisable sous la même licence, en citant « Urban Vision, d'après les données TBM ». Le périmètre repose sur les arrêts géolocalisés dans la commune.
 \end{{document}}
 """
 
@@ -1067,7 +1067,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         net = f" (rang réseau : {net_rank.get(row.route_id, '—')}/{net_total})" if net_rank else ""
         priority_items.append(
             rf"\item {marker}\textbf{{Ligne {latex(row.ligne)}}}{net}"
-            rf" : score {row.score:.1f}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts sautés."
+            rf" : score {row.score:.1f}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts non desservis."
         )
     priority_alerts = "\n".join(priority_items)
 
@@ -1180,12 +1180,12 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \vspace{{1cm}}
 \makebox[\textwidth]{{\kpi[{kpi_color(metrics, 'retard')}]{{Retard moyen}}{{{duration(float(metrics['retard']))}{net_val(network_metrics, 'retard', duration)}}}\hfill
 \kpi[{kpi_color(metrics, 'retard_median')}]{{Retard médian}}{{{duration(float(metrics['retard_median']))}{net_val(network_metrics, 'retard_median', duration)}}}\hfill
-\kpi[{kpi_color(metrics, 'skip_rate')}]{{Arrêts sautés}}{{{pct(float(metrics['skip_rate']), 2)}{net_val(network_metrics, 'skip_rate', lambda v: pct(v, 2))}}}}}
+\kpi[{kpi_color(metrics, 'skip_rate')}]{{Arrêts non desservis}}{{{pct(float(metrics['skip_rate']), 2)}{net_val(network_metrics, 'skip_rate', lambda v: pct(v, 2))}}}}}
 
 \vspace{{.7cm}}
 \begin{{tabularx}}{{\textwidth}}{{@{{}}lXXXX@{{}}}}
 \toprule
- & \textbf{{Fiabilité}} & \textbf{{Ponctualité}} & \textbf{{Retards moyen \& médian}} & \textbf{{Arrêts sautés}} \\
+ & \textbf{{Fiabilité}} & \textbf{{Ponctualité}} & \textbf{{Retards moyen \& médian}} & \textbf{{Arrêts non desservis}} \\
 \midrule
 \textbf{{Évolution du mois précédent}} & {latex(change['fiability'])} & {latex(change['ponctualite'])} & {latex(change['retard'])} & {latex(change['skip_rate'])} \\
 \bottomrule
@@ -1195,7 +1195,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \textbf{{Lecture du mois.}} {executive_message(metrics, lines, scope)}
 
 \vspace{{.3cm}}
-\textbf{{Score de fiabilité.}} Ce score (sur 100) mesure la fiabilité du réseau sur le mois. Il part de la ponctualité : le pourcentage de passages avec au plus 5 minutes de retard. Puis il applique une pénalité pour les arrêts sautés : chaque pourcent d'arrêts sautés retire 2 points. Formule : \textit{{score = max(0 ; ponctualité - 2 $\times$ taux d'arrêts sautés)}}. Un score faible signale une ligne prioritaire.
+\textbf{{Score de fiabilité.}} Ce score (sur 100) mesure la fiabilité du réseau sur le mois. Il part de la ponctualité : le pourcentage de passages avec au plus 5 minutes de retard. Puis il applique une pénalité pour les arrêts non desservis : chaque pourcent d'arrêts non desservis retire 2 points. Formule : \textit{{score = max(0 ; ponctualité - 2 $\times$ taux d'arrêts non desservis)}}. Un score faible signale une ligne prioritaire.
 {method_v2_summary(v2)}
 
 \vspace{{.35cm}}
@@ -1205,26 +1205,26 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \end{{itemize}}
 
 \vfill
-\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM, données arrêtées au {latex(collected_at)}. Les vingt dernières minutes du flux sont exclues afin de ne considérer que des observations stabilisées.
+\small\color{{olive}} Source : flux GTFS-RT TripUpdates TBM (Licence Ouverte 2.0), données arrêtées au {latex(collected_at)}. Rapport réutilisable sous la même licence, en citant « Urban Vision, d'après les données TBM ». Les vingt dernières minutes du flux sont exclues afin de ne considérer que des observations stabilisées.
 \newpage
 
 \section*{{Annexe — Résultats détaillés}}
-\textbf{{Périmètre analysé :}} {latex(scope.description)}. Les lignes sont classées de la plus à la moins prioritaire selon un score combinant la ponctualité et les arrêts sautés.\\[.4cm]
+\textbf{{Périmètre analysé :}} {latex(scope.description)}. Les lignes sont classées de la plus à la moins prioritaire selon un score combinant la ponctualité et les arrêts non desservis.\\[.4cm]
 \renewcommand{{\arraystretch}}{{1.18}}
 \begin{{longtable}}{{lrrrrr}}
 \toprule
-\textbf{{Ligne}} & \textbf{{Passages}} & \textbf{{À l'heure}} & \textbf{{Retards moy. / méd.}} & \textbf{{> 5 min}} & \textbf{{Arrêts sautés}} \\
+\textbf{{Ligne}} & \textbf{{Passages}} & \textbf{{À l'heure}} & \textbf{{Retards moy. / méd.}} & \textbf{{> 5 min}} & \textbf{{Arrêts non desservis}} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{{Ligne}} & \textbf{{Passages}} & \textbf{{À l'heure}} & \textbf{{Retards moy. / méd.}} & \textbf{{> 5 min}} & \textbf{{Arrêts sautés}} \\
+\textbf{{Ligne}} & \textbf{{Passages}} & \textbf{{À l'heure}} & \textbf{{Retards moy. / méd.}} & \textbf{{> 5 min}} & \textbf{{Arrêts non desservis}} \\
 \midrule
 \endhead
 {line_table(lines, network_lines, alert_routes)}
 \bottomrule
 \end{{longtable}}
 
-\small\color{{olive}} Sont exclues du classement les lignes comptant moins de {MIN_PASSAGES_FOR_RANKING} passages sur le mois (volume insuffisant pour un pourcentage d\'arrêts sautés exploitable) ainsi que les lignes à la demande (Flex\', Flex\'Night), sans desserte à horaires fixes. Le graphique « Arrêts les plus problématiques » ne retient que les arrêts d\'au moins {MIN_PASSAGES_FOR_RANKING} passages.
+\small\color{{olive}} Sont exclues du classement les lignes comptant moins de {MIN_PASSAGES_FOR_RANKING} passages sur le mois (volume insuffisant pour un pourcentage d\'arrêts non desservis exploitable) ainsi que les lignes à la demande (Flex\', Flex\'Night), sans desserte à horaires fixes. Le graphique « Arrêts les plus problématiques » ne retient que les arrêts d\'au moins {MIN_PASSAGES_FOR_RANKING} passages.
 
 {graphical_annex(lines, scheduled, network_lines, stop_stats, monthly_evolution, output_dir)}
 
@@ -1236,15 +1236,15 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 
 \begin{{itemize}}[leftmargin=1.4em]
 \item \textbf{{La ponctualité (la base)}} : le pourcentage de passages effectués avec au plus 5 minutes de retard. Chaque passage à l'heure fait monter ce score de base ; au-delà de 5 minutes, le retard est jugé trop pénalisant pour l'usager et le passage ne compte plus comme « à l'heure ».
-\item \textbf{{Les arrêts sautés (la pénalité)}} : lorsqu'un véhicule ne dessert pas un arrêt prévu (événement \texttt{{SKIPPED}}), la gêne est maximale. Chaque pourcent d'arrêts sautés retire donc 2 points au score.
+\item \textbf{{Les arrêts non desservis (la pénalité)}} : lorsqu'un véhicule ne dessert pas un arrêt prévu (événement \texttt{{SKIPPED}}), la gêne est maximale. Chaque pourcent d'arrêts non desservis retire donc 2 points au score.
 \end{{itemize}}
 
 \[
-\text{{Score de fiabilité}} = \max(0 \;,\; \text{{Ponctualité}} - 2 \times \text{{Taux d'arrêts sautés}})
+\text{{Score de fiabilité}} = \max(0 \;,\; \text{{Ponctualité}} - 2 \times \text{{Taux d'arrêts non desservis}})
 \]
 
 \vspace{{.2cm}}
-\textbf{{Exemple.}} Avec 92~\% de passages à l'heure et 3~\% d'arrêts sautés, le score est de $92 - 2 \times 3 = 86$ sur 100.
+\textbf{{Exemple.}} Avec 92~\% de passages à l'heure et 3~\% d'arrêts non desservis, le score est de $92 - 2 \times 3 = 86$ sur 100.
 
 \vspace{{.2cm}}
 À noter~:
@@ -1260,7 +1260,7 @@ Contrairement à une simple mesure de temps, cet indicateur combine deux facteur
 {gap_line}
 {evolution_note}
 
-\textbf{{Alertes travaux.}} Les alertes de la section \textit{{Infos trafic}} (\alertmark) sont issues du flux ServiceAlerts TBM et sont reproduites à titre indicatif. Elles ne sont pas utilisées pour filtrer ou corriger les indicateurs de ponctualité. La présence d'une alerte sur une ligne ne signifie pas que les retards ou arrêts sautés observés sont causés par les travaux annoncés.
+\textbf{{Alertes travaux.}} Les alertes de la section \textit{{Infos trafic}} (\alertmark) sont issues du flux ServiceAlerts TBM et sont reproduites à titre indicatif. Elles ne sont pas utilisées pour filtrer ou corriger les indicateurs de ponctualité. La présence d'une alerte sur une ligne ne signifie pas que les retards ou arrêts non desservis observés sont causés par les travaux annoncés.
 
 {method_v2_section(v2)}
 

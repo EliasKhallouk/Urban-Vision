@@ -2,6 +2,8 @@
 
 import pytest
 
+import palette
+
 from palette import (
     CRITICAL,
     COPPERWOOD,
@@ -131,3 +133,19 @@ class TestZonesDeRisque:
             "Zone critique", "Retards fréquents mais courts",
             "Retards rares mais longs", "Risque faible",
         }
+
+
+class TestMotsDesPaliers:
+    def test_mots_courants_par_palier(self):
+        assert palette.tier_label(85) == "fiable"
+        assert palette.tier_label(65) == "à surveiller"
+        assert palette.tier_label(30) == "problématique"
+
+    def test_mots_selon_le_jeu_de_seuils(self):
+        assert palette.tier_label(30, "retard") == "fiable"
+        assert palette.tier_label(400, "retard") == "problématique"
+
+    def test_aucun_nom_de_couleur(self):
+        assert set(palette.TIER_LABELS) == {palette.POSITIVE, palette.MEDIUM, palette.NEGATIVE}
+        for word in palette.TIER_LABELS.values():
+            assert not any(color in word.lower() for color in ("olive", "clay", "copper", "vert", "orange"))

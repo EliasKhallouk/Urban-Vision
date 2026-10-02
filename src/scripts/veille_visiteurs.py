@@ -3,6 +3,7 @@ import datetime as dt
 import gzip
 import glob
 import html as htmlmod
+import ipaddress
 import json
 import os
 import re
@@ -37,6 +38,19 @@ LINE = re.compile(
     r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) ([^"]*)" (\d{3})'
 )
 TZ = re.compile(r"(\+|-)\d{4}$")
+RETENTION_DAYS = 30
+GEO_URL = "https://ipwho.is/%s?fields=success,country,country_code,region,city,latitude,longitude,postal,connection"
+GEO_MAX_PER_RUN = 50
+
+
+def anonymize_ip(ip):
+    """Adresse tronquée : dernier octet à zéro en IPv4, préfixe /48 en IPv6."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    prefix = 24 if addr.version == 4 else 48
+    return str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False).network_address)
 
 
 def parse_line(line):
@@ -44,6 +58,7 @@ def parse_line(line):
     if not m:
         return None
     ip, ts, method, target, status = m.groups()
+    ip = anonymize_ip(ip)
     try:
         when = dt.datetime.strptime(ts, "%d/%b/%Y:%H:%M:%S %z")
     except ValueError:
@@ -108,29 +123,57 @@ def bump(visitors, event):
                 del rec["paths"][0]
 
 
+def parse_geo(row):
+    conn = row.get("connection") or {}
+    asn = conn.get("asn")
+    return {
+        "country": row.get("country"), "countryCode": row.get("country_code"),
+        "regionName": row.get("region"), "city": row.get("city"),
+        "lat": row.get("latitude"), "lon": row.get("longitude"), "zip": row.get("postal"),
+        "isp": conn.get("isp"), "org": conn.get("org"),
+        "as": f"AS{asn} {conn.get('org') or ''}".strip() if asn else None,
+    }
+
+
 def lookup_geo(visitors, now):
     pending = [ip for ip, rec in visitors.items()
                if not (rec["geo"] and rec["geo"].get("isp") and rec["geo"].get("lat") is not None)
                and ":" not in ip and rec["geo_t"] <= now.timestamp() - 3600]
-    for chunk in (pending[i:i + 100] for i in range(0, min(len(pending), 500), 100)):
+    for ip in pending[:GEO_MAX_PER_RUN]:
+        rec = visitors[ip]
+        rec["geo_t"] = now.timestamp()
         try:
-            data = json.dumps(chunk).encode()
-            req = urllib.request.Request(
-                "http://ip-api.com/batch/?fields=status,message,country,countryCode,"
-                "regionName,city,lat,lon,zip,isp,org,as", data=data,
-                headers={"Content-Type": "application/json",
-                         "User-Agent": "urban-vision-veille"})
+            req = urllib.request.Request(GEO_URL % ip, headers={"User-Agent": "urban-vision-veille"})
             with urllib.request.urlopen(req, timeout=8) as resp:
-                rows = json.load(resp)
+                row = json.load(resp)
         except Exception:
             return
-        for ip, row in zip(chunk, rows + [{}] * (len(chunk) - len(rows))):
-            rec = visitors[ip]
-            rec["geo_t"] = now.timestamp()
-            if row.get("status") == "success":
-                rec["geo"] = {k: row.get(k) for k in
-                              ("country", "countryCode", "regionName", "city",
-                               "lat", "lon", "zip", "isp", "org", "as")}
+        if row.get("success"):
+            rec["geo"] = parse_geo(row)
+
+
+def merge_records(a, b):
+    """Fusionne deux fiches de visiteurs (même adresse tronquée)."""
+    geo = a.get("geo") if (a.get("geo") or {}).get("lat") is not None else (b.get("geo") or a.get("geo"))
+    paths = list(dict.fromkeys(list(a["paths"]) + list(b["paths"])))[-12:]
+    return {
+        "first": min(a["first"], b["first"]), "last": max(a["last"], b["last"]),
+        "hits": a["hits"] + b["hits"], "days": set(a["days"]) | set(b["days"]), "paths": paths,
+        "geo": geo, "geo_t": max(a.get("geo_t", 0), b.get("geo_t", 0)),
+        "bdc_t": max(a.get("bdc_t", 0), b.get("bdc_t", 0)),
+    }
+
+
+def minimize(visitors, now):
+    """Tronque les adresses déjà enregistrées et oublie les visiteurs absents depuis RETENTION_DAYS jours."""
+    limit = now - dt.timedelta(days=RETENTION_DAYS)
+    out = {}
+    for ip, rec in visitors.items():
+        if rec["last"] < limit:
+            continue
+        key = anonymize_ip(ip)
+        out[key] = merge_records(out[key], rec) if key in out else rec
+    return out
 
 
 def parse_bdc(row):
@@ -202,7 +245,7 @@ def is_na(rec):
     return geo.get("countryCode") == "FR" and "AQUITAINE" in geo.get("regionName", "").upper()
 
 
-SELF_IPS = {"90.120.193.41"}
+SELF_IPS = {"90.120.193.0"}
 
 
 def is_self(ip):
@@ -459,9 +502,11 @@ def main():
         days = rec.get("days")
         rec["days"] = set(days) if isinstance(days, list) else set()
 
+    today = dt.datetime.now(dt.timezone.utc)
+    visitors = minimize(visitors, today)
+    state["visitors"] = visitors
     after = dt.datetime.fromisoformat(args.since) if args.since \
         else (iso(state.get("last")) or dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc))
-    today = dt.datetime.now(dt.timezone.utc)
     events = read_logs(args.logs_dir, after)
     for event in events:
         bump(visitors, event)

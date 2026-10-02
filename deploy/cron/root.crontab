@@ -1,2 +1,2 @@
-*/5 * * * * goaccess --log-format=COMBINED --ignore-crawlers /var/log/nginx/access.log -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
+*/5 * * * * goaccess --log-format=COMBINED --ignore-crawlers --anonymize-ip /var/log/nginx/access.log -o /home/ubuntu/Urban-Vision/reports/analytics/visiteurs.html
 */5 * * * * /usr/bin/python3 /home/ubuntu/Urban-Vision/src/scripts/veille_visiteurs.py && chown ubuntu:ubuntu /home/ubuntu/Urban-Vision/reports/analytics/veille_state.json /home/ubuntu/Urban-Vision/reports/analytics/visiteurs_reels.html

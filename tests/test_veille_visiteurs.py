@@ -14,15 +14,20 @@ UA_GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/b
 UA_GENERIQUE = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 
-def make_line(ip="1.2.3.4", ts="16/Sep/2026:16:02:00 +0200", path="/", ua=UA_CHROME,
-              status=200):
+def log_ts(days_ago=1, hour=16, minute=2):
+    when = dt.datetime.now(dt.timezone(dt.timedelta(hours=2))) - dt.timedelta(days=days_ago)
+    return when.replace(hour=hour, minute=minute, second=0).strftime("%d/%b/%Y:%H:%M:%S +0200")
+
+
+def make_line(ip="1.2.3.4", ts=None, path="/", ua=UA_CHROME, status=200):
+    ts = ts or log_ts()
     return '%s - - [%s] "GET %s HTTP/1.1" %s 2687 "-" "%s"\n' % (ip, ts, path, status, ua)
 
 
 class TestParse:
     def test_parse_ligne_valide(self):
         ev = vv.parse_line(make_line())
-        assert ev["ip"] == "1.2.3.4"
+        assert ev["ip"] == "1.2.3.0"
         assert ev["status"] == 200
         assert ev["when"].tzinfo is not None
 
@@ -65,34 +70,34 @@ class TestEndToEnd:
         logs = tmp_path / "logs"
         logs.mkdir()
         (logs / "access.log").write_text(
-            make_line(ip="1.1.1.1", ts="16/Sep/2026:14:00:00 +0200") +
-            make_line(ip="1.1.1.1", ts="16/Sep/2026:14:05:00 +0200"))
+            make_line(ip="1.1.1.1", ts=log_ts(2, 14, 0)) +
+            make_line(ip="1.1.1.7", ts=log_ts(2, 14, 5)))
         st = tmp_path / "state.json"
         self._run(logs, st, tmp_path / "v.html")
 
         import json
         vis = json.loads(st.read_text())["visitors"]
-        assert set(vis) == {"1.1.1.1"}
-        assert vis["1.1.1.1"]["hits"] == 2
+        assert set(vis) == {"1.1.1.0"}
+        assert vis["1.1.1.0"]["hits"] == 2
 
         (logs / "access.log").write_text(
-            make_line(ip="2.2.2.2", ts="16/Sep/2026:15:00:00 +0200"))
+            make_line(ip="2.2.2.2", ts=log_ts(2, 15, 0)))
         self._run(logs, st, tmp_path / "v.html")
         vis = json.loads(st.read_text())["visitors"]
-        assert set(vis) == {"1.1.1.1", "2.2.2.2"}
-        assert vis["1.1.1.1"]["hits"] == 2
+        assert set(vis) == {"1.1.1.0", "2.2.2.0"}
+        assert vis["1.1.1.0"]["hits"] == 2
 
     def test_etat_roundtrip_days(self, tmp_path):
         logs = tmp_path / "logs"
         logs.mkdir()
         (logs / "access.log").write_text(
-            make_line(ts="15/Sep/2026:10:00:00 +0200") +
-            make_line(ts="16/Sep/2026:11:00:00 +0200"))
+            make_line(ts=log_ts(3, 10, 0)) +
+            make_line(ts=log_ts(2, 11, 0)))
         st = tmp_path / "state.json"
         self._run(logs, st, tmp_path / "v.html")
         import json
         vis = json.loads(st.read_text())["visitors"]
-        assert len(vis["1.2.3.4"]["days"]) == 2
+        assert len(vis["1.2.3.0"]["days"]) == 2
 
     def test_html_contient_ip(self, tmp_path):
         logs = tmp_path / "logs"
@@ -100,7 +105,8 @@ class TestEndToEnd:
         (logs / "access.log").write_text(make_line(ip="9.9.9.9"))
         html = tmp_path / "v.html"
         self._run(logs, tmp_path / "state.json", html)
-        assert "9.9.9.9" in html.read_text()
+        assert "9.9.9.0" in html.read_text()
+        assert "9.9.9.9" not in html.read_text()
         assert "heure" in html.read_text()
 
 
@@ -116,8 +122,8 @@ class TestFlag:
 
 class TestSelf:
     def test_self_reconnu(self):
-        assert vv.is_self("90.120.193.41")
-        assert not vv.is_self("37.58.152.1")
+        assert vv.is_self(vv.anonymize_ip("90.120.193.41"))
+        assert not vv.is_self("37.58.152.0")
 
 
 class TestBdc:
@@ -167,7 +173,7 @@ class TestHtml:
     def _base(self, now=None):
         now = now or dt.datetime.now(dt.timezone.utc)
         return {
-            "90.120.193.41": {"first": now, "last": now, "hits": 3,
+            "90.120.193.0": {"first": now, "last": now, "hits": 3,
                               "days": {"2026-09-16"}, "paths": ["/"],
                               "geo": {"countryCode": "FR", "regionName": "New Aquitaine",
                                       "city": "Bordeaux", "lat": 44.837, "lon": -0.579,
@@ -185,7 +191,7 @@ class TestHtml:
         html = target.read_text()
         head, sep, tail = html.partition('<table>')
         table = tail[:tail.find('</table>') + 8]
-        assert "90.120.193.41" in table
+        assert "90.120.193.0" in table
         assert "20.245.121.3" not in table
         assert "20.245.121.3" in tail
 
@@ -196,13 +202,13 @@ class TestHtml:
         assert "leaflet" in html
         assert "Carte des connexions" in html
         assert "cartocdn.com" in html
-        assert '"ip": "90.120.193.41"' in html
+        assert '"ip": "90.120.193.0"' in html
         assert "44.837" in html
 
     def test_html_table_localite_bdc(self, tmp_path):
         target = tmp_path / "v.html"
         base = self._base()
-        base["90.120.193.41"]["geo"]["bdc"] = {"locality": "Mérignac",
+        base["90.120.193.0"]["geo"]["bdc"] = {"locality": "Mérignac",
                                                "postcode": "33700",
                                                "lat": 44.83, "lon": -0.62}
         vv.render_html(base, target, dt.datetime.now(dt.timezone.utc))
@@ -234,7 +240,7 @@ class TestHtml:
         target = tmp_path / "v.html"
         base = self._base()
         older = dict(base)
-        older["90.120.193.41"]["last"] = dt.datetime(2026, 9, 10, 12, 0,
+        older["90.120.193.0"]["last"] = dt.datetime(2026, 9, 10, 12, 0,
                                                      tzinfo=dt.timezone(dt.timedelta(hours=2)))
         vv.render_html(older, target, dt.datetime(2026, 9, 16, 18, 0, tzinfo=dt.timezone.utc))
         assert "actif(s) aujourd" in target.read_text()
@@ -245,4 +251,54 @@ class TestHtml:
         html = target.read_text()
         assert "class='p-self'" in html
         assert "Votre IP" in html
-        assert "90.120.193.41" in html
+        assert "90.120.193.0" in html
+
+def rec(when, hits, path, geo=None):
+    return {"first": when, "last": when, "hits": hits, "days": {when.date().isoformat()}, "paths": [path],
+            "geo": geo, "geo_t": 0}
+
+
+class TestMinimisation:
+    def test_adresses_tronquees(self):
+        assert vv.anonymize_ip("90.120.193.41") == "90.120.193.0"
+        assert vv.anonymize_ip("2a01:cb19:8a3f:1200:5c7d:1:2:3") == "2a01:cb19:8a3f::"
+        assert vv.anonymize_ip("pas-une-ip") == "pas-une-ip"
+
+    def test_etat_existant_fusionne_et_purge(self):
+        now = dt.datetime(2026, 10, 2, 9, 0, tzinfo=dt.timezone.utc)
+        recent, old = now - dt.timedelta(days=2), now - dt.timedelta(days=vv.RETENTION_DAYS + 1)
+        visitors = {
+            "90.120.193.41": rec(recent, 3, "/", {"lat": 44.8, "city": "Bordeaux"}),
+            "90.120.193.77": rec(recent - dt.timedelta(hours=1), 2, "/?ligne=59"),
+            "37.58.152.9": rec(old, 5, "/"),
+        }
+        out = vv.minimize(visitors, now)
+        assert set(out) == {"90.120.193.0"}
+        merged = out["90.120.193.0"]
+        assert merged["hits"] == 5
+        assert merged["paths"] == ["/", "/?ligne=59"]
+        assert merged["geo"]["city"] == "Bordeaux"
+        assert merged["first"] == recent - dt.timedelta(hours=1)
+
+    def test_geolocalisation_https_sur_adresse_tronquee(self, monkeypatch):
+        import io
+        import json as jsonlib
+        calls = []
+
+        def fake_urlopen(req, timeout=0):
+            calls.append(req.full_url)
+            body = {"success": True, "country": "France", "country_code": "FR", "region": "Nouvelle-Aquitaine",
+                    "city": "Mérignac", "latitude": 44.84, "longitude": -0.65, "postal": "33700",
+                    "connection": {"asn": 3215, "org": "Orange", "isp": "Orange S.A."}}
+            return io.BytesIO(jsonlib.dumps(body).encode())
+
+        monkeypatch.setattr(vv.urllib.request, "urlopen", fake_urlopen)
+        now = dt.datetime.now(dt.timezone.utc)
+        visitors = {"90.120.193.0": {"first": now, "last": now, "hits": 1, "days": set(), "paths": ["/"],
+                                     "geo": None, "geo_t": 0}}
+        vv.lookup_geo(visitors, now)
+        assert calls == [vv.GEO_URL % "90.120.193.0"]
+        assert calls[0].startswith("https://")
+        geo = visitors["90.120.193.0"]["geo"]
+        assert (geo["countryCode"], geo["city"], geo["zip"], geo["isp"], geo["as"]) == (
+            "FR", "Mérignac", "33700", "Orange S.A.", "AS3215 Orange")

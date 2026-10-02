@@ -114,14 +114,14 @@ def period_labels(date_service: pd.Series, heure: pd.Series) -> list[str]:
 
 
 def reliability_score(pct_on_time: float, pct_skipped: float) -> float:
-    """Score de fiabilité = ponctualité ≤ 5 min − 2 × taux d'arrêts sautés, borné 0–100."""
+    """Score de fiabilité = ponctualité ≤ 5 min − 2 × taux d'arrêts non desservis, borné 0–100."""
     return float(min(100.0, max(0.0, pct_on_time - 2 * pct_skipped)))
 
 
 def score_breakdown(pct_on_time: float, pct_skipped: float) -> dict:
     """Répartit les points perdus (100 − score) entre retards et service non rendu.
 
-    `lost_delay` = 100 − ponctualité ; `lost_skip` = 2 × taux d'arrêts sautés.
+    `lost_delay` = 100 − ponctualité ; `lost_skip` = 2 × taux d'arrêts non desservis.
     `dominant` : « retards », « service » ou « aucun » (moins de
     NO_PROBLEM_LOST_POINTS points perdus).
     """
@@ -142,7 +142,7 @@ def score_breakdown(pct_on_time: float, pct_skipped: float) -> dict:
 def responsible_line(lines: pd.DataFrame) -> dict | None:
     """Ligne qui cumule le plus de passages problématiques à un arrêt.
 
-    Passage problématique = passage à plus de 5 min de retard ou arrêt sauté,
+    Passage problématique = passage à plus de 5 min de retard ou arrêt non desservi,
     compté en nombre absolu (pas en pourcentage). Colonnes attendues :
     route_id, ligne, cnt_gt300, skipped.
     """
@@ -348,7 +348,7 @@ def classify_delay_origin(profile: pd.DataFrame) -> dict:
 
 
 def classify_skips(profile: pd.DataFrame) -> dict:
-    """Où se situent les arrêts sautés le long d'une direction ?
+    """Où se situent les arrêts non desservis le long d'une direction ?
 
     `profile` : arrêts ordonnés (colonne order), colonnes stop_name, eligible,
     skipped. Verdict « aucun » (taux < SKIP_MIN_RATE %), « extrémités »
@@ -474,7 +474,7 @@ def stop_summary(responsible: dict | None, direction: str | None, cause: dict,
         where = f" ({direction})" if direction else ""
         out.append(f"La ligne {responsible['ligne']}{where} concentre "
                    f"{format_pct(responsible['share'] * 100)} des passages problématiques de l'arrêt "
-                   "(retards de plus de 5 min et arrêts sautés).")
+                   "(retards de plus de 5 min et arrêts non desservis).")
     verdict = cause["verdict"]
     if verdict == "amont":
         text = (f"Le retard est surtout déjà présent en arrivant "
@@ -517,7 +517,7 @@ def stop_hints(cause: dict, hotspot: dict | None, prev_stop: str | None, stop_na
         hints.append("Pics ponctuels : les rapprocher des perturbations signalées ces jours-là "
                      "(travaux, événements).")
     if tier(pct_skipped, "pourcent") != POSITIVE:
-        hints.append("Arrêts sautés fréquents : à signaler à l'exploitant.")
+        hints.append("Arrêts non desservis fréquents : à signaler à l'exploitant.")
     where = "autour de l'arrêt" if cause["verdict"] in ("local", "mixte") else "sur le parcours en amont"
     hints.extend(_peak_hint(peak, where))
     return hints
@@ -532,7 +532,7 @@ def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
         out.append(f"La ligne {ligne} ne perd que {breakdown['lost']:.0f} point(s) de fiabilité.")
     else:
         out.append(f"Sur {breakdown['lost']:.0f} points perdus, {breakdown['lost_delay']:.0f} "
-                   f"viennent des retards et {breakdown['lost_skip']:.0f} des arrêts sautés.")
+                   f"viennent des retards et {breakdown['lost_skip']:.0f} des arrêts non desservis.")
     if cancelled:
         out.append(f"{cancelled} course(s) supprimée(s) sur la période ; la plupart n'apparaissent "
                    "plus dans le flux et n'entrent donc pas dans le score.")
@@ -552,13 +552,13 @@ def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
         out.append(f"Le sens {imbalance['terminus']} concentre {format_pct(imbalance['share'] * 100)} "
                    "des passages à plus de 5 min.")
     if skips["verdict"] == "extrémités":
-        out.append("Les arrêts sautés se situent surtout aux extrémités de la ligne "
+        out.append("Les arrêts non desservis se situent surtout aux extrémités de la ligne "
                    "(prises ou fins de service en cours de ligne).")
     elif skips["verdict"] == "bloc":
-        out.append(f"Les arrêts sautés forment un bloc entre {skips['block'][0]} et {skips['block'][1]} "
+        out.append(f"Les arrêts non desservis forment un bloc entre {skips['block'][0]} et {skips['block'][1]} "
                    "(déviation probable).")
     elif skips["verdict"] == "dispersé":
-        out.append("Les arrêts sautés sont dispersés le long de la ligne.")
+        out.append("Les arrêts non desservis sont dispersés le long de la ligne.")
     out.extend(_timing_sentences(rec, conc, peak, None))
     return out
 
@@ -582,7 +582,7 @@ def line_hints(origin: dict, skips: dict, cancelled: int, peak: dict | None = No
         hints.append("Courses supprimées : moyens d'exploitation (conducteurs, matériel), "
                      "à interroger auprès de l'exploitant.")
     if skips["verdict"] == "bloc":
-        hints.append(f"Arrêts sautés entre {skips['block'][0]} et {skips['block'][1]} : "
+        hints.append(f"Arrêts non desservis entre {skips['block'][0]} et {skips['block'][1]} : "
                      "à recouper avec les alertes travaux et déviations.")
     hints.extend(_peak_hint(peak, "sur le parcours"))
     return hints

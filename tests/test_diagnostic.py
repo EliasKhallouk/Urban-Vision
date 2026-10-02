@@ -274,7 +274,7 @@ class TestPhrases:
                                 {"verdict": "extrémités", "rate": 6.0, "block": None},
                                 {"days": 0, "bad_days": 0, "bad_dates": [], "verdict": "aucun"}, None)
         text = " ".join(lines)
-        assert text.startswith("Sur 38 points perdus, 26 viennent des retards et 12 des arrêts sautés.")
+        assert text.startswith("Sur 38 points perdus, 26 viennent des retards et 12 des arrêts non desservis.")
         assert "41 course(s) supprimée(s)" in text
         assert "entre B et C (Mérignac)" in text
         assert "Le sens vers Aéroport concentre 70 %" in text

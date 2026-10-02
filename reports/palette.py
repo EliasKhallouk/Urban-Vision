@@ -44,6 +44,14 @@ HEX = {
     NEGATIVE: COPPERWOOD,
 }
 
+# Mot affiché au lecteur pour chaque palier (dashboard) : du langage courant,
+# jamais le nom interne du palier ni celui de sa couleur.
+TIER_LABELS = {
+    POSITIVE: "fiable",
+    MEDIUM: "à surveiller",
+    NEGATIVE: "problématique",
+}
+
 # Nom LaTeX associé à chaque palier (définis dans le préambule des rapports).
 LATEX = {
     POSITIVE: "olive",
@@ -96,6 +104,11 @@ def tier(value: float, kind: str) -> str:
 def hex(value: float, kind: str) -> str:
     """Couleur hexadécimale associée à une valeur et un jeu de seuils."""
     return HEX[tier(value, kind)]
+
+
+def tier_label(value: float, kind: str = "score") -> str:
+    """Mot courant (« fiable », « à surveiller », « problématique ») d'une valeur."""
+    return TIER_LABELS[tier(value, kind)]
 
 
 def latex(value: float, kind: str) -> str:

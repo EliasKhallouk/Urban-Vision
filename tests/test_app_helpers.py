@@ -460,3 +460,84 @@ class TestMethodV2Caption:
         assert "non évaluée" in app_mod.method_v2_caption(self._v2(disponible=False, lignes_ecartees={"A": 31.0}), "A")
         assert app_mod.method_v2_caption(self._v2(disponible=False), "A") is None
         assert app_mod.method_v2_caption(None) is None
+
+
+class TestVueRapide:
+    def _ranking(self):
+        return pd.DataFrame({"route_id": ["A", "B"], "route_type": [0, 3], "ligne": ["A", "12"],
+                             "score_fiabilite": [85.0, 40.0], "pct_retard_5min": [5.0, 30.0],
+                             "pct_arrets_sautes": [0.5, 2.0], "observations": [1000, 400]})
+
+    def test_tableau_des_lignes_rapide_puis_detaille(self):
+        quick = app_mod.lines_table(self._ranking(), {"B"}, detailed=False)
+        assert list(quick.columns) == ["Ligne", "État", "Score / 100"]
+        assert quick["État"].tolist() == ["Fiable", "Problématique"]
+        assert quick["Ligne"].tolist() == ["● A", "■ ⚠ 12"]
+        full = app_mod.lines_table(self._ranking(), set(), detailed=True)
+        assert list(full.columns) == ["Ligne", "État", "Score / 100", "Retards > 5 min",
+                                      "Arrêts non desservis", "Passages"]
+
+    def test_bandeau_rapide_en_mots(self):
+        cards = app_mod.header_kpis(88.0, 90.2, 136.0, 1.32, 1_277_999, 131, 17_079, 1_294_616,
+                                    local=False, detailed=False)
+        assert [c[0] for c in cards] == ["État", "À l'heure", "Retard moyen", "Arrêts non desservis"]
+        assert cards[0][1] == "Fiable"
+        assert "ensemble du réseau" in cards[0][2]
+        assert cards[1][1] == "90 %"
+        assert all(c[4] for c in cards)
+
+    def test_bandeau_detaille(self):
+        cards = app_mod.header_kpis(88.0, 90.2, 136.0, 1.32, 1_277_999, 131, 17_079, 1_294_616,
+                                    local=True, detailed=True)
+        assert [c[0] for c in cards] == ["Passages analysés", "Ponctualité", "Retard moyen", "Lignes suivies",
+                                         "Arrêts non desservis"]
+        assert cards[0][1] == "1 277 999"
+
+    def test_carte_etat(self):
+        label, value, sub, polarity, help_text = app_mod.status_kpi(47.2, "réseau : 88 / 100")
+        assert (label, value, polarity) == ("État", "Problématique", "negatif")
+        assert sub == "score 47 / 100 · réseau : 88 / 100"
+        assert "Fiable à partir de 80" in help_text
+
+    def test_aide_echappee_dans_la_carte(self):
+        html_card = app_mod.kpi_card("Score", "80", None, "neutral", 'Part des "passages" < 5 min')
+        assert 'title="Part des &quot;passages&quot; &lt; 5 min"' in html_card
+        assert "kpi-help" not in app_mod.kpi_card("Score", "80")
+
+    def test_guide_au_premier_affichage_seulement(self):
+        assert app_mod.should_show_guide({}, {}) is True
+        assert app_mod.should_show_guide({"guide_seen": True}, {}) is False
+        assert app_mod.should_show_guide({}, {"ligne": "59"}) is False
+
+    def test_lexique_sans_jargon_de_flux_dans_les_termes(self):
+        terms = [term for term, _ in app_mod.LEXIQUE]
+        assert "Arrêt non desservi" in terms
+        assert all("SKIPPED" not in term for term in terms)
+
+
+class TestRapportsPublies:
+    def _pdf(self, root, *parts):
+        path = root.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF-1.4")
+        return path
+
+    def test_liste_par_mois_du_plus_recent(self, tmp_path):
+        net = self._pdf(tmp_path, "2026-09", "reseau", "bordeaux-metropole", "urban-vision-2026-09-reseau.pdf")
+        pessac = self._pdf(tmp_path, "2026-09", "communes", "pessac", "urban-vision-2026-09-mairie-de-pessac.pdf")
+        self._pdf(tmp_path, "2026-08", "communes", "bègles", "urban-vision-2026-08-mairie-de-bègles.pdf")
+        (tmp_path / "2026-07").mkdir()
+        (tmp_path / "corbeille").mkdir()
+        reports = app_mod.list_reports(tmp_path)
+        assert list(reports) == ["2026-09", "2026-08"]
+        assert reports["2026-09"] == {"reseau": net, "communes": {"pessac": pessac}}
+        assert reports["2026-08"]["reseau"] is None
+
+    def test_dossier_absent(self, tmp_path):
+        assert app_mod.list_reports(tmp_path / "absent") == {}
+
+    def test_nom_du_mois(self):
+        assert app_mod.month_name("2026-09") == "Septembre 2026"
+
+    def test_slug_identique_au_lot_de_rapports(self):
+        assert app_mod.report_slug("Saint-Médard-en-Jalles") == "saint-médard-en-jalles"

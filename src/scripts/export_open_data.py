@@ -267,7 +267,8 @@ def write_datasets(conn, out_dir, since="0000-00-00", end="9999-12-31"):
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "since_day": since,
         "end_day": end,
-        "license": "projet Urban Vision (agrégats, sans données personnelles)",
+        "license": "Licence Ouverte / Open Licence 2.0 (Etalab)",
+        "source": "Urban Vision, d'après les données TBM (Licence Ouverte 2.0) ; agrégats sans données personnelles",
         "row_counts": counts,
     }
     with open(out_dir / "METADATA.json", "w", encoding="utf-8") as fh:
