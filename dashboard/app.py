@@ -3378,7 +3378,7 @@ def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, 
 
 
 def main() -> None:
-    st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon="◉", layout="wide")
+    st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-color.png"), layout="wide")
     inject_style()
     apply_query_params()
     page, detailed = render_sidebar()
