@@ -1191,7 +1191,10 @@ lecteur qui n'est pas analyste :
   cliquer pour comprendre), affichées au premier chargement de la session
   sauf sur un lien direct vers une fiche (`should_show_guide`), et
   rouvrables par le bouton « Guide de lecture » de la sidebar ; la boîte se
-  ferme par ✕ ou Échap, sans relancer le calcul de la page ;
+  ferme par ✕ ou Échap, sans relancer le calcul de la page ; une fois vu, le
+  guide n'est plus ouvert automatiquement par ce navigateur (cookie
+  `uv_guide_vu`, un an, posé par `remember_guide_seen`, lu par
+  `st.context.cookies`) ;
 - **vocabulaire** : « arrêt non desservi » remplace « arrêt sauté » partout
   (dashboard et rapports) ; le lexique (`LEXIQUE`) est la première vue de
   « Données & méthode ».
@@ -1859,7 +1862,8 @@ Chaîne en production :
   adresses anonymisées (`--anonymize-ip`, §17.1) ; veille des visiteurs sur
   adresses tronquées, conservées 30 jours, géolocalisées en HTTPS (§17.2) ;
   télémétrie Streamlit désactivée (`gatherUsageStats = false`) ; cookie
-  technique `_streamlit_xsrf` (protection XSRF) ; le navigateur charge des
+  technique `_streamlit_xsrf` (protection XSRF) et cookie `uv_guide_vu` (guide
+  de lecture déjà vu, un an) ; le navigateur charge des
   ressources sur `cdn.jsdelivr.net` et `basemaps.cartocdn.com`. Serveur dans la
   région OCI de Paris (`eu-paris-1`).
 
@@ -2454,7 +2458,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I23 le 02/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2480,6 +2484,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I21 | Veille des visiteurs : adresses IP complètes conservées sans limite de durée et envoyées sans chiffrement (HTTP) à ip-api.com ; rapport GoAccess avec adresses complètes | Adresses tronquées dès la lecture, conservation 30 jours, géolocalisation HTTPS (ipwho.is), GoAccess `--anonymize-ip` (§17) ; tests `TestMinimisation` |
 | I22 | Phrases des fiches : « entre Allende et Allende », « Tronçon Allende → Allende » quand deux arrêts consécutifs d'un parcours portent le même nom (deux quais d'un même arrêt) | « à l'arrêt Allende », « Arrêt Allende » (`diagnostic.segment_path`, `segment_title`) ; tests `TestTronconsMemeNom` |
 | I23 | Bouton « Compris » du guide de lecture : `st.rerun()` relançait le calcul complet de la page (plusieurs secondes) | Bouton retiré, la boîte se ferme par ✕ ou Échap (`show_guide`) |
+| I24 | Le guide de lecture se rouvrait à chaque rechargement (nouvelle session Streamlit) ; le bouton « Guide de lecture » devenait illisible au survol | Cookie `uv_guide_vu` ; couleur de survol des boutons de la sidebar (fond ocre, texte vert foncé) |
 
 ### 26.4 Dette documentaire
 

@@ -518,6 +518,8 @@ class TestVueRapide:
         assert app_mod.should_show_guide({}, {}) is True
         assert app_mod.should_show_guide({"guide_seen": True}, {}) is False
         assert app_mod.should_show_guide({}, {"ligne": "59"}) is False
+        assert app_mod.should_show_guide({}, {}, {app_mod.GUIDE_COOKIE: "1"}) is False
+        assert app_mod.should_show_guide({}, {}, {"autre": "1"}) is True
 
     def test_lexique_sans_jargon_de_flux_dans_les_termes(self):
         terms = [term for term, _ in app_mod.LEXIQUE]

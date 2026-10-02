@@ -444,6 +444,9 @@ def inject_style() -> None:
         .sidebar-brand img {{ height: 74px; width: auto; max-width: 100%; }}
         .sidebar-brand span {{ color: #FEFAE0; font-size: 1.45rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }}
         .sidebar-nav-label {{ color: #FFFFFF; font-size: .76rem; text-transform: uppercase; letter-spacing: .16em; font-weight: 600; margin: .8rem 0 .4rem; opacity: .9; }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover,
+        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {{ background: #DDA15E; border-color: #DDA15E; color: #283618; }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover p {{ color: #283618; }}
         [data-testid="stSidebar"] hr {{ border-color: rgba(221, 161, 94, .3); }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] {{ margin-top: 1.2rem; }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {{ color: #FEFAE0; font-weight: 600; font-size: .95rem; }}
@@ -1832,9 +1835,18 @@ def render_sidebar() -> tuple[str, bool]:
     return page, detailed
 
 
-def should_show_guide(session: dict, query_params: dict) -> bool:
-    """Guide au premier affichage de la session, sauf sur un lien direct vers une fiche."""
-    return not session.get("guide_seen") and not ({"arret", "ligne"} & set(query_params))
+GUIDE_COOKIE = "uv_guide_vu"
+
+
+def should_show_guide(session: dict, query_params: dict, cookies: dict | None = None) -> bool:
+    """Guide à la première visite : ni déjà vu dans la session, ni mémorisé par le navigateur, ni lien vers une fiche."""
+    return (not session.get("guide_seen") and GUIDE_COOKIE not in (cookies or {})
+            and not ({"arret", "ligne"} & set(query_params)))
+
+
+def remember_guide_seen() -> None:
+    st.html(f"<script>document.cookie='{GUIDE_COOKIE}=1; max-age=31536000; path=/; SameSite=Lax'</script>",
+            unsafe_allow_javascript=True)
 
 def _kpi_border(polarity: str) -> str:
     if polarity in ("positif", "good"):
@@ -3325,7 +3337,7 @@ def render_page_about(c: PageContext) -> None:
     st.markdown(
         "- Aucun compte, aucun formulaire, aucun cookie publicitaire ni outil de mesure d'audience tiers. Le site "
         "dépose un cookie technique de sécurité (protection contre la falsification de requêtes), nécessaire à son "
-        "fonctionnement.\n"
+        "fonctionnement, et un cookie `uv_guide_vu` (un an) qui évite de réafficher le guide de lecture.\n"
         "- **Journaux du serveur** : adresse IP, date, page demandée et navigateur, conservés 14 jours pour la "
         "sécurité du site et des statistiques globales de fréquentation, produites avec des adresses IP "
         "anonymisées.\n"
@@ -3382,8 +3394,9 @@ def main() -> None:
     inject_style()
     apply_query_params()
     page, detailed = render_sidebar()
-    if should_show_guide(st.session_state, st.query_params):
+    if should_show_guide(st.session_state, st.query_params, st.context.cookies):
         st.session_state["guide_seen"] = True
+        remember_guide_seen()
         show_guide()
     if not DB_PATH.exists():
         st.error(f"Base SQLite introuvable : {DB_PATH}")
