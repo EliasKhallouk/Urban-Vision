@@ -88,8 +88,18 @@ class TestKpiCard:
 
     def test_kpi_card_avec_sublabel(self):
         card = app_mod.kpi_card("Retard moyen", "1 min", "≤ 5 min", polarity="positif")
-        assert 'style="border-left-color:#606c38"' in card
+        assert 'class="kpi-card kpi-filled"' in card
+        assert "background:#606c38" in card and "--kpi-ink:#FEFAE0" in card
         assert "kpi-sublabel" in card
+
+    def test_carte_neutre_non_coloree(self):
+        card = app_mod.kpi_card("Passages", "1 234", polarity="neutral")
+        assert "kpi-filled" not in card
+        assert "border-left-color" in card
+
+    def test_texte_lisible_sur_chaque_palier(self):
+        assert app_mod.KPI_FILLS["moyen"] == "#283618"
+        assert app_mod.KPI_FILLS["negatif"] == "#FFFFFF"
 
 
 def _ranking_inputs():

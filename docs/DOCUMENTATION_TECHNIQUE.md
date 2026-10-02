@@ -239,7 +239,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 26 fichiers, 494 tests pytest
+└── tests/                          # 26 fichiers, 496 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1160,7 +1160,10 @@ lecteur qui n'est pas analyste :
   dessous : `status_kpi`), « À l'heure », « Retard moyen » et « Arrêts non
   desservis » ; en vue détaillée, les cinq mesures d'origine et leurs
   définitions techniques (SCHEDULED, SKIPPED). Chaque carte porte une aide
-  au survol (`HELP_TEXTS`, pastille « ? » de `kpi_card`). Les pages
+  au survol (`HELP_TEXTS`, pastille « ? » de `kpi_card`). Une carte évaluée
+  (palier fiable, à surveiller ou problématique, ou évolution) est remplie de
+  la couleur de son palier, texte crème, vert foncé ou blanc selon le fond
+  (`KPI_FILLS`) ; une carte neutre reste blanche à liseré. Les pages
   d'information (`INFO_PAGES` : « Rapports mensuels », « À propos ») n'ont ni
   titre ni bandeau ;
 - **vue rapide** : verdict en phrase, graphique principal et, dans les
@@ -1174,7 +1177,8 @@ lecteur qui n'est pas analyste :
   (`GUIDE_STEPS` : choisir territoire et période, lire l'état en un mot,
   cliquer pour comprendre), affichées au premier chargement de la session
   sauf sur un lien direct vers une fiche (`should_show_guide`), et
-  rouvrables par le bouton « Guide de lecture » de la sidebar ;
+  rouvrables par le bouton « Guide de lecture » de la sidebar ; la boîte se
+  ferme par ✕ ou Échap, sans relancer le calcul de la page ;
 - **vocabulaire** : « arrêt non desservi » remplace « arrêt sauté » partout
   (dashboard et rapports) ; le lexique (`LEXIQUE`) est la première vue de
   « Données & méthode ».
@@ -2383,7 +2387,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 494, isolés (suite `pytest` complète : 494 passed), flux synthétiques
+- Tests : 496, isolés (suite `pytest` complète : 496 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2428,7 +2432,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I22 le 02/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I23 le 02/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2453,6 +2457,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I20 | Highcharts chargé depuis `code.highcharts.com`, dont l'usage en production n'est pas prévu et qui refuse les navigateurs sans interface | jsDelivr, version figée 13.1.1 (`HIGHCHARTS_CDN`, §11.4) |
 | I21 | Veille des visiteurs : adresses IP complètes conservées sans limite de durée et envoyées sans chiffrement (HTTP) à ip-api.com ; rapport GoAccess avec adresses complètes | Adresses tronquées dès la lecture, conservation 30 jours, géolocalisation HTTPS (ipwho.is), GoAccess `--anonymize-ip` (§17) ; tests `TestMinimisation` |
 | I22 | Phrases des fiches : « entre Allende et Allende », « Tronçon Allende → Allende » quand deux arrêts consécutifs d'un parcours portent le même nom (deux quais d'un même arrêt) | « à l'arrêt Allende », « Arrêt Allende » (`diagnostic.segment_path`, `segment_title`) ; tests `TestTronconsMemeNom` |
+| I23 | Bouton « Compris » du guide de lecture : `st.rerun()` relançait le calcul complet de la page (plusieurs secondes) | Bouton retiré, la boîte se ferme par ✕ ou Échap (`show_guide`) |
 
 ### 26.4 Dette documentaire
 

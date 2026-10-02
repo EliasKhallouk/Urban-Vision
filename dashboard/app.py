@@ -479,6 +479,9 @@ def inject_style() -> None:
         .kpi-value {{ color: #283618; font-size: 23px; font-weight: 700; margin-top: .3rem; line-height: 1.15; }}
         .kpi-sublabel {{ color: rgba(96, 108, 56, .70); font-size: 12px; margin-top: .25rem; font-weight: 500; }}
         [data-testid="stMain"] [data-testid="stMarkdownContainer"] a {{ color: #283618; text-decoration-color: #DDA15E; }}
+        .kpi-filled, .kpi-filled .kpi-label, .kpi-filled .kpi-value, .kpi-filled .kpi-sublabel {{ color: var(--kpi-ink) !important; }}
+        .kpi-filled .kpi-sublabel {{ opacity: .9; }}
+        .kpi-filled .kpi-help {{ border-color: var(--kpi-ink); }}
         .kpi-help {{ display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: .3rem; border-radius: 50%; border: 1px solid rgba(96, 108, 56, .55); font-size: 10px; cursor: help; text-transform: none; vertical-align: 1px; }}
 
         .eyebrow {{ color: #283618; font-size: .76rem; text-transform: uppercase; letter-spacing: .15em; font-weight: 700; }}
@@ -1749,9 +1752,7 @@ def _logo_data_uri() -> str:
 def show_guide() -> None:
     for i, (title, text) in enumerate(GUIDE_STEPS, start=1):
         st.markdown(f"**{i}. {title}**  \n{text}")
-    if st.button("Compris", type="primary", key="guide_ok"):
-        st.session_state["guide_seen"] = True
-        st.rerun()
+    st.caption("Fermez cette fenêtre (✕ ou touche Échap) pour commencer.")
 
 
 def render_sidebar() -> tuple[str, bool]:
@@ -1784,14 +1785,21 @@ def _kpi_border(polarity: str) -> str:
         return SUNLIT_CLAY
     return "rgba(221, 161, 94, 0.50)"
 
+KPI_FILLS = {"positif": "#FEFAE0", "good": "#FEFAE0", "moyen": "#283618",
+             "negatif": "#FFFFFF", "négatif": "#FFFFFF", "bad": "#FFFFFF"}
+
+
 def kpi_card(label: str, value: str, sublabel: str | None = None, polarity: str = "neutral",
              help: str | None = None) -> str:
     border = _kpi_border(polarity)
+    filled = KPI_FILLS.get(polarity)
+    style = (f"border-left-color:{border}" if filled is None
+             else f"background:{border};border-color:{border};--kpi-ink:{filled}")
     sub = f'<div class="kpi-sublabel">{sublabel}</div>' if sublabel else ""
     tip = (f' <span class="kpi-help" title="{html.escape(help, quote=True)}" role="img" '
            f'aria-label="{html.escape(help, quote=True)}">?</span>') if help else ""
     return (
-        f'<div class="kpi-card" style="border-left-color:{border}">'
+        f'<div class="kpi-card{"" if filled is None else " kpi-filled"}" style="{style}">'
         f'<div class="kpi-label">{label}{tip}</div>'
         f'<div class="kpi-value">{value}</div>{sub}</div>'
     )
