@@ -3,6 +3,7 @@ import csv
 import hashlib
 import io
 import json
+import sqlite3
 import sys
 import zipfile
 from datetime import datetime
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import requests
 
+import route_shapes
 from gtfs_static import GTFS_STATIC_URL
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,13 +78,25 @@ def archive(content: bytes, archive_dir: Path, now: datetime) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Archive le GTFS statique TBM quand il change.")
     ap.add_argument("--dest", default=str(ARCHIVE_DIR))
+    ap.add_argument("--db", default=str(route_shapes.DB_PATH))
     args = ap.parse_args(argv)
-    result = archive(download(), Path(args.dest), datetime.now())
+    content = download()
+    result = archive(content, Path(args.dest), datetime.now())
     if result["status"] == "inchangé":
         print(f"GTFS statique inchangé ({result['sha256'][:12]}).")
     else:
         print(f"Nouvelle version archivée : {result['file']} ({result['size'] / 1e6:.1f} Mo, "
               f"valide du {result.get('start_date') or '?'} au {result.get('end_date') or '?'}).")
+    try:
+        conn = sqlite3.connect(args.db, timeout=120)
+        try:
+            empty = route_shapes.shapes_count(conn) == 0
+            if result["status"] != "inchangé" or empty:
+                print(f"{route_shapes.refresh_route_shapes(conn, content)} tracés de lignes mis à jour.")
+        finally:
+            conn.close()
+    except (sqlite3.Error, ValueError, KeyError) as e:
+        print(f"Tracés des lignes non mis à jour : {e}", file=sys.stderr)
     return 0
 
 

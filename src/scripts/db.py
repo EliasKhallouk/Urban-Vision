@@ -194,6 +194,14 @@ CREATE INDEX IF NOT EXISTS idx_service_alerts_period
     ON service_alerts(active_period_start, active_period_end);
 CREATE INDEX IF NOT EXISTS idx_observations_departure_time
     ON observations(departure_time, schedule_relationship, departure_delay, route_id);
+CREATE TABLE IF NOT EXISTS route_shapes (
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    shape_id TEXT NOT NULL,
+    trips INTEGER NOT NULL,
+    coords TEXT NOT NULL,
+    PRIMARY KEY (route_id, direction_id)
+);
 """ + AGG_DDL
 
 

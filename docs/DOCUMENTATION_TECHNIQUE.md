@@ -236,10 +236,11 @@ Urban-Vision/
 │   │   ├── gtfs_static.py          # chargement routes/stops
 │   │   ├── indicateurs.py          # indicateurs de la méthode 2.0 (en test)
 │   │   ├── rafraichir_agregats.py  # recalcul des agrégats (timer 5 min)
+│   │   ├── route_shapes.py         # tracés des lignes extraits du GTFS (carte)
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 26 fichiers, 496 tests pytest
+└── tests/                          # 27 fichiers, 505 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -643,6 +644,12 @@ sert de signal de vie à la veille et de point de reprise au collecteur.
 
 **`trip_status`** — dernier statut connu par voyage. PK `(trip_id, start_date)`.
 
+**`route_shapes`** — tracé principal de chaque ligne et sens, PK `(route_id,
+direction_id)` : `shape_id` le plus emprunté dans `trips.txt`, nombre de ses
+courses (`trips`) et coordonnées `[[lon, lat], …]` en JSON (`coords`),
+simplifiées à 4 m près (Douglas-Peucker, `SIMPLIFY_METERS`) : 245 tracés,
+≈ 117 points chacun, 626 Ko au 02/10/2026. Écrite par `route_shapes.py`.
+
 **`service_alerts`** — alertes du flux ServiceAlerts, une ligne par
 (alerte × route informée × période). PK `(alert_id, route_id, active_period_start)`.
 Colonne `cause` (entier protobuf) quasi toujours `UNKNOWN_CAUSE` — ignorée dans
@@ -982,8 +989,14 @@ empreinte SHA-256 est nouvelle (22,7 Mo par version). `index.json` liste les
 versions (dates de validité et version lues dans `feed_info.txt`) et la date du
 dernier contrôle.
 
+À chaque nouvelle version, ou si `route_shapes` est vide, le même passage
+recharge les tracés des lignes depuis le fichier téléchargé
+(`route_shapes.refresh_route_shapes`, ≈ 1,5 s) ; un échec est signalé sans
+faire échouer l'archive.
+
 ```bash
-.venv/bin/python src/scripts/archive_gtfs.py            # --dest pour un autre dossier
+.venv/bin/python src/scripts/archive_gtfs.py            # --dest, --db pour d'autres chemins
+.venv/bin/python src/scripts/route_shapes.py            # tracés depuis la dernière archive (--zip, --db)
 ```
 
 ---
@@ -1220,6 +1233,14 @@ lecteur qui n'est pas analyste :
      `FOCUS_ZOOM`) quand l'arrêt est choisi ailleurs que sur la carte
      (recherche, « À surveiller », lien `?arret=`), pas après un clic sur la
      carte ;
+   - **lignes de l'arrêt sélectionné** : tracé réel de chaque ligne qui le
+     dessert (`route_shapes`, dans le sens de la ligne à cet arrêt d'après
+     `stop_direction`, les deux sens sinon ; `selected_stop_paths`,
+     `stop_route_paths`), couleur du palier de la ligne sur un liseré blanc,
+     étiquette au nom de la ligne, infobulle (état et score) ; les autres arrêts
+     passent en transparence. Le bandeau ajoute « Voir les lignes entières »,
+     qui cadre la carte sur tous les tracés ; une phrase sous la carte les
+     énumère avec leur état ;
    - le clic renvoie l'identifiant du quai à Python (`setTriggerValue`,
      callback `_on_map_click`) ; `map_payload` prépare les données (listes
      compactes de quais et de groupes) ; le composant est enregistré à
@@ -1677,7 +1698,8 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/veille_collecte.py` | Veille de la collecte, alertes email (timer 5 min) | `--dry-run`, `--test-email`, `--db`, `--log-dir`, `--state` |
 | `src/scripts/rafraichir_agregats.py` | Recalcul des agrégats d'hier et d'aujourd'hui (timer 5 min) | `--db`, `--log` |
 | `src/scripts/sauvegarde.py` | Sauvegarde quotidienne, contrôle, rotation, copie hors VM | `--db`, `--dest`, `--verifier [archive]`, `--sans-envoi` |
-| `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien) | `--dest` |
+| `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien), puis recharge les tracés | `--dest`, `--db` |
+| `src/scripts/route_shapes.py` | Tracés des lignes depuis un GTFS archivé (`route_shapes`) | `--zip`, `--db` |
 | `deploy/deployer.sh` | Déploiement sur la VM (section 20.2) | `--sans-pull`, `--sans-redemarrage` |
 | `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
@@ -2387,7 +2409,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 496, isolés (suite `pytest` complète : 496 passed), flux synthétiques
+- Tests : 505, isolés (suite `pytest` complète : 505 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

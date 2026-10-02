@@ -1667,8 +1667,64 @@ def _on_map_click() -> None:
         show_stop(clicked)
 
 
+@st.cache_data(ttl=3600)
+def load_route_shapes(_conn) -> dict:
+    """Tracé principal de chaque ligne et sens (table route_shapes) : {route_id: {direction_id: [[lon, lat], …]}}."""
+    try:
+        rows = _conn.execute("SELECT route_id, direction_id, coords FROM route_shapes").fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict = {}
+    for route_id, direction, coords in rows:
+        out.setdefault(route_id, {})[int(direction)] = json.loads(coords)
+    return out
+
+
+def _hex_rgb(color: str) -> list[int]:
+    color = color.lstrip("#")
+    return [int(color[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict) -> list[dict]:
+    """Tracés des lignes qui desservent un arrêt, colorés selon l'état de chaque ligne.
+
+    `lines` : une ligne par ligne de transport (route_id, ligne, route_type, score_fiabilite) ;
+    `directions` : sens de chaque ligne à cet arrêt (route_id → direction_id). Sans sens connu, les deux
+    sens sont tracés. Les lignes les plus fiables sont tracées d'abord : les moins fiables passent dessus.
+    """
+    out = []
+    for r in lines.sort_values("score_fiabilite", ascending=False).itertuples():
+        by_dir = shapes.get(r.route_id) or {}
+        direction = directions.get(r.route_id)
+        chosen = [by_dir[direction]] if direction in by_dir else list(by_dir.values())
+        for coords in chosen:
+            out.append({"r": r.route_id, "l": str(r.ligne), "s": round(float(r.score_fiabilite)),
+                        "e": tier_label(float(r.score_fiabilite)), "g": mode_glyph(r.route_type),
+                        "c": _hex_rgb(palette_hex(float(r.score_fiabilite), "score")),
+                        "t": _hex_rgb(KPI_FILLS[palette_kpi_tier({"fiability": float(r.score_fiabilite)}, "fiability")]),
+                        "p": coords})
+    return out
+
+
+def selected_stop_paths(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str | None) -> list:
+    if not stop_id:
+        return []
+    shapes = load_route_shapes(conn)
+    if not shapes:
+        return []
+    daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
+    if daily.empty:
+        return []
+    try:
+        directions = dict(conn.execute("SELECT route_id, direction_id FROM stop_direction WHERE stop_id = ?",
+                                       (stop_id,)).fetchall())
+    except sqlite3.Error:
+        directions = {}
+    return stop_route_paths(stop_lines_table(daily), shapes, directions)
+
+
 def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | None,
-                     selected_id: str | None) -> None:
+                     selected_id: str | None, paths: list | None = None) -> None:
     """Carte des arrêts (composant `carte.carte_arrets`, deck.gl).
 
     Couleur = palier du score de fiabilité de l'arrêt (fiable ≥ 80/100,
@@ -1680,8 +1736,12 @@ def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | N
     if stops.empty:
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
-    carte_arrets(map_payload(stops, groups, selected_id, commune, focus_on_load=selected_id is not None),
+    carte_arrets(map_payload(stops, groups, selected_id, commune, focus_on_load=selected_id is not None,
+                             paths=paths),
                  key="carte_arrets", on_click=_on_map_click)
+    if paths:
+        names = ", ".join(dict.fromkeys(f"{p['g']} {p['l']} ({p['e']})" for p in reversed(paths)))
+        st.caption(f"Tracés des lignes qui desservent l'arrêt sélectionné, à la couleur de leur état : {names}.")
     st.caption(
         "Cliquez sur un arrêt pour ouvrir sa fiche. En vue éloignée, les quais d'un même arrêt (les deux sens, "
         "parfois d'autres lignes) forment un seul marqueur, à la couleur du quai le moins fiable ; en zoomant, "
@@ -2589,7 +2649,9 @@ def render_page_territory(c: PageContext) -> None:
     st.session_state["stop_search"] = current
     st.selectbox("Chercher un arrêt", options, key="stop_search", placeholder="Nom de l'arrêt…",
                  format_func=lambda sid: labels.get(sid, sid), on_change=_on_stop_search)
-    _territorial_map(territorial, groups, c.commune, st.session_state.get("stop_id"))
+    selected = st.session_state.get("stop_id")
+    _territorial_map(territorial, groups, c.commune, selected,
+                     selected_stop_paths(c.conn, c.cutoff, c.since_ts, c.end_ts, selected))
     if st.session_state.get("stop_id"):
         render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
                           territorial_network,

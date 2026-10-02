@@ -96,6 +96,63 @@ function tooltipHtml(data, object) {
     + '<div class="uv-cta">Cliquer pour ouvrir la fiche →</div>';
 }
 
+function pathTooltip(object) {
+  return `<div class="uv-title">${esc(object.g)} Ligne ${esc(object.l)}</div>`
+    + `<div class="uv-row"><span class="uv-chip" style="background:rgb(${object.c.join(",")})"></span>`
+    + `<span style="font-weight:700">${esc(object.e.charAt(0).toUpperCase() + object.e.slice(1))}</span>`
+    + `<span class="uv-num">${object.s}/100</span></div>`
+    + '<div class="uv-foot">Ligne qui dessert l\'arrêt sélectionné</div>';
+}
+
+function pathLabels(paths) {
+  const seen = new Set();
+  const out = [];
+  for (const d of paths) {
+    if (seen.has(d.r) || d.p.length < 2) continue;
+    seen.add(d.r);
+    out.push({ ...d, at: d.p[Math.floor(d.p.length * 0.3)] });
+  }
+  return out;
+}
+
+function pathLayers(deck, paths) {
+  const common = {
+    data: paths,
+    getPath: (d) => d.p,
+    widthUnits: "pixels",
+    capRounded: true,
+    jointRounded: true,
+    parameters: { depthTest: false },
+  };
+  return [
+    new deck.PathLayer({ id: "lignes-lisere", ...common, getColor: [255, 255, 255, 235], getWidth: 10 }),
+    new deck.PathLayer({
+      id: "lignes-trace", ...common, getColor: (d) => [...d.c, 240], getWidth: 5,
+      pickable: true, autoHighlight: true, highlightColor: [40, 54, 24, 120],
+    }),
+  ];
+}
+
+function labelLayer(deck, paths) {
+  return new deck.TextLayer({
+      id: "lignes-noms",
+      data: pathLabels(paths),
+      getPosition: (d) => d.at,
+      getText: (d) => d.l,
+      getColor: (d) => [...d.t, 255],
+      getSize: 13,
+      fontFamily: "Lato, system-ui, sans-serif",
+      fontWeight: 900,
+      characterSet: "auto",
+      background: true,
+      getBackgroundColor: (d) => [...d.c, 255],
+      backgroundPadding: [7, 3, 7, 3],
+      getBorderColor: [255, 255, 255, 255],
+      getBorderWidth: 2,
+      pickable: true,
+    });
+}
+
 function buildLayers(deck, state) {
   const data = state.data;
   const zoom = state.map.getZoom();
@@ -119,6 +176,11 @@ function buildLayers(deck, state) {
     highlightColor: [254, 250, 224, 170],
   };
   const layers = [];
+  const paths = data.paths || [];
+  if (paths.length) {
+    layers.push(...pathLayers(deck, paths));
+    iconProps.opacity = 0.45;
+  }
   if (grouped) {
     layers.push(new deck.IconLayer({ id: "groupes", data: data.groups, getPosition: (d) => [d.x, d.y], ...iconProps }));
   } else {
@@ -152,6 +214,7 @@ function buildLayers(deck, state) {
     layers.push(new deck.IconLayer({ id: "selection-halo", ...common, getIcon: () => "halo", getSize: 46 }));
     layers.push(new deck.IconLayer({ id: "selection", ...common, getIcon: (d) => d.k, getSize: 26 }));
   }
+  if (paths.length) layers.push(labelLayer(deck, paths));
   return layers;
 }
 
@@ -167,9 +230,21 @@ function renderBadge(state, flyTo) {
     badge.className = "uv-badge";
     state.root.appendChild(badge);
   }
+  const paths = state.data.paths || [];
   badge.innerHTML = `<span class="uv-dot"></span><span><b>Arrêt sélectionné</b> · ${esc(sel.n)}`
-    + `${sel.d ? " — " + esc(sel.d) : ""}</span><button type="button">Centrer</button>`;
-  badge.querySelector("button").onclick = () => flyTo(sel, Math.max(state.map.getZoom(), state.data.focus_zoom));
+    + `${sel.d ? " — " + esc(sel.d) : ""}</span><button type="button" data-a="centrer">Centrer</button>`
+    + (paths.length ? '<button type="button" data-a="lignes">Voir les lignes entières</button>' : "");
+  badge.querySelector('[data-a="centrer"]').onclick = () => flyTo(sel, Math.max(state.map.getZoom(), state.data.focus_zoom));
+  const whole = badge.querySelector('[data-a="lignes"]');
+  if (whole) {
+    whole.onclick = () => {
+      const pts = paths.flatMap((d) => d.p);
+      const lons = pts.map((q) => q[0]);
+      const lats = pts.map((q) => q[1]);
+      state.map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+        { padding: 48, duration: 900, essential: true });
+    };
+  }
 }
 
 export default async function (component) {
@@ -244,12 +319,13 @@ export default async function (component) {
       layers: [],
       onHover: (info) => {
         const hit = info.object && info.layer && !info.layer.id.startsWith("selection");
-        state.map.getCanvas().style.cursor = hit ? "pointer" : "";
+        const onPath = hit && info.layer.id.startsWith("lignes");
+        state.map.getCanvas().style.cursor = hit && !onPath ? "pointer" : "";
         if (!hit) {
           state.tip.style.display = "none";
           return;
         }
-        state.tip.innerHTML = tooltipHtml(state.data, info.object);
+        state.tip.innerHTML = onPath ? pathTooltip(info.object) : tooltipHtml(state.data, info.object);
         state.tip.style.display = "block";
         const width = state.root.clientWidth;
         const height = state.root.clientHeight;
@@ -259,7 +335,7 @@ export default async function (component) {
         state.tip.style.top = `${Math.max(8, top)}px`;
       },
       onClick: (info) => {
-        if (!info.object || !info.layer || info.layer.id.startsWith("selection")) return;
+        if (!info.object || !info.layer || info.layer.id.startsWith("selection") || info.layer.id.startsWith("lignes")) return;
         const id = info.object.m ? info.object.w : info.object.i;
         state.lastClicked = id;
         setTriggerValue("clicked", id);

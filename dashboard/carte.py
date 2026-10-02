@@ -139,7 +139,7 @@ def map_view(stops: pd.DataFrame, commune: str | None) -> dict:
 
 
 def map_payload(stops: pd.DataFrame, groups: pd.DataFrame, selected_id: str | None, commune: str | None,
-                focus_on_load: bool = False) -> dict:
+                focus_on_load: bool = False, paths: list | None = None) -> dict:
     """Données transmises au composant : arrêts, regroupements, arrêt sélectionné et réglages.
 
     `stops` : un arrêt par ligne (stop_id, stop_name, direction, lat, lon,
@@ -169,6 +169,7 @@ def map_payload(stops: pd.DataFrame, groups: pd.DataFrame, selected_id: str | No
     uri, mapping = marker_atlas()
     return {
         "stops": out_stops, "groups": out_groups, "selected": selected_id if selected_id in index else None,
+        "paths": paths or [],
         "view": map_view(stops, commune), "view_key": commune or "__reseau__", "focus_on_load": focus_on_load,
         "atlas": {"url": uri, "mapping": mapping}, "size_px": list(STOP_SIZE_PIXELS), "split_zoom": SPLIT_ZOOM,
         "focus_zoom": FOCUS_ZOOM, "min_sep_px": MIN_SEP_PX, "height": MAP_HEIGHT,

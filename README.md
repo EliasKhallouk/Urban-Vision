@@ -42,8 +42,9 @@ quand.
 
 ## Fonctionnalités principales
 
-- **Tableau de bord web public** : carte par commune avec, pour chaque arrêt,
-  une fiche qui explique d'où vient le problème (ligne en cause, retard né sur
+- **Tableau de bord web public** : carte par commune où un clic sur un arrêt
+  dessine le tracé des lignes qui le desservent, à la couleur de leur état, avec,
+  pour chaque arrêt, une fiche qui explique d'où vient le problème (ligne en cause, retard né sur
   place ou venu de plus loin, heures et jours concernés) ; fiche de chaque
   ligne (où le retard se forme, arrêts non desservis, courses supprimées) ;
   créneaux et tendances ; réseau et modes de transport ; perturbations ;
@@ -66,7 +67,7 @@ quand.
   maintenance) : [`docs/DOCUMENTATION_TECHNIQUE.md`](docs/DOCUMENTATION_TECHNIQUE.md)
 - 🔧 **Prise en main pour développeurs** : une fois sur la machine, `docs/DOCUMENTATION_TECHNIQUE.md`
   (§ 5 Installation et § 13 Référence des scripts) donne toutes les commandes.
-- 🧪 **Tests** : suite `pytest` complète 496 tests, isolée de toute donnée réelle.
+- 🧪 **Tests** : suite `pytest` complète 505 tests, isolée de toute donnée réelle.
 
 ## Le projet
 
