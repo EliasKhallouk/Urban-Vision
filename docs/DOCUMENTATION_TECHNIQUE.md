@@ -1356,6 +1356,11 @@ puis la période :
   dernière étape, son infobulle dit laquelle (`back_label` : « Revenir à la
   ligne 1 »…) et il est grisé quand il n'y a rien avant.
 
+Toutes les listes déroulantes de l'application (`stSelectbox`) ont un cadre
+vert foncé à 45 % d'opacité, un chevron agrandi et un cadre plein au survol,
+pour qu'on les reconnaisse comme des menus (le thème rendait leur bordure
+blanche sur fond blanc).
+
 Les listes des widgets sont resynchronisées à chaque affichage sur
 `line_id` / `stop_id` (un widget dont les options changent avec la période
 serait sinon remis à zéro par Streamlit).

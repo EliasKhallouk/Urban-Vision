@@ -513,6 +513,12 @@ def inject_style() -> None:
         .stTabs [data-baseweb="tab"] {{ color: rgba(96, 108, 56, .70); padding: .55rem .15rem; font-size: .95rem; font-weight: 500; }}
         .stTabs [aria-selected="true"] {{ color: #283618; border-bottom-color: #283618; }}
         .stDataFrame {{ border: 1px solid rgba(221, 161, 94, .35); border-radius: 10px; overflow: hidden; }}
+        [data-testid="stSelectbox"] [role="group"] {{ border: 1px solid rgba(40, 54, 24, .45); background: #FFFFFF; box-shadow: 0 1px 2px rgba(40, 54, 24, .08); cursor: pointer; }}
+        [data-testid="stSelectbox"] [role="group"]:hover {{ border-color: #283618; }}
+        [data-testid="stSelectbox"] [role="group"]:focus-within {{ border-color: #283618; box-shadow: 0 0 0 2px rgba(221, 161, 94, .55); }}
+        [data-testid="stSelectbox"] [role="group"] input {{ cursor: pointer; }}
+        [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] {{ color: #283618; }}
+        [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] svg {{ width: 1.45rem; height: 1.45rem; }}
         [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: sticky; top: 3.75rem; z-index: 60; background: #FFFFFF; box-shadow: 0 -3.75rem 0 #FFFFFF; }}
         .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid #283618; }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
