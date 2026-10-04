@@ -513,6 +513,18 @@ def inject_style() -> None:
         .stTabs [data-baseweb="tab"] {{ color: rgba(96, 108, 56, .70); padding: .55rem .15rem; font-size: .95rem; font-weight: 500; }}
         .stTabs [aria-selected="true"] {{ color: #283618; border-bottom-color: #283618; }}
         .stDataFrame {{ border: 1px solid rgba(221, 161, 94, .35); border-radius: 10px; overflow: hidden; }}
+        [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: sticky; top: 3.75rem; z-index: 60; background: #FFFFFF; box-shadow: 0 -3.75rem 0 #FFFFFF; }}
+        .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid #283618; }}
+        .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3)::before,
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: 1.5rem; line-height: 1; color: #DDA15E; }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(5) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid rgba(221, 161, 94, .45); }}
+        .st-key-ctx_back button {{ background: #283618; color: #FEFAE0; border-color: #283618; }}
+        .st-key-ctx_back button p {{ color: #FEFAE0; font-weight: 700; }}
+        .st-key-ctx_back button:hover {{ background: #DDA15E; border-color: #DDA15E; }}
+        .st-key-ctx_back button:hover p {{ color: #283618; }}
+        .st-key-ctx_back button:disabled {{ background: #FFFFFF; border-color: rgba(221, 161, 94, .45); }}
+        .st-key-ctx_back button:disabled p {{ color: rgba(96, 108, 56, .55); font-weight: 600; }}
         .topbar-logo {{ display: flex; align-items: center; gap: .6rem; font-size: 1.05rem; font-weight: 700; color: #283618; letter-spacing: -.02em; white-space: nowrap; }}
         .topbar-logo img {{ height: 28px; width: auto; }}
         .topbar-logo .dot {{ width: .65rem; height: .65rem; border-radius: 50%; background: #283618; }}
@@ -1794,8 +1806,9 @@ INFO_PAGES = {"Rapports mensuels", "À propos"}
 DETAIL_HINT = ("Graphiques et tableaux détaillés (où, quand, quel type de retard, contexte) : activez "
                "« Vue détaillée » dans le menu de gauche.")
 GUIDE_STEPS = [
-    ("Choisissez votre territoire et la période",
-     "En haut de la page : une commune (ou tout le réseau) et un mois. Tout le reste s'adapte."),
+    ("Choisissez ce que vous regardez",
+     "La barre du haut, présente sur toutes les pages : une commune, une ligne, un arrêt, et le mois. "
+     "« Revenir » ramène à ce que vous regardiez juste avant."),
     ("Lisez l'état en un mot",
      "Chaque arrêt, ligne ou commune est **fiable** (vert olive), **à surveiller** (ocre) ou "
      "**problématique** (orange foncé). La forme indique le mode : ● tram, ■ bus, ▲ ferry."),
@@ -1919,7 +1932,55 @@ def scroll_if_requested(target: str) -> None:
     )
 
 
+HISTORY_KEY = "_ctx_history"
+HISTORY_MAX = 20
+CONTEXT_KEYS = ("sidebar_nav", "commune_idx", "line_id", "stop_id")
+
+
+def context_snapshot(session) -> dict:
+    return {k: session.get(k) for k in CONTEXT_KEYS}
+
+
+def remember(session=None) -> None:
+    """Mémorise ce que l'utilisateur regarde avant un changement, pour le bouton « Revenir »."""
+    session = st.session_state if session is None else session
+    snap = context_snapshot(session)
+    history = list(session.get(HISTORY_KEY) or [])
+    if not history or history[-1] != snap:
+        history.append(snap)
+    session[HISTORY_KEY] = history[-HISTORY_MAX:]
+
+
+def go_back() -> None:
+    history = list(st.session_state.get(HISTORY_KEY) or [])
+    if not history:
+        return
+    snap = history.pop()
+    st.session_state[HISTORY_KEY] = history
+    for key, value in snap.items():
+        if key == "sidebar_nav" and value is None:
+            continue
+        st.session_state[key] = value
+    st.session_state["commune_topbar"] = snap.get("commune_idx") or 0
+    st.session_state.pop("_from_stop", None)
+
+
+def back_label(snap: dict | None, communes: list[str], line_names: dict, stop_names: dict) -> str | None:
+    """Ce que l'utilisateur retrouvera en cliquant « Revenir » (None s'il n'y a rien avant)."""
+    if not snap:
+        return None
+    page = snap.get("sidebar_nav") or NAV_ITEMS[0]
+    if snap.get("stop_id") and page == PAGE_TERRITORY:
+        return f"l'arrêt {stop_names.get(snap['stop_id'], snap['stop_id'])}"
+    if snap.get("line_id") and page == PAGE_LINE:
+        return f"la ligne {line_names.get(snap['line_id'], snap['line_id'])}"
+    idx = snap.get("commune_idx") or 0
+    where = communes[idx - 1] if 0 < idx <= len(communes) else "tout le réseau"
+    return f"« {page} », {where}"
+
+
 def select_stop(stop_id: str | None) -> None:
+    remember()
     st.session_state["stop_id"] = stop_id
 
 
@@ -1936,6 +1997,7 @@ def open_stop(stop_id: str) -> None:
 
 def show_line(route_id: str) -> None:
     """Ouvre la fiche d'une ligne sur la page « Lignes » et y amène l'utilisateur."""
+    remember()
     st.session_state["line_id"] = route_id
     st.session_state.pop("_from_stop", None)
     st.session_state.pop("_dir_from_stop", None)
@@ -1954,12 +2016,32 @@ def line_from_stop(route_id: str, stop_id: str, stop_name: str) -> None:
     st.session_state["_dir_from_stop"] = stop_id
 
 
-def _on_line_pick() -> None:
-    show_line(st.session_state.get("line_pick"))
+ALL = "__tout__"
 
 
-def _on_stop_search() -> None:
-    show_stop(st.session_state.get("stop_search"))
+def _on_ctx_commune() -> None:
+    remember()
+    st.session_state["commune_idx"] = int(st.session_state.get("commune_topbar") or 0)
+    st.session_state["stop_id"] = None
+
+
+def _on_ctx_line() -> None:
+    chosen = st.session_state.get("ctx_line")
+    if chosen in (None, ALL):
+        remember()
+        st.session_state["line_id"] = None
+        return
+    open_line(chosen)
+    st.session_state["stop_id"] = None
+
+
+def _on_ctx_stop() -> None:
+    chosen = st.session_state.get("ctx_stop")
+    if chosen in (None, ALL):
+        remember()
+        st.session_state["stop_id"] = None
+        return
+    open_stop(chosen)
 
 
 def _on_table_select(table_key: str, ids_key: str, opener) -> None:
@@ -2268,7 +2350,7 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     for col, (sid, label, lignes, sc) in zip(cols, siblings):
         col.button(f"{label} ({lignes}) · {sc:.0f}/100", key=f"sibling_{sid}", on_click=show_stop, args=(sid,),
                    width="stretch")
-    cols[-1 if siblings else 0].button("↑ Revenir à la carte", key="back_to_map", on_click=request_scroll,
+    cols[-1 if siblings else 0].button("↑ Voir la carte", key="back_to_map", on_click=request_scroll,
                                        args=("carte",))
     kpis = [
         status_kpi(score, f"réseau : {reference_score:.0f} / 100"),
@@ -2460,8 +2542,6 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     if st.session_state.pop("_dir_from_stop", None) and from_dir is not None:
         for key in LINE_DIRECTION_KEYS:
             st.session_state[key] = from_dir
-    if back:
-        st.button(f"← Revenir à l'arrêt {back[1]}", key="back_to_stop", on_click=open_stop, args=(back[0],))
     if route_id in disturbed:
         st.warning(CAUTION_TEXT)
     ref = f"réseau : {network_score(ranking_net):.0f}"
@@ -2652,15 +2732,6 @@ def render_page_territory(c: PageContext) -> None:
                 'mode de la ligne principale (● tram, ■ bus, ▲ ferry). Taille : nombre de passages ; les '
                 'marqueurs grossissent quand on zoome.</div>', unsafe_allow_html=True)
     render_tier_legend("Fiabilité par arrêt")
-    labels = stop_labels(territorial_network)
-    options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],
-                     key=lambda sid: labels.get(sid, sid))
-    current = st.session_state.get("stop_id")
-    if current and current not in options:
-        options = [current] + options
-    st.session_state["stop_search"] = current
-    st.selectbox("Chercher un arrêt", options, key="stop_search", placeholder="Nom de l'arrêt…",
-                 format_func=lambda sid: labels.get(sid, sid), on_change=_on_stop_search)
     selected = st.session_state.get("stop_id")
     _territorial_map(territorial, groups, c.commune, selected,
                      selected_stop_paths(c.conn, c.cutoff, c.since_ts, c.end_ts, selected))
@@ -2738,7 +2809,7 @@ def render_page_lines(c: PageContext) -> None:
     worst_note = " — ⚠ perturbation signalée sur la période" if worst.route_id in c.disturbed else ""
     _verdict(f'À examiner en premier : <b>ligne {html.escape(str(worst.ligne))}</b>{worst_note}, score '
              f'{worst.score_fiabilite:.0f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de '
-             f'5 minutes. Sélectionnez une ligne dans le tableau pour ouvrir sa fiche.')
+             f'5 minutes. Choisissez une ligne dans le tableau ou dans la barre du haut pour ouvrir sa fiche.')
     left, right = st.columns([1.0, 1.0], gap="large")
     with left:
         st.markdown("#### Les 15 lignes les moins fiables")
@@ -2769,20 +2840,8 @@ def render_page_lines(c: PageContext) -> None:
         st.caption("Classement restreint aux arrêts de la commune ; la fiche porte sur toute la ligne, car "
                    "le retard subi dans une commune se forme souvent ailleurs sur le parcours.")
 
-    options_df = c.ranking_net[c.ranking_net["observations"] >= MIN_OBSERVATIONS]
-    if options_df.empty:
-        options_df = c.ranking_net
-    line_labels = {r.route_id: f"{mode_glyph(r.route_type)} Ligne {r.ligne} · score {r.score_fiabilite:.0f}/100"
-                   for r in options_df.itertuples()}
-    line_options = list(line_labels)
-    if st.session_state.get("line_id") is None and line_options:
+    if st.session_state.get("line_id") is None and not c.visible_ranking.empty:
         st.session_state["line_id"] = str(c.visible_ranking.iloc[0]["route_id"])
-    current_line = st.session_state.get("line_id")
-    if current_line and current_line not in line_options:
-        line_options = [current_line] + line_options
-    st.session_state["line_pick"] = current_line
-    st.selectbox("Ligne analysée", line_options, key="line_pick",
-                 format_func=lambda rid: line_labels.get(rid, rid), on_change=_on_line_pick)
     if st.session_state.get("line_id"):
         render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["line_id"],
                           c.ranking_net, c.disturbed, c.commune,
@@ -3364,6 +3423,61 @@ PAGES = {
 }
 
 
+def line_options(ranking: pd.DataFrame, current: str | None) -> dict:
+    """Lignes proposées dans la barre : « Toutes les lignes », puis les lignes du périmètre, la moins fiable d'abord."""
+    out = {ALL: "Toutes les lignes"}
+    for r in ranking.sort_values("score_fiabilite").itertuples():
+        out[r.route_id] = f"{mode_glyph(r.route_type)} {r.ligne} · {tier_label(r.score_fiabilite)}"
+    if current and current not in out:
+        out[current] = f"Ligne {current}"
+    return out
+
+
+def stop_options(stops: pd.DataFrame, current: str | None, current_label: str | None = None) -> dict:
+    """Arrêts proposés dans la barre, par ordre alphabétique : nom et direction."""
+    out = {ALL: "Tous les arrêts"}
+    if not stops.empty:
+        for r in stops.sort_values(["stop_name", "direction"]).itertuples():
+            out[r.stop_id] = f"{r.stop_name} — {r.direction}" if r.direction else str(r.stop_name)
+    if current and current not in out:
+        out[current] = current_label or current
+    return out
+
+
+def render_context_bar(conn, cutoff: int, since_ts, end_ts, commune: str | None, commune_options: list,
+                       ranking: pd.DataFrame, cols) -> None:
+    """Fil d'Ariane persistant : Revenir, commune, ligne, arrêt ; présent sur toutes les pages."""
+    line_id = st.session_state.get("line_id")
+    stop_id = st.session_state.get("stop_id")
+    lines = line_options(ranking, line_id)
+    if line_id:
+        stops_df = load_line_stops(conn, cutoff, since_ts, end_ts, line_id)
+        if commune and not stops_df.empty:
+            stops_df = stops_df[stops_df["commune"] == commune]
+    else:
+        stops_df = load_territorial(conn, cutoff, since_ts, end_ts, commune=commune)
+    network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
+    network_names = stop_labels(network)
+    known = network[["stop_id", "stop_name", "direction"]]
+    stops = stop_options(known[known["stop_id"].isin(stops_df["stop_id"])] if not stops_df.empty else known.head(0),
+                         stop_id, network_names.get(stop_id))
+    st.session_state["ctx_line"] = line_id if line_id in lines else ALL
+    st.session_state["ctx_stop"] = stop_id if stop_id in stops else ALL
+    history = st.session_state.get(HISTORY_KEY) or []
+    target = back_label(history[-1] if history else None, commune_options[1:],
+                        {k: v.split(" · ")[0].split(" ", 1)[-1] for k, v in lines.items()}, network_names)
+    with cols[0]:
+        st.button("← Revenir", key="ctx_back", on_click=go_back, disabled=target is None, width="stretch",
+                  help=f"Revenir à {target}" if target else "Rien à quoi revenir pour l'instant.")
+    with cols[2]:
+        st.selectbox("Ligne", list(lines), format_func=lambda k: lines[k], key="ctx_line",
+                     on_change=_on_ctx_line, help="Ouvre la fiche de la ligne (page « Lignes »).")
+    with cols[3]:
+        st.selectbox("Arrêt de la ligne" if line_id else "Arrêt", list(stops), format_func=lambda k: stops[k],
+                     key="ctx_stop", on_change=_on_ctx_stop,
+                     help="Ouvre la fiche de l'arrêt sous la carte (page « Mon territoire »).")
+
+
 def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, total: int, n_lines: int,
                 skipped_total: int, eligible_total: int, local: bool, detailed: bool) -> list[tuple]:
     """Cartes du bandeau : quatre repères en mots en vue rapide, les cinq mesures en vue détaillée."""
@@ -3408,29 +3522,18 @@ def main() -> None:
             st.warning("Aucune observation disponible pour le moment.")
             return
         communes = load_communes(conn)
-        commune_options = ["Réseau complet (toutes communes)"] + communes
+        commune_options = ["Tout le réseau"] + communes
         st.session_state.setdefault("commune_idx", 0)
 
-        # ---- Barre supérieure persistante : identité (sidebar) + commune + plage.
-        tb = st.columns([0.62, 0.04, 1.0, 0.04, 0.8])
-        with tb[0]:
-            st.markdown(
-                '<div class="topbar-logo"><span class="dot"></span>Observatoire de la fiabilité</div>',
-                unsafe_allow_html=True,
-            )
-        with tb[2]:
-            commune_label = st.selectbox(
-                "Territoire", range(len(commune_options)),
-                format_func=lambda i: commune_options[i],
-                index=st.session_state["commune_idx"],
-                key="commune_topbar",
-                help="Restreint toutes les pages aux arrêts situés dans la commune.",
-            )
-        st.session_state["commune_idx"] = int(commune_label)
-        selected_commune_label = commune_options[st.session_state["commune_idx"]]
-        commune = None if selected_commune_label.startswith("Réseau complet") else selected_commune_label
-
-        with tb[4]:
+        with st.container(key="ctx_bar"):
+            cols = st.columns([0.8, 1.1, 0.95, 1.35, 1.1], gap="small", vertical_alignment="bottom")
+        with cols[1]:
+            st.selectbox("Commune", range(len(commune_options)), format_func=lambda i: commune_options[i],
+                         index=st.session_state["commune_idx"], key="commune_topbar", on_change=_on_ctx_commune,
+                         help="Restreint toutes les pages aux arrêts situés dans la commune.")
+        st.session_state["commune_idx"] = int(st.session_state.get("commune_topbar") or 0)
+        commune = communes[st.session_state["commune_idx"] - 1] if st.session_state["commune_idx"] else None
+        with cols[4]:
             period = period_picker(conn, cutoff)
         since_ts, end_ts = _ts(period.start), _ts(period.end)
 
@@ -3443,6 +3546,7 @@ def main() -> None:
         visible_ranking = ranking[ranking["observations"] >= MIN_OBSERVATIONS].copy()
         if visible_ranking.empty:
             visible_ranking = ranking.copy()
+        render_context_bar(conn, cutoff, since_ts, end_ts, commune, commune_options, visible_ranking, cols)
 
         total = int(ranking["observations"].sum())
         on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))

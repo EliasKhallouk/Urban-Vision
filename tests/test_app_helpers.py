@@ -553,3 +553,73 @@ class TestRapportsPublies:
 
     def test_slug_identique_au_lot_de_rapports(self):
         assert app_mod.report_slug("Saint-Médard-en-Jalles") == "saint-médard-en-jalles"
+
+
+class TestFilDAriane:
+    @pytest.fixture(autouse=True)
+    def _etat_vierge(self):
+        import streamlit as st
+
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        yield
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+
+    def test_revenir_retrouve_la_ligne_apres_l_ouverture_d_un_arret(self):
+        import streamlit as st
+
+        st.session_state.update({"sidebar_nav": app_mod.PAGE_LINE, "commune_idx": 3, "line_id": "11", "stop_id": None})
+        app_mod.open_stop("s9")
+        assert (st.session_state["sidebar_nav"], st.session_state["stop_id"]) == (app_mod.PAGE_TERRITORY, "s9")
+        app_mod.go_back()
+        assert st.session_state["sidebar_nav"] == app_mod.PAGE_LINE
+        assert (st.session_state["line_id"], st.session_state["stop_id"]) == ("11", None)
+        assert st.session_state["commune_topbar"] == 3
+        assert st.session_state[app_mod.HISTORY_KEY] == []
+
+    def test_choisir_une_ligne_dans_la_barre_ouvre_sa_fiche(self):
+        import streamlit as st
+
+        st.session_state.update({"sidebar_nav": app_mod.PAGE_TERRITORY, "stop_id": "s1", "ctx_line": "59"})
+        app_mod._on_ctx_line()
+        assert (st.session_state["line_id"], st.session_state["sidebar_nav"]) == ("59", app_mod.PAGE_LINE)
+        assert st.session_state["stop_id"] is None
+        st.session_state["ctx_stop"] = "s4"
+        app_mod._on_ctx_stop()
+        assert (st.session_state["stop_id"], st.session_state["sidebar_nav"]) == ("s4", app_mod.PAGE_TERRITORY)
+
+    def test_changer_de_commune_ferme_l_arret(self):
+        import streamlit as st
+
+        st.session_state.update({"commune_idx": 0, "stop_id": "s1", "commune_topbar": 2})
+        app_mod._on_ctx_commune()
+        assert (st.session_state["commune_idx"], st.session_state["stop_id"]) == (2, None)
+        assert len(st.session_state[app_mod.HISTORY_KEY]) == 1
+
+    def test_historique_borne_et_sans_doublon(self):
+        session = {"sidebar_nav": "x"}
+        app_mod.remember(session)
+        app_mod.remember(session)
+        assert len(session[app_mod.HISTORY_KEY]) == 1
+        for i in range(app_mod.HISTORY_MAX + 5):
+            session["line_id"] = str(i)
+            app_mod.remember(session)
+        assert len(session[app_mod.HISTORY_KEY]) == app_mod.HISTORY_MAX
+
+    def test_libelle_du_retour(self):
+        names = ({"11": "11"}, {"s9": "Gambetta"})
+        assert app_mod.back_label(None, ["Bègles"], *names) is None
+        assert app_mod.back_label({"sidebar_nav": app_mod.PAGE_TERRITORY, "stop_id": "s9"}, [], *names) == "l'arrêt Gambetta"
+        assert app_mod.back_label({"sidebar_nav": app_mod.PAGE_LINE, "line_id": "11"}, [], *names) == "la ligne 11"
+        assert app_mod.back_label({"sidebar_nav": "Quand ?", "commune_idx": 1}, ["Bègles"], *names) == "« Quand ? », Bègles"
+
+    def test_options_de_la_barre(self):
+        ranking = pd.DataFrame({"route_id": ["A", "B"], "route_type": [0, 3], "ligne": ["A", "12"],
+                                "score_fiabilite": [85.0, 40.0]})
+        assert list(app_mod.line_options(ranking, None).values()) == [
+            "Toutes les lignes", "■ 12 · problématique", "● A · fiable"]
+        assert app_mod.line_options(ranking, "Z")["Z"] == "Ligne Z"
+        stops = pd.DataFrame({"stop_id": ["2", "1"], "stop_name": ["Victoire", "Gambetta"], "direction": ["", "vers Issac"]})
+        assert list(app_mod.stop_options(stops, "9", "Quinconces").values()) == [
+            "Tous les arrêts", "Gambetta — vers Issac", "Victoire", "Quinconces"]

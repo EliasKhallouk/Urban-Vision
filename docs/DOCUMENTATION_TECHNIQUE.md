@@ -240,7 +240,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 505 tests pytest
+└── tests/                          # 27 fichiers, 511 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1207,7 +1207,7 @@ lecteur qui n'est pas analyste :
    5 points ; l'arrêt et la ligne qui cumulent le plus de passages > 5 min
    parmi ceux sous 80/100, les quais d'un même arrêt étant comptés ensemble ;
    le texte et la légende sous le bloc (`watchlist_rule`) donnent ces
-   critères ; bouton « Ouvrir la fiche »), liste « Chercher un arrêt », puis
+   critères ; bouton « Ouvrir la fiche »), puis
    la **carte des arrêts** (`dashboard/carte.py` + `dashboard/carte_arrets.js`,
    composant `st.components.v2` qui pilote deck.gl 9.1 sur un fond MapLibre,
    style vectoriel « Positron » de Carto ; arrêts de `load_territorial`, depuis
@@ -1250,12 +1250,10 @@ lecteur qui n'est pas analyste :
      l'import de `carte.py` et réenregistré au premier affichage s'il a été
      importé hors du serveur Streamlit.
    **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt
-   de la carte, par la liste de recherche, par le bloc « À surveiller » ou par
-   une ligne du tableau des arrêts (`st.dataframe(on_select=…)`) ; ces
-   entrées écrivent la même clé
-   `st.session_state["stop_id"]` (la liste de recherche a sa propre clé
-   `stop_search`, resynchronisée à chaque affichage : un widget dont les
-   options changent avec la période serait sinon remis à zéro) et font
+   de la carte, par la liste « Arrêt » de la barre de contexte, par le bloc
+   « Priorités du moment » ou par une ligne du tableau des arrêts
+   (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
+   `st.session_state["stop_id"]` et font
    défiler la page jusqu'à la fiche (`request_scroll` / `scroll_if_requested` :
    script `scrollIntoView` injecté une fois par `st.html(...,
    unsafe_allow_javascript=True)`, cibles fixes `.fiche-arret`,
@@ -1264,9 +1262,9 @@ lecteur qui n'est pas analyste :
    `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
 2. **Lignes** — verdict (ligne à examiner en premier), les 15 lignes les moins
    fiables (`ranking_chart`), tableau de toutes les lignes du périmètre (une
-   sélection ouvre la fiche), liste « Ligne analysée » (toutes les lignes du
-   réseau d'au moins `MIN_OBSERVATIONS` passages ; ligne affichée dans
-   `st.session_state["line_id"]`, widget `line_pick`) et **fiche ligne**
+   sélection ouvre la fiche) et **fiche ligne** de la ligne choisie dans la
+   barre de contexte ou le tableau (`st.session_state["line_id"]` ; à défaut, la
+   ligne à examiner en premier)
    (§11.7), calculée sur toute la ligne quel que soit le filtre « Territoire ».
    Toute ouverture de fiche ligne fait défiler la page jusqu'à ses
    indicateurs.
@@ -1336,8 +1334,31 @@ elle tombe avant le premier jour de données. Cette période sert à toutes les
 surveiller », vue *Dans le temps*. Bornes : jours de service, fin exclue
 (`load_service_days` donne le premier et le dernier jour disponibles).
 
-Top bar persistante : identité, filtre « Territoire » (communes issues de
-`stop_municipalities`), sélecteur de période.
+**Barre de contexte** (`render_context_bar`, conteneur `ctx_bar`), en haut de
+toutes les pages et collée en haut de l'écran au défilement (CSS `sticky` sur
+son `stLayoutWrapper`) : fil d'Ariane « ← Revenir » · Commune › Ligne › Arrêt,
+puis la période :
+
+- **Commune** (`commune_topbar`, « Tout le réseau » puis les communes de
+  `stop_municipalities`) : restreint toutes les pages ; en changer ferme
+  l'arrêt ouvert (`_on_ctx_commune`).
+- **Ligne** (`ctx_line`, `line_options` : « Toutes les lignes », puis les lignes
+  du périmètre, la moins fiable d'abord, avec leur état) : ouvre la fiche ligne
+  sur la page « Lignes », quelle que soit la page en cours (`_on_ctx_line`).
+- **Arrêt** (`ctx_stop`, `stop_options`) : les arrêts de la ligne choisie dans
+  la commune (« Arrêt de la ligne »), sinon ceux de la commune ; libellés
+  « nom — direction » identiques au titre de la fiche ; ouvre la fiche arrêt
+  sous la carte de « Mon territoire » (`_on_ctx_stop`).
+- **← Revenir** (`go_back`) : chaque changement de ce qui est regardé (barre,
+  clic sur la carte, tableaux, priorités, boutons des fiches) mémorise
+  d'abord la page, la commune, la ligne et l'arrêt affichés (`remember`,
+  `_ctx_history`, 20 étapes au plus, `HISTORY_MAX`) ; le bouton restaure la
+  dernière étape, son infobulle dit laquelle (`back_label` : « Revenir à la
+  ligne 1 »…) et il est grisé quand il n'y a rien avant.
+
+Les listes des widgets sont resynchronisées à chaque affichage sur
+`line_id` / `stop_id` (un widget dont les options changent avec la période
+serait sinon remis à zéro par Streamlit).
 
 ### 11.4 Graphiques Highcharts (`dashboard/highcharts.py`)
 
@@ -1480,8 +1501,8 @@ indicateurs (score comparé au réseau, **évolution** : score de la période
 moins celui de la période de comparaison, avec le score de comparaison ;
 passages > 5 min, arrêts non desservis, taille de l'échantillon), bloc
 « En bref », bloc « Pistes », bouton principal « Ouvrir la fiche de la ligne
-… » (ligne responsable ; la fiche ligne garde un bouton « ← Revenir à l'arrêt
-… »), puis 4 sous-vues :
+… » (ligne responsable ; « ← Revenir » dans la barre de contexte ramène à
+l'arrêt), puis 4 sous-vues :
 
 | Sous-vue | Contenu |
 |---|---|
@@ -2413,7 +2434,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 505, isolés (suite `pytest` complète : 505 passed), flux synthétiques
+- Tests : 511, isolés (suite `pytest` complète : 511 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2458,7 +2479,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2485,6 +2506,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I22 | Phrases des fiches : « entre Allende et Allende », « Tronçon Allende → Allende » quand deux arrêts consécutifs d'un parcours portent le même nom (deux quais d'un même arrêt) | « à l'arrêt Allende », « Arrêt Allende » (`diagnostic.segment_path`, `segment_title`) ; tests `TestTronconsMemeNom` |
 | I23 | Bouton « Compris » du guide de lecture : `st.rerun()` relançait le calcul complet de la page (plusieurs secondes) | Bouton retiré, la boîte se ferme par ✕ ou Échap (`show_guide`) |
 | I24 | Le guide de lecture se rouvrait à chaque rechargement (nouvelle session Streamlit) ; le bouton « Guide de lecture » devenait illisible au survol | Cookie `uv_guide_vu` ; couleur de survol des boutons de la sidebar (fond ocre, texte vert foncé) |
+| I25 | Test utilisateur du 04/10/2026 : la commune se choisissait dans un réglage peu visible, la ligne seulement dans « Lignes », l'arrêt seulement dans « Mon territoire », et une fiche ligne ouverte autrement que depuis un arrêt n'avait pas de retour | Barre de contexte persistante en fil d'Ariane avec « ← Revenir » et historique (§11.3) ; listes « Chercher un arrêt » et « Ligne analysée » et bouton « Revenir à l'arrêt » remplacés par la barre ; tests `TestFilDAriane` |
 
 ### 26.4 Dette documentaire
 
