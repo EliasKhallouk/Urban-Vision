@@ -458,12 +458,12 @@ class TestMethodV2Caption:
 
     def test_phrase_complete(self):
         assert app_mod.method_v2_caption(self._v2(), "A") == (
-            "Méthode 2.0 (en test) : score 72.3 ± 2.1 / 100 · ponctualité stricte (de −1 à +5 min) 80.0 % · "
-            "service assuré 93.2 % · attente excédentaire +45 s.")
+            "Méthode 2.0 (en test) : score 72,3 ± 2,1 / 100 · ponctualité stricte (de −1 à +5 min) 80,0 % · "
+            "service assuré 93,2 % · attente excédentaire +45 s.")
 
     def test_sans_marge_ni_regularite(self):
         text = app_mod.method_v2_caption(self._v2(marge=None, attente_excedentaire=None), "A")
-        assert "score 72.3 / 100" in text
+        assert "score 72,3 / 100" in text
         assert "attente" not in text
 
     def test_ligne_ecartee_et_indisponible(self):
@@ -511,8 +511,14 @@ class TestVueRapide:
 
     def test_aide_echappee_dans_la_carte(self):
         html_card = app_mod.kpi_card("Score", "80", None, "neutral", 'Part des "passages" < 5 min')
-        assert 'title="Part des &quot;passages&quot; &lt; 5 min"' in html_card
+        assert 'role="tooltip">Part des &quot;passages&quot; &lt; 5 min</span>' in html_card
+        assert 'tabindex="0"' in html_card and "lexique" not in html_card
         assert "kpi-help" not in app_mod.kpi_card("Score", "80")
+
+    def test_aide_avec_lien_vers_le_lexique(self):
+        card = app_mod.kpi_card("État", "Fiable", None, "positif", app_mod.HELP_TEXTS["score"])
+        assert '<a href="?lexique=score-de-fiabilite" target="_blank" rel="noopener">Voir dans le lexique ↗</a>' in card
+        assert "--kpi-bg:#606c38" in card
 
     def test_guide_au_premier_affichage_seulement(self):
         assert app_mod.should_show_guide({}, {}) is True
@@ -623,3 +629,47 @@ class TestFilDAriane:
         stops = pd.DataFrame({"stop_id": ["2", "1"], "stop_name": ["Victoire", "Gambetta"], "direction": ["", "vers Issac"]})
         assert list(app_mod.stop_options(stops, "9", "Quinconces").values()) == [
             "Tous les arrêts", "Gambetta — vers Issac", "Victoire", "Quinconces"]
+
+
+class TestLexique:
+    def test_identifiants_des_termes(self):
+        assert app_mod.lexique_slug("À l'heure (ponctualité)") == "a-l-heure-ponctualite"
+        assert app_mod.lexique_slug("Retards de plus de 5 min") == "retards-de-plus-de-5-min"
+        slugs = [app_mod.lexique_slug(term) for term, _ in app_mod.LEXIQUE]
+        assert len(slugs) == len(set(slugs))
+
+    def test_chaque_aide_renvoie_a_un_terme_existant(self):
+        terms = {term for term, _ in app_mod.LEXIQUE}
+        assert set(app_mod.HELP_TERMS) == set(app_mod.HELP_TEXTS)
+        assert set(app_mod.HELP_TERMS.values()) <= terms
+
+    def test_lien_direct_ouvre_le_lexique(self):
+        import streamlit as st
+
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.query_params.clear()
+        st.query_params["lexique"] = "jour-degrade"
+        try:
+            app_mod.apply_query_params()
+            assert st.session_state["sidebar_nav"] == app_mod.PAGE_DATA
+            assert st.session_state["data_view"] == "Lexique"
+            assert st.session_state["lexique_focus"] == "jour-degrade"
+            assert app_mod.should_show_guide({}, {"lexique": "jour-degrade"}) is False
+        finally:
+            st.query_params.clear()
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+
+
+class TestNombresALaFrancaise:
+    def test_virgule_et_signe(self):
+        assert app_mod.format_number(75.06, 1) == "75,1"
+        assert app_mod.format_number(-9.94, 1, signed=True) == "−9,9"
+        assert app_mod.format_number(3.5, 1, signed=True) == "+3,5"
+        assert app_mod.format_number(None) == "—"
+
+    def test_formateur_de_tableau(self):
+        fmt = app_mod.number_formatter(2, " %")
+        assert fmt(1.234) == "1,23 %"
+        assert fmt(float("nan")) == "—"

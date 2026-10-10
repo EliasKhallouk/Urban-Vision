@@ -22,6 +22,7 @@ import math
 import re
 import sqlite3
 import sys
+import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as dtime, timedelta
@@ -37,7 +38,9 @@ import diagnostic as dg
 
 from diagnostic import (
     PERIOD_ORDER,
+    format_number,
     format_seconds,
+    number_formatter,
     reliability_score,
     median_from_hists as _median_from_hists,
     period_labels as _period_labels,
@@ -484,8 +487,18 @@ def inject_style() -> None:
         [data-testid="stMain"] [data-testid="stMarkdownContainer"] a {{ color: #283618; text-decoration-color: #DDA15E; }}
         .kpi-filled, .kpi-filled .kpi-label, .kpi-filled .kpi-value, .kpi-filled .kpi-sublabel {{ color: var(--kpi-ink) !important; }}
         .kpi-filled .kpi-sublabel {{ opacity: .9; }}
-        .kpi-filled .kpi-help {{ border-color: var(--kpi-ink); }}
-        .kpi-help {{ display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: .3rem; border-radius: 50%; border: 1px solid rgba(96, 108, 56, .55); font-size: 10px; cursor: help; text-transform: none; vertical-align: 1px; }}
+        .lexique-item {{ padding: .5rem .75rem; margin: 0 -.75rem; border-left: 3px solid transparent; border-radius: 4px; }}
+        .lexique-focus {{ background: #FEFAE0; border-left-color: #DDA15E; }}
+        .kpi-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: .35rem; border-radius: 50%; background: #283618; color: #FEFAE0; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: none; vertical-align: 1px; cursor: help; }}
+        .kpi-filled .kpi-help {{ background: var(--kpi-ink); color: var(--kpi-bg); }}
+        .kpi-help:focus-visible {{ outline: 2px solid #DDA15E; outline-offset: 2px; }}
+        .kpi-tip {{ display: none; position: absolute; z-index: 30; top: calc(100% + 8px); left: -12px; width: 260px; padding: .65rem .75rem; border-radius: 8px; background: #FFFFFF; border: 1px solid rgba(221, 161, 94, .6); box-shadow: 0 6px 18px rgba(40, 54, 24, .18); color: #283618 !important; font-size: 13px; font-weight: 500; line-height: 1.45; letter-spacing: 0; text-transform: none; text-align: left; white-space: normal; cursor: default; }}
+        .kpi-tip::before {{ content: ""; position: absolute; top: -10px; left: 0; right: 0; height: 10px; }}
+        .kpi-tip a {{ display: block; margin-top: .45rem; color: #283618 !important; font-weight: 700; text-decoration-color: #DDA15E; }}
+        .kpi-help:hover .kpi-tip, .kpi-help:focus-within .kpi-tip {{ display: block; }}
+        [data-testid="stColumn"]:last-child .kpi-tip {{ left: auto; right: -12px; }}
+        [data-testid="stTooltipIcon"] svg {{ width: 19px; height: 19px; stroke: #283618; stroke-width: 2.4; }}
+        [data-testid="stTooltipIcon"] button {{ opacity: 1; }}
 
         .eyebrow {{ color: #283618; font-size: .76rem; text-transform: uppercase; letter-spacing: .15em; font-weight: 700; }}
         .hero-subtitle {{ color: rgba(96, 108, 56, .70); font-size: .94rem; font-weight: 500; margin-bottom: 1.4rem; }}
@@ -1100,7 +1113,7 @@ def _short_days(days: list[str]) -> str:
 
 
 def _with_margin(value: float, margin: float | None) -> str:
-    return f"{value:.1f}" if margin is None else f"{value:.1f} ± {margin:.1f}"
+    return f"{format_number(value, 1)}" if margin is None else f"{format_number(value, 1)} ± {format_number(margin, 1)}"
 
 
 def method_v2_caption(v2: dict | None, route_id: str | None = None) -> str | None:
@@ -1113,8 +1126,8 @@ def method_v2_caption(v2: dict | None, route_id: str | None = None) -> str | Non
     if not v2["disponible"]:
         return None
     parts = [f"score {_with_margin(v2['score'], v2['marge'])} / 100",
-             f"ponctualité stricte (de −1 à +5 min) {v2['ponctualite']:.1f} %",
-             f"service assuré {v2['service']:.1f} %"]
+             f"ponctualité stricte (de −1 à +5 min) {format_number(v2['ponctualite'], 1)} %",
+             f"service assuré {format_number(v2['service'], 1)} %"]
     if v2["attente_excedentaire"] is not None:
         parts.append(f"attente excédentaire {format_seconds(v2['attente_excedentaire'], signed=True)}")
     return "Méthode 2.0 (en test) : " + " · ".join(parts) + "."
@@ -1797,6 +1810,12 @@ LEXIQUE = [
     ("Arrêt non desservi", "Le véhicule passe sans s'arrêter alors que l'arrêt était prévu (le flux de données "
                            "le signale « SKIPPED »)."),
     ("Course supprimée", "Une course prévue qui n'a pas circulé du tout."),
+    ("Retard moyen", "L'écart moyen entre l'heure de départ réelle et l'heure prévue, sur tous les passages. "
+                     "Un départ en avance compte comme un retard négatif."),
+    ("Retards de plus de 5 min", "La part des passages partis avec plus de 5 minutes de retard sur l'horaire "
+                                 "prévu."),
+    ("Évolution", "L'écart, en points sur 100, entre le score de la période choisie et celui de la période "
+                  "précédente (le mois précédent pour un mois)."),
     ("Retard déjà présent / retard pris", "En comparant le retard d'un même véhicule d'un arrêt au suivant, on "
                                           "sait si le retard existait déjà en arrivant ou s'il est apparu entre "
                                           "les deux arrêts (sur ce « tronçon »)."),
@@ -1807,7 +1826,21 @@ LEXIQUE = [
                       "plus. Moins sensible qu'une moyenne à quelques très gros retards."),
     ("Score 2.0 (en test)", "Mesure plus exigeante, calculée à côté du score : un départ en avance de plus d'une "
                             "minute n'est pas à l'heure et les courses supprimées comptent. Voir « Méthode »."),
+    ("Observation", "Une ligne reçue du flux de données en temps réel de TBM. Sert à suivre le volume de la "
+                    "collecte ; un même passage est observé plusieurs fois avant son départ."),
 ]
+HELP_TERMS = {"score": "Score de fiabilité", "ponctualite": "À l'heure (ponctualité)", "retard": "Retard moyen",
+              "skip": "Arrêt non desservi", "passage": "Passage"}
+
+
+def lexique_slug(term: str) -> str:
+    """Identifiant d'un terme du lexique, utilisé dans les liens (?lexique=…)."""
+    ascii_text = unicodedata.normalize("NFKD", term).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")
+
+
+def lexique_link(term: str) -> str:
+    return f"?lexique={lexique_slug(term)}"
 INFO_PAGES = {"Rapports mensuels", "À propos"}
 DETAIL_HINT = ("Graphiques et tableaux détaillés (où, quand, quel type de retard, contexte) : activez "
                "« Vue détaillée » dans le menu de gauche.")
@@ -1860,7 +1893,7 @@ GUIDE_COOKIE = "uv_guide_vu"
 def should_show_guide(session: dict, query_params: dict, cookies: dict | None = None) -> bool:
     """Guide à la première visite : ni déjà vu dans la session, ni mémorisé par le navigateur, ni lien vers une fiche."""
     return (not session.get("guide_seen") and GUIDE_COOKIE not in (cookies or {})
-            and not ({"arret", "ligne"} & set(query_params)))
+            and not ({"arret", "ligne", "lexique"} & set(query_params)))
 
 
 def remember_guide_seen() -> None:
@@ -1885,10 +1918,13 @@ def kpi_card(label: str, value: str, sublabel: str | None = None, polarity: str 
     border = _kpi_border(polarity)
     filled = KPI_FILLS.get(polarity)
     style = (f"border-left-color:{border}" if filled is None
-             else f"background:{border};border-color:{border};--kpi-ink:{filled}")
+             else f"background:{border};border-color:{border};--kpi-ink:{filled};--kpi-bg:{border}")
     sub = f'<div class="kpi-sublabel">{sublabel}</div>' if sublabel else ""
-    tip = (f' <span class="kpi-help" title="{html.escape(help, quote=True)}" role="img" '
-           f'aria-label="{html.escape(help, quote=True)}">?</span>') if help else ""
+    term = next((HELP_TERMS[k] for k, text in HELP_TEXTS.items() if text == help), None)
+    link = (f'<a href="{lexique_link(term)}" target="_blank" rel="noopener">Voir dans le lexique ↗</a>'
+            if term else "")
+    tip = (f' <span class="kpi-help" tabindex="0" role="button" aria-label="Aide : {html.escape(label, quote=True)}">'
+           f'?<span class="kpi-tip" role="tooltip">{html.escape(help)}{link}</span></span>') if help else ""
     return (
         f'<div class="kpi-card{"" if filled is None else " kpi-filled"}" style="{style}">'
         f'<div class="kpi-label">{label}{tip}</div>'
@@ -1902,6 +1938,7 @@ def render_kpis(items) -> None:
 
 
 PAGE_TERRITORY = "Mon territoire"
+PAGE_DATA = "Données & méthode"
 PAGE_LINE = "Lignes"
 STOP_VIEWS = ["Où ?", "Quand ?", "Quel type ?", "Contexte"]
 LINE_VIEWS = ["Retards : où ?", "Service non rendu", "Quand ?", "Contexte"]
@@ -2064,7 +2101,11 @@ def apply_query_params() -> None:
         return
     st.session_state["_query_applied"] = True
     params = st.query_params
-    if params.get("arret"):
+    if params.get("lexique"):
+        st.session_state["sidebar_nav"] = PAGE_DATA
+        st.session_state["data_view"] = "Lexique"
+        st.session_state["lexique_focus"] = params["lexique"]
+    elif params.get("arret"):
         st.session_state["stop_id"] = params["arret"]
         st.session_state["sidebar_nav"] = PAGE_TERRITORY
     elif params.get("ligne"):
@@ -2148,7 +2189,7 @@ def _render_zone(median_s: float | None, pct_gt300: float, rank_text: str | None
         f'<div class="zone-badge">{html.escape(RISK_ZONE_LABELS[zone])}</div>'
         f'<div class="section-note" style="margin-top:.4rem">{html.escape(ZONE_EXPLANATIONS[zone])} '
         f'Retard médian {format_seconds(median_s, signed=True)}, '
-        f'{pct_gt300:.1f} % de passages à plus de 5 min (seuils : '
+        f'{format_number(pct_gt300, 1)} % de passages à plus de 5 min (seuils : '
         f'{RISK_MEDIAN_S:.0f} s et {RISK_PCT_GT300:.0f} %).</div>',
         unsafe_allow_html=True,
     )
@@ -2260,7 +2301,7 @@ def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
         return ("Évolution", "—", "pas de période de comparaison", "neutral")
     if change is None:
         return ("Évolution", "—", f"pas de données sur {prev_label}", "neutral")
-    return ("Évolution", f"{change['delta']:+.1f} pts", f"vs {prev_label} ({change['previous']:.0f} / 100)",
+    return ("Évolution", f"{format_number(change['delta'], 1, signed=True)} pts", f"vs {prev_label} ({change['previous']:.0f} / 100)",
             _delta_polarity(change["delta"]))
 
 
@@ -2361,9 +2402,9 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     kpis = [
         status_kpi(score, f"réseau : {reference_score:.0f} / 100"),
         _evolution_kpi(change, prev_label),
-        ("Passages à plus de 5 min", f"{pct_gt300:.1f} %", f"{cnt_gt300 / max(days, 1):.0f} par jour en moyenne",
+        ("Passages à plus de 5 min", f"{format_number(pct_gt300, 1)} %", f"{cnt_gt300 / max(days, 1):.0f} par jour en moyenne",
          palette_kpi_tier({"retard_5min": pct_gt300}, "retard_5min")),
-        ("Arrêts non desservis", f"{pct_skip:.1f} %", f"{skipped:,} passages non desservis".replace(",", " "),
+        ("Arrêts non desservis", f"{format_number(pct_skip, 1)} %", f"{skipped:,} passages non desservis".replace(",", " "),
          palette_kpi_tier({"skip_rate": pct_skip}, "skip_rate"), HELP_TEXTS["skip"]),
     ]
     if detailed:
@@ -2568,10 +2609,10 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         status_kpi(line["score_fiabilite"], ref),
         _evolution_kpi(change, prev_label),
         ("Points perdus : retards", f"{breakdown['lost_delay']:.0f}",
-         f"{line['pct_retard_5min']:.1f} % de passages à plus de 5 min",
+         f"{format_number(line['pct_retard_5min'], 1)} % de passages à plus de 5 min",
          palette_kpi_tier({"retard_5min": line["pct_retard_5min"]}, "retard_5min")),
         ("Points perdus : arrêts non desservis", f"{breakdown['lost_skip']:.0f}",
-         f"{line['pct_arrets_sautes']:.1f} % d'arrêts non desservis",
+         f"{format_number(line['pct_arrets_sautes'], 1)} % d'arrêts non desservis",
          palette_kpi_tier({"skip_rate": line["pct_arrets_sautes"]}, "skip_rate")),
         ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "),
          "neutral"),
@@ -2759,8 +2800,8 @@ def render_page_territory(c: PageContext) -> None:
                 worst_c, best_c = communes.iloc[0], communes.iloc[-1]
                 st.markdown(
                     f'Sur {len(communes)} communes, la fiabilité s’étend de '
-                    f'**{best_c["commune"]}** ({best_c["score_fiabilite"]:.1f}/100) à '
-                    f'**{worst_c["commune"]}** ({worst_c["score_fiabilite"]:.1f}/100).'
+                    f'**{best_c["commune"]}** ({format_number(best_c["score_fiabilite"], 1)}/100) à '
+                    f'**{worst_c["commune"]}** ({format_number(worst_c["score_fiabilite"], 1)}/100).'
                 )
                 left, right = st.columns([1.0, 1.0], gap="large")
                 with left:
@@ -2773,9 +2814,9 @@ def render_page_territory(c: PageContext) -> None:
                                      "Retard moyen", "Arrêts non desservis", "Lignes", "Passages"]
                     st.dataframe(
                         table.style.map(_score_tier_style, subset=["Score / 100"]).format({
-                            "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %",
-                            "Retards > 5 min": "{:.1f} %", "Retard moyen": lambda x: format_seconds(x),
-                            "Arrêts non desservis": "{:.2f} %", "Lignes": "{:.0f}", "Passages": fmt_int}),
+                            "Score / 100": number_formatter(1), "Ponctualité ≤ 5 min": number_formatter(1, " %"),
+                            "Retards > 5 min": number_formatter(1, " %"), "Retard moyen": lambda x: format_seconds(x),
+                            "Arrêts non desservis": number_formatter(2, " %"), "Lignes": "{:.0f}", "Passages": fmt_int}),
                         width="stretch", hide_index=True, height=460)
     if not territorial.empty:
         with st.expander("Tous les arrêts du périmètre (du moins fiable au plus fiable)"):
@@ -2788,7 +2829,7 @@ def render_page_territory(c: PageContext) -> None:
                              "Retards > 5 min", "Passages"]
             st.dataframe(
                 tdisp.style.map(_score_tier_style, subset=["Score / 100"]).format(
-                    {"Score / 100": "{:.1f}", "Retards > 5 min": "{:.1f} %", "Passages": fmt_int}),
+                    {"Score / 100": number_formatter(1), "Retards > 5 min": number_formatter(1, " %"), "Passages": fmt_int}),
                 width="stretch", hide_index=True, height=320, key="territory_table",
                 on_select=lambda: _on_table_select("territory_table", "_territory_stop_ids", show_stop),
                 selection_mode="single-row")
@@ -2814,7 +2855,7 @@ def render_page_lines(c: PageContext) -> None:
     worst = c.visible_ranking.iloc[0]
     worst_note = " — ⚠ perturbation signalée sur la période" if worst.route_id in c.disturbed else ""
     _verdict(f'À examiner en premier : <b>ligne {html.escape(str(worst.ligne))}</b>{worst_note}, score '
-             f'{worst.score_fiabilite:.0f}/100, avec {worst.pct_retard_5min:.1f} % de passages au-delà de '
+             f'{worst.score_fiabilite:.0f}/100, avec {format_number(worst.pct_retard_5min, 1)} % de passages au-delà de '
              f'5 minutes. Choisissez une ligne dans le tableau ou dans la barre du haut pour ouvrir sa fiche.')
     left, right = st.columns([1.0, 1.0], gap="large")
     with left:
@@ -2831,7 +2872,7 @@ def render_page_lines(c: PageContext) -> None:
         display = lines_table(table_src, c.disturbed, c.detailed)
         st.dataframe(
             display.style.map(_score_tier_style, subset=["Score / 100"]).format({
-                "Score / 100": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts non desservis": "{:.2f} %",
+                "Score / 100": "{:.0f}", "Retards > 5 min": number_formatter(1, " %"), "Arrêts non desservis": number_formatter(2, " %"),
                 "Passages": fmt_int}, subset=[col for col in ("Score / 100", "Retards > 5 min",
                                                               "Arrêts non desservis", "Passages")
                                               if col in display.columns]),
@@ -2863,7 +2904,7 @@ def _period_verdict(period: pd.DataFrame) -> str | None:
         return ("Aucun créneau ne se détache nettement : les retards se répartissent sur l'ensemble de la "
                 "journée et de la semaine.")
     return (f"Le créneau le plus difficile est <b>{html.escape(conc['label'])}</b> : "
-            f"{conc['pct']:.1f} % de passages à plus de 5 min, contre {conc['rest_pct']:.1f} % le reste du temps.")
+            f"{format_number(conc['pct'], 1)} % de passages à plus de 5 min, contre {format_number(conc['rest_pct'], 1)} % le reste du temps.")
 
 
 def render_page_when(c: PageContext) -> None:
@@ -2908,7 +2949,7 @@ def render_page_when(c: PageContext) -> None:
                 display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min",
                                    "Retard moyen"]
                 st.dataframe(display.style.map(_score_tier_style, subset=["Ponctualité ≤ 5 min"]).format({
-                    "Passages": fmt_int, "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
+                    "Passages": fmt_int, "Ponctualité ≤ 5 min": number_formatter(1, " %"), "Retards > 5 min": number_formatter(1, " %"),
                     "Retard moyen": lambda x: format_seconds(x)}), width="stretch", hide_index=True, height=320)
         return
 
@@ -2927,17 +2968,17 @@ def render_page_when(c: PageContext) -> None:
     if previous.empty:
         missing = (f"pas de données sur {c.period.prev_label}" if c.period.prev_label
                    else "pas de période de comparaison")
-        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{ponct:.1f} %</b> et '
-                 f'les arrêts non desservis de <b>{skip:.2f} %</b> ({missing}).')
+        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{format_number(ponct, 1)} %</b> et '
+                 f'les arrêts non desservis de <b>{format_number(skip, 2)} %</b> ({missing}).')
     else:
         p_ponct, p_skip = _weighted_mean(previous, "pct_a_l_heure"), _weighted_mean(previous, "pct_arrets_sautes")
         delta_ponct = ponct - p_ponct
         arrow = "▲" if delta_ponct >= 0 else "▼"
         delta_color = OLIVE_LEAF if delta_ponct >= 0 else COPPERWOOD
-        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{ponct:.1f} %</b>, soit '
-                 f'<span style="color:{delta_color}"><b>{arrow}{abs(delta_ponct):.1f} point(s)</b></span> par '
+        _verdict(f'Sur {html.escape(c.period.label)}, la ponctualité (≤ 5 min) est de <b>{format_number(ponct, 1)} %</b>, soit '
+                 f'<span style="color:{delta_color}"><b>{arrow}{format_number(abs(delta_ponct), 1)} point(s)</b></span> par '
                  f'rapport à {html.escape(c.period.prev_label)}. Les arrêts non desservis passent de '
-                 f'<b>{p_skip:.2f} %</b> à <b>{skip:.2f} %</b>.')
+                 f'<b>{format_number(p_skip, 2)} %</b> à <b>{format_number(skip, 2)} %</b>.')
     st.markdown("#### Ponctualité jour par jour")
     hc_render(engagement_trend_chart(trend, "pct_a_l_heure"), height=340)
     if c.detailed:
@@ -2955,8 +2996,8 @@ def render_page_when(c: PageContext) -> None:
         return
     worst, best = prog.iloc[0], prog.iloc[-1]
     st.markdown(f"Par rapport à {c.period.prev_label}, la plus forte dégradation concerne la **ligne "
-                f"{worst['ligne']}** ({worst['delta_score']:+.1f} points de score), la meilleure progression la "
-                f"**ligne {best['ligne']}** ({best['delta_score']:+.1f} points).")
+                f"{worst['ligne']}** ({format_number(worst['delta_score'], 1, signed=True)} points de score), la meilleure progression la "
+                f"**ligne {best['ligne']}** ({format_number(best['delta_score'], 1, signed=True)} points).")
     hc_render(engagement_progression_chart(prog), height=330)
     if not c.detailed:
         return
@@ -2966,8 +3007,8 @@ def render_page_when(c: PageContext) -> None:
         table.columns = ["Ligne", "Mode", "Score avant", "Score", "Évolution", "Ponctualité", "Arrêts non desservis",
                          "Passages"]
         st.dataframe(table.style.map(_delta_style, subset=["Évolution"]).format({
-            "Score avant": "{:.1f}", "Score": "{:.1f}", "Évolution": lambda x: f"{x:+.1f} pts",
-            "Ponctualité": "{:.1f} %", "Arrêts non desservis": "{:.2f} %",
+            "Score avant": number_formatter(1), "Score": number_formatter(1), "Évolution": lambda x: f"{format_number(x, 1, signed=True)} pts",
+            "Ponctualité": number_formatter(1, " %"), "Arrêts non desservis": number_formatter(2, " %"),
             "Passages": fmt_int}), width="stretch", hide_index=True, height=330)
         st.caption(f"« Score avant » : {c.period.prev_label} ; les autres colonnes : {c.period.label}. Score de "
                    f"fiabilité = ponctualité ≤ 5 min − 2 × arrêts non desservis (borné 0–100). Seuil : "
@@ -3027,8 +3068,8 @@ def render_page_network(c: PageContext) -> None:
             display.columns = ["Ligne", "Mode", "Score / 100", "Ponctualité ≤ 5 min", "Retard moyen (s)",
                                "Retard médian (s)", "Retards > 5 min", "Arrêts non desservis", "Passages"]
             st.dataframe(display.style.map(_score_tier_style, subset=["Score / 100"]).format({
-                "Score / 100": "{:.1f}", "Ponctualité ≤ 5 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}",
-                "Retard médian (s)": "{:.0f}", "Retards > 5 min": "{:.1f} %", "Arrêts non desservis": "{:.2f} %",
+                "Score / 100": number_formatter(1), "Ponctualité ≤ 5 min": number_formatter(1, " %"), "Retard moyen (s)": "{:.0f}",
+                "Retard médian (s)": "{:.0f}", "Retards > 5 min": number_formatter(1, " %"), "Arrêts non desservis": number_formatter(2, " %"),
                 "Passages": fmt_int}), width="stretch", hide_index=True, height=330)
         return
 
@@ -3038,7 +3079,7 @@ def render_page_network(c: PageContext) -> None:
         return
     worst_mode = mode_stats.sort_values("pct_a_l_heure").iloc[0]
     _verdict(f'Le mode le moins ponctuel du périmètre est le <b>{html.escape(str(worst_mode["mode"]).lower())}</b> '
-             f'({worst_mode["pct_a_l_heure"]:.1f} % de passages à l’heure). Tram, bus et ferry n’ont pas les '
+             f'({format_number(worst_mode["pct_a_l_heure"], 1)} % de passages à l’heure). Tram, bus et ferry n’ont pas les '
              f'mêmes contraintes : les comparer aide à distinguer un problème de ligne d’un problème de mode.')
     card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
     for r in mode_stats.itertuples():
@@ -3047,9 +3088,9 @@ def render_page_network(c: PageContext) -> None:
             f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
             f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
             f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
-            f'<div style="font-size:1.9rem;font-weight:700;color:{BLACK_FOREST};line-height:1.15">{r.pct_a_l_heure:.1f} %</div>'
+            f'<div style="font-size:1.9rem;font-weight:700;color:{BLACK_FOREST};line-height:1.15">{format_number(r.pct_a_l_heure, 1)} %</div>'
             f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">à l’heure · {fmt_int(r.observations)} passages · '
-            f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {r.pct_retard_5min:.1f} % &gt; 5 min</div>'
+            f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {format_number(r.pct_retard_5min, 1)} % &gt; 5 min</div>'
             f'</div>'
         )
     st.markdown(card_html + '</div>', unsafe_allow_html=True)
@@ -3080,9 +3121,9 @@ def render_page_network(c: PageContext) -> None:
         table.columns = ["Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min",
                          "Retard moyen (s)", "Retard médian (s)", "Arrêts non desservis"]
         st.dataframe(table.style.format({
-            "Passages": fmt_int, "Ponctualité ≤ 5 min": "{:.1f} %", "Retards > 5 min": "{:.1f} %",
-            "En avance > 1 min": "{:.1f} %", "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}",
-            "Arrêts non desservis": "{:.2f} %"}), width="stretch", hide_index=True, height=220)
+            "Passages": fmt_int, "Ponctualité ≤ 5 min": number_formatter(1, " %"), "Retards > 5 min": number_formatter(1, " %"),
+            "En avance > 1 min": number_formatter(1, " %"), "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}",
+            "Arrêts non desservis": number_formatter(2, " %")}), width="stretch", hide_index=True, height=220)
 
 
 def render_page_perturbations(c: PageContext) -> None:
@@ -3166,8 +3207,8 @@ def _render_method_v2(c: PageContext) -> None:
          palette_kpi_tier({"fiability": v2["score"]}, "fiability")),
         ("Ponctualité stricte", f"{_with_margin(v2['ponctualite'], v2['marge_ponctualite'])} %",
          "de −1 à +5 min", palette_kpi_tier({"ponctualite": v2["ponctualite"]}, "ponctualite")),
-        ("Service assuré", f"{v2['service']:.1f} %", "ni course supprimée, ni arrêt non desservi", "neutral"),
-        ("Départs en avance", f"{v2['avance']:.1f} %", "plus d'une minute", "neutral"),
+        ("Service assuré", f"{format_number(v2['service'], 1)} %", "ni course supprimée, ni arrêt non desservi", "neutral"),
+        ("Départs en avance", f"{format_number(v2['avance'], 1)} %", "plus d'une minute", "neutral"),
     ])
     discarded = ", ".join(f"{r} ({z:.0f} % de retards nuls)" for r, z in sorted(v2["lignes_ecartees"].items()))
     st.caption(f"{v2['jours']} jour(s) évalué(s). Jours exclus (collecte incomplète) : {_short_days(v2['jours_exclus'])}. "
@@ -3287,8 +3328,16 @@ def _render_collection(c: PageContext) -> None:
 def _render_lexique(c: PageContext) -> None:
     st.markdown("### Lexique")
     st.markdown("Les mots utilisés dans le tableau de bord et les rapports, en langage courant.")
-    for term, definition in LEXIQUE:
-        st.markdown(f"**{term}** — {definition}")
+    focus = st.session_state.get("lexique_focus")
+    items = "".join(
+        f'<div class="lexique-item{" lexique-focus" if lexique_slug(term) == focus else ""}" id="{lexique_slug(term)}">'
+        f'<b>{html.escape(term)}</b> — {html.escape(definition)}</div>'
+        for term, definition in LEXIQUE)
+    st.markdown(f'<div class="lexique">{items}</div>', unsafe_allow_html=True)
+    if focus:
+        st.html(f"<script>setTimeout(()=>{{const el=document.getElementById({json.dumps(focus)});"
+                "if(el){el.scrollIntoView({behavior:'smooth',block:'center'});}},400);</script>",
+                unsafe_allow_javascript=True)
 
 
 def render_page_data(c: PageContext) -> None:
@@ -3496,15 +3545,15 @@ def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, 
             ("À l'heure", f"{on_time:.0f} %", "des passages, moins de 5 min de retard", kpi_ponct,
              HELP_TEXTS["ponctualite"]),
             ("Retard moyen", format_seconds(delay_s, signed=True), "par passage", kpi_retard, HELP_TEXTS["retard"]),
-            ("Arrêts non desservis", f"{skip_rate:.1f} %", "des arrêts prévus", kpi_skip, HELP_TEXTS["skip"]),
+            ("Arrêts non desservis", f"{format_number(skip_rate, 1)} %", "des arrêts prévus", kpi_skip, HELP_TEXTS["skip"]),
         ]
     return [
         ("Passages analysés", f"{total:,}".replace(",", " "), None, "neutral", HELP_TEXTS["passage"]),
-        ("Ponctualité" if local else "Ponctualité réseau", f"{on_time:.1f} %", "≤ 5 min de retard", kpi_ponct,
+        ("Ponctualité" if local else "Ponctualité réseau", f"{format_number(on_time, 1)} %", "≤ 5 min de retard", kpi_ponct,
          HELP_TEXTS["ponctualite"]),
         ("Retard moyen", format_seconds(delay_s, signed=True), None, kpi_retard, HELP_TEXTS["retard"]),
         ("Lignes suivies", f"{n_lines}", None, "neutral", None),
-        ("Arrêts non desservis", f"{skip_rate:.2f} %",
+        ("Arrêts non desservis", f"{format_number(skip_rate, 2)} %",
          f"{skipped_total:,} / {eligible_total:,} attendus".replace(",", " "), kpi_skip, HELP_TEXTS["skip"]),
     ]
 

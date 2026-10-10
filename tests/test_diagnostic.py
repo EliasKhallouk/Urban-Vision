@@ -328,9 +328,9 @@ class TestASurveiller:
     def test_trois_signaux_distincts(self):
         items = dg.watchlist(self._prog(-12.0), self._lines(), self._stops(), 50, prev_label="août 2026")
         assert [(i["kind"], i["id"]) for i in items] == [("ligne", "A"), ("arrêt", "s1"), ("ligne", "C")]
-        assert items[0]["reason"] == "score en baisse de 12.0 points par rapport à août 2026 (80.0 → 68.0)"
+        assert items[0]["reason"] == "score en baisse de 12,0 points par rapport à août 2026 (80,0 → 68,0)"
         assert items[1]["title"] == "Gare — vers Parc"
-        assert items[1]["reason"] == "le plus de passages en retard du territoire : 200 à plus de 5 min ; score 50.0/100"
+        assert items[1]["reason"] == "le plus de passages en retard du territoire : 200 à plus de 5 min ; score 50,0/100"
         assert items[2]["reason"].startswith("le plus de passages en retard des lignes : 500 à plus de 5 min")
 
     def test_arret_regroupe_sur_deux_sens(self):
@@ -340,7 +340,7 @@ class TestASurveiller:
         item = dg.watchlist(None, None, stops, 50)[0]
         assert item["title"] == "Blancherie (2 sens)"
         assert item["reason"] == ("le plus de passages en retard du territoire : 496 à plus de 5 min ; "
-                                  "le moins fiable : vers Blancherie, 67.9/100")
+                                  "le moins fiable : vers Blancherie, 67,9/100")
 
     def test_baisse_ponderee_par_les_passages(self):
         prog = pd.DataFrame({"route_id": ["A", "B"], "ligne": ["Arena", "24"],

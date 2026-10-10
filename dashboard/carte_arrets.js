@@ -106,13 +106,17 @@ function pathTooltip(object) {
 
 function pathLabels(paths) {
   const seen = new Set();
-  const out = [];
+  const lines = [];
   for (const d of paths) {
     if (seen.has(d.r) || d.p.length < 2) continue;
     seen.add(d.r);
-    out.push({ ...d, at: d.p[Math.floor(d.p.length * 0.3)] });
+    lines.push(d);
   }
-  return out;
+  const n = lines.length;
+  return lines.map((d, i) => {
+    const fraction = [0.85, 0.15, 0.7, 0.3][i % 4];
+    return { ...d, at: d.p[Math.min(d.p.length - 1, Math.floor(d.p.length * fraction))], rank: n - i };
+  });
 }
 
 function pathLayers(deck, paths) {
@@ -150,6 +154,12 @@ function labelLayer(deck, paths) {
       getBorderColor: [255, 255, 255, 255],
       getBorderWidth: 2,
       pickable: true,
+      ...(deck.CollisionFilterExtension ? {
+        extensions: [new deck.CollisionFilterExtension()],
+        collisionEnabled: true,
+        getCollisionPriority: (d) => d.rank,
+        collisionTestProps: { sizeScale: 2.4 },
+      } : {}),
     });
 }
 

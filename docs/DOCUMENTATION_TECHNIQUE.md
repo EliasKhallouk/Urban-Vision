@@ -240,7 +240,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 511 tests pytest
+└── tests/                          # 27 fichiers, 520 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1173,7 +1173,11 @@ lecteur qui n'est pas analyste :
   dessous : `status_kpi`), « À l'heure », « Retard moyen » et « Arrêts non
   desservis » ; en vue détaillée, les cinq mesures d'origine et leurs
   définitions techniques (SCHEDULED, SKIPPED). Chaque carte porte une aide
-  au survol (`HELP_TEXTS`, pastille « ? » de `kpi_card`). Une carte évaluée
+  (`HELP_TEXTS`) : pastille « ? » pleine de 20 px dans `kpi_card`, qui ouvre au
+  survol ou au clavier une bulle avec la définition et un lien « Voir dans le
+  lexique ↗ » vers le terme correspondant (`HELP_TERMS`, `lexique_link`), ouvert
+  dans un nouvel onglet pour ne pas perdre la sélection en cours. Les icônes
+  « ? » des listes (aide Streamlit) sont agrandies à 19 px, en vert foncé. Une carte évaluée
   (palier fiable, à surveiller ou problématique, ou évolution) est remplie de
   la couleur de son palier, texte crème, vert foncé ou blanc selon le fond
   (`KPI_FILLS`) ; une carte neutre reste blanche à liseré. Les pages
@@ -1240,7 +1244,10 @@ lecteur qui n'est pas analyste :
      dessert (`route_shapes`, dans le sens de la ligne à cet arrêt d'après
      `stop_direction`, les deux sens sinon ; `selected_stop_paths`,
      `stop_route_paths`), couleur du palier de la ligne sur un liseré blanc,
-     étiquette au nom de la ligne, infobulle (état et score) ; les autres arrêts
+     étiquette au nom de la ligne, placée vers une extrémité du tracé (alternance
+     85 %, 15 %, 70 %, 30 % de sa longueur) et masquée quand elle en chevauche
+     une autre (`CollisionFilterExtension` de deck.gl : elle réapparaît en
+     zoomant), infobulle (état et score) ; les autres arrêts
      passent en transparence. Le bandeau ajoute « Voir les lignes entières »,
      qui cadre la carte sur tous les tracés ; une phrase sous la carte les
      énumère avec leur état ;
@@ -1295,7 +1302,10 @@ lecteur qui n'est pas analyste :
    (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-6. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, mots du
+6. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
+   identifiant `lexique_slug` ; un lien `?lexique=<terme>`, venu d'une aide « ? »
+   ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné en
+   crème et le fait défiler à l'écran, sans afficher le guide ; mots du
    tableau de bord et des rapports en langage courant), *Méthode* (définitions, seuils,
    stabilisation 20 min, lecture des fiches, arrêts non desservis, bloc « Méthode 2.0
    (en test) » : score 2.0 ± marge, ponctualité stricte ± marge, service
@@ -1374,7 +1384,15 @@ utilisé : son usage en production n'est pas prévu par l'éditeur, et il
 refuse les navigateurs sans interface (« Violation of license/fair-usage
 policy »), ce qui empêchait aussi les contrôles automatiques de rendu ;
 applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
-70 %). Fonctions : `ranking_chart`, `scatter_chart`, `network_daily_chart`,
+70 %), en français (`lang` : virgule décimale, espace fine pour les milliers,
+mois et jours en français, dates d'infobulle « lundi 15 septembre 2026 »).
+Chaque infobulle nomme ce qu'elle montre et porte son unité (`unit_tooltip` :
+« Retards de plus de 5 min : 12,3 % », « 1 234 passages », « 45 s », « / 100 » ;
+heures en « De 7 h à 7 h 59 », `HOUR_HEADER`). Chaque graphique désigne un
+terme du lexique (clé `lexique` de sa configuration, retirée avant l'envoi à
+Highcharts) : l'infobulle se termine par « Définitions dans le lexique ↗ »,
+lien absolu vers l'application calculé depuis la page parente, et reste
+ouverte quand la souris s'y pose (`stickOnContact`). Fonctions : `ranking_chart`, `scatter_chart`, `network_daily_chart`,
 `network_hourly_chart`, `commune_ranking_chart`, `mode_comparison_chart`,
 `mode_daily_chart`, `mode_hourly_chart`, `period_punctuality_chart`,
 `period_mode_chart`, `engagement_trend_chart`, `engagement_progression_chart`,
@@ -2439,7 +2457,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 511, isolés (suite `pytest` complète : 511 passed), flux synthétiques
+- Tests : 520, isolés (suite `pytest` complète : 520 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2484,7 +2502,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 le 10/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2512,6 +2530,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I23 | Bouton « Compris » du guide de lecture : `st.rerun()` relançait le calcul complet de la page (plusieurs secondes) | Bouton retiré, la boîte se ferme par ✕ ou Échap (`show_guide`) |
 | I24 | Le guide de lecture se rouvrait à chaque rechargement (nouvelle session Streamlit) ; le bouton « Guide de lecture » devenait illisible au survol | Cookie `uv_guide_vu` ; couleur de survol des boutons de la sidebar (fond ocre, texte vert foncé) |
 | I25 | Test utilisateur du 04/10/2026 : la commune se choisissait dans un réglage peu visible, la ligne seulement dans « Lignes », l'arrêt seulement dans « Mon territoire », et une fiche ligne ouverte autrement que depuis un arrêt n'avait pas de retour | Barre de contexte persistante en fil d'Ariane avec « ← Revenir » et historique (§11.3) ; listes « Chercher un arrêt » et « Ligne analysée » et bouton « Revenir à l'arrêt » remplacés par la barre ; tests `TestFilDAriane` |
+| I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 
 ### 26.4 Dette documentaire
 

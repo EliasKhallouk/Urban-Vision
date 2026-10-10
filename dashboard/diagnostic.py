@@ -50,8 +50,22 @@ def format_seconds(value: float | int | None, signed: bool = False) -> str:
     return f"{sign}{minutes} min {seconds:02d} s" if minutes else f"{sign}{seconds} s"
 
 
+def format_number(value, decimals: int = 1, signed: bool = False) -> str:
+    """Nombre à la française : virgule décimale, signe moins typographique, « — » si absent."""
+    if value is None or pd.isna(value):
+        return "—"
+    text = f"{float(value):{'+' if signed else ''}.{decimals}f}".replace(".", ",")
+    return text.replace("-", "−")
+
+
+def number_formatter(decimals: int = 1, suffix: str = "", signed: bool = False):
+    """Formateur de colonne pour `Styler.format` (même règle que `format_number`)."""
+    return lambda value: "—" if value is None or pd.isna(value) else \
+        format_number(value, decimals, signed) + suffix
+
+
 def format_pct(value: float, decimals: int = 0) -> str:
-    return f"{value:.{decimals}f}".replace(".", ",") + " %"
+    return format_number(value, decimals) + " %"
 
 
 def median_from_hists(hists) -> float | None:
@@ -625,9 +639,9 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
             worst = declining.loc[weight.idxmax()]
             items.append({
                 "kind": "ligne", "id": worst["route_id"], "title": f"Ligne {worst['ligne']}",
-                "reason": (f"score en baisse de {abs(float(worst['delta_score'])):.1f} points"
+                "reason": (f"score en baisse de {format_number(abs(float(worst['delta_score'])), 1)} points"
                            f"{' par rapport à ' + prev_label if prev_label else ''} "
-                           f"({float(worst['score_fiabilite_prev']):.1f} → {float(worst['score_fiabilite']):.1f})"),
+                           f"({format_number(float(worst['score_fiabilite_prev']), 1)} → {format_number(float(worst['score_fiabilite']), 1)})"),
             })
     if stops is not None and not stops.empty:
         s = stops[(stops["observations"] >= min_obs) & (stops["score_fiabilite"] < WATCH_SCORE_BELOW)]
@@ -639,10 +653,10 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
             score = float(top["score_fiabilite"])
             if n_dirs > 1:
                 title = f"{top['stop_name']} ({n_dirs} {'sens' if n_dirs == 2 else 'quais'})"
-                tail = f" ; le moins fiable : {direction}, {score:.1f}/100" if direction else f" ; score {score:.1f}/100"
+                tail = f" ; le moins fiable : {direction}, {format_number(score, 1)}/100" if direction else f" ; score {format_number(score, 1)}/100"
             else:
                 title = f"{top['stop_name']} — {direction}" if direction else str(top["stop_name"])
-                tail = f" ; score {score:.1f}/100"
+                tail = f" ; score {format_number(score, 1)}/100"
             items.append({
                 "kind": "arrêt", "id": top["stop_id"], "title": title,
                 "reason": f"le plus de passages en retard du territoire : {float(top['late']):.0f} à plus de 5 min{tail}",
@@ -657,7 +671,7 @@ def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
             items.append({
                 "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
                 "reason": (f"le plus de passages en retard des lignes : {float(top['late']):.0f} à plus de 5 min ; "
-                           f"score {float(top['score_fiabilite']):.1f}/100"),
+                           f"score {format_number(float(top['score_fiabilite']), 1)}/100"),
             })
     return items[:limit]
 

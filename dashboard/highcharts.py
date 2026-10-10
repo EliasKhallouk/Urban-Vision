@@ -116,9 +116,36 @@ LIGHT_THEME = {
         "borderColor": SUNLIT_CLAY_40,
         "style": {"color": BLACK_FOREST, "fontSize": "12px"},
         "shadow": True,
+        "xDateFormat": "%A %e %B %Y",
+    },
+    "lang": {
+        "locale": "fr-FR",
+        "decimalPoint": ",",
+        "thousandsSep": "\u202f",
+        "months": ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
+                   "octobre", "novembre", "décembre"],
+        "shortMonths": ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.",
+                        "nov.", "déc."],
+        "weekdays": ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+        "shortWeekdays": ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
+        "resetZoom": "Réinitialiser le zoom",
+        "rangeSelectorZoom": "Zoom",
     },
     "credits": {"enabled": False},
 }
+
+HOUR_HEADER = '<span style="font-size:11px">De {point.key} h à {point.key} h 59</span><br/>'
+LEXIQUE_FOOTER = ('<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(221, 161, 94, 0.40);'
+                  'font-size:11px"><a href="__BASE__?lexique=__TERME__" target="_blank" rel="noopener" '
+                  'style="color:#283618;text-decoration-color:#DDA15E">Définitions dans le lexique ↗</a></div>')
+
+
+def unit_tooltip(suffix: str, decimals: int = 1, header: str | None = None) -> dict:
+    """Infobulle d'une série : « Nom de la série : valeur unité »."""
+    out = {"pointFormat": f"{{series.name}} : <b>{{point.y:,.{decimals}f}}{suffix}</b><br/>"}
+    if header is not None:
+        out["headerFormat"] = header
+    return out
 
 
 def _accessibility_description(chart_config: dict) -> str:
@@ -139,6 +166,7 @@ HIGHCHARTS_CDN = "https://cdn.jsdelivr.net/npm/highcharts@13.1.1"
 
 def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
     config = dict(chart_config)
+    term = config.pop("lexique", "")
     acc = dict(config.get("accessibility") or {})
     acc["enabled"] = True
     acc.setdefault("description", _accessibility_description(config))
@@ -155,7 +183,15 @@ def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
 </head><body>
 <div id="{chart_id}" style="width:100%;height:{height}px;"></div>
 <script>
-Highcharts.setOptions({json.dumps(LIGHT_THEME, ensure_ascii=False)});
+const theme = {json.dumps(LIGHT_THEME, ensure_ascii=False)};
+const base = (() => {{ try {{ const l = window.parent.location; return l.origin + l.pathname; }} catch (e) {{ return ""; }} }})();
+if (base) {{
+  theme.tooltip.useHTML = true;
+  theme.tooltip.stickOnContact = true;
+  theme.tooltip.footerFormat = {json.dumps(LEXIQUE_FOOTER, ensure_ascii=False)}
+    .replace("__BASE__", base).replace("__TERME__", {json.dumps(term)});
+}}
+Highcharts.setOptions(theme);
 Highcharts.{constructor}('{chart_id}', {json.dumps(config, ensure_ascii=False)});
 </script>
 </body></html>"""
@@ -176,9 +212,9 @@ def ranking_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"categories": labels, "title": {"text": None}},
         "yAxis": {"title": {"text": "Score de fiabilité / 100"}, "max": 100, "min": 0},
-        "series": [{"name": "Score", "data": data}],
+        "series": [{"name": "Score de fiabilité", "data": data, "tooltip": unit_tooltip(" / 100")}],
         "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
-        "tooltip": {"pointFormat": "<b>{point.y}</b> / 100"},
+        "lexique": "score-de-fiabilite",
     }
 
 
@@ -194,8 +230,9 @@ def commune_ranking_chart(df: pd.DataFrame) -> dict:
         "xAxis": {"categories": df["commune"].tolist(), "title": {"text": None}},
         "yAxis": {"title": {"text": "Score de fiabilité / 100"}, "max": 100, "min": 0},
         "series": [{"name": "Score", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f}</b> / 100<br/>Ponctualité ≤ 5 min : {point.pct:.1f} %<br/>Passages : {point.passages:,.0f}"}}],
+                    "tooltip": {"pointFormat": "Score de fiabilité : <b>{point.y:.1f} / 100</b><br/>À l'heure : {point.pct:.1f} %<br/>Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
+        "lexique": "score-de-fiabilite",
     }
 
 
@@ -230,10 +267,11 @@ def scatter_chart(df: pd.DataFrame) -> dict:
             "tooltip": {"headerFormat": "",
                         "pointFormat": "<b>{point.name}</b> ({point.series.name})<br/>{point.zone}<br/>"
                                        "Retard médian : {point.x:.0f} s<br/>&gt; 5 min : {point.y:.1f} %<br/>"
-                                       "Score : {point.score}/100<br/>Passages : {point.z:,.0f}"},
+                                       "Score : {point.score:.1f} / 100<br/>Passages : {point.z:,.0f}<br/>"},
         })
     threshold_line = {"color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1, "zIndex": 3}
     return {
+        "lexique": "retard-median",
         "chart": {"type": "bubble", "height": 390},
         "title": {"text": None},
         "xAxis": {"title": {"text": "Retard médian (secondes)"},
@@ -265,8 +303,9 @@ def network_daily_chart(df: pd.DataFrame) -> dict:
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": [{"name": "Retards > 5 min", "data": data, "color": BLACK_FOREST, "lineWidth": 2,
                     "marker": {"enabled": True, "radius": 5},
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}"}}],
+                    "tooltip": {"pointFormat": "Retards de plus de 5 min : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"series": {"dataLabels": {"enabled": False}}},
+        "lexique": "retards-de-plus-de-5-min",
     }
 
 
@@ -285,8 +324,10 @@ def network_hourly_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"name": "> 5 min", "data": data}],
+        "series": [{"name": "Retards de plus de 5 min", "data": data,
+                    "tooltip": unit_tooltip(" %", header=HOUR_HEADER)}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0, "pointPadding": 0.05}},
+        "lexique": "retards-de-plus-de-5-min",
     }
 
 
@@ -301,7 +342,7 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
     for _, r in mode_stats.iterrows():
         data = [{"y": round(r[m], 1), "color": palette_hex(round(r[m], 1), kinds[m])} for m, _, _ in metrics]
         series.append({"name": mode_series_name(r["route_type"], r["mode"]), "color": BLACK_FOREST,
-                       "data": data, "dataLabels": _glyph_labels(r["route_type"])})
+                       "data": data, "dataLabels": _glyph_labels(r["route_type"]), "tooltip": unit_tooltip(" %")})
     return {
         "chart": {"type": "column", "height": 330},
         "title": {"text": None},
@@ -320,8 +361,9 @@ def mode_daily_chart(df: pd.DataFrame) -> dict:
         data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(v, 1),
                  "color": palette_hex(round(v, 1), "pourcent")}
                 for ts, v in zip(sub["date_service"], sub["pct_retard_5min"])]
-        series.append(_mode_line_series(sub["route_type"].iloc[0], mode, data))
+        series.append({**_mode_line_series(sub["route_type"].iloc[0], mode, data), "tooltip": unit_tooltip(" %")})
     return {
+        "lexique": "retards-de-plus-de-5-min",
         "chart": {"type": "line", "height": 300},
         "title": {"text": None},
         "xAxis": {"type": "datetime", "title": {"text": None}},
@@ -336,8 +378,10 @@ def mode_hourly_chart(df: pd.DataFrame) -> dict:
         hm = {int(r["heure"]): round(r["pct_retard_5min"], 1) for _, r in sub.iterrows()}
         data = [{"y": hm[h], "color": palette_hex(hm[h], "pourcent")} if h in hm else {"y": None}
                 for h in range(24)]
-        series.append(_mode_line_series(sub["route_type"].iloc[0], mode, data))
+        series.append({**_mode_line_series(sub["route_type"].iloc[0], mode, data),
+                       "tooltip": unit_tooltip(" %", header=HOUR_HEADER)})
     return {
+        "lexique": "retards-de-plus-de-5-min",
         "chart": {"type": "line", "height": 330},
         "title": {"text": None},
         "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}},
@@ -357,8 +401,9 @@ def period_punctuality_chart(df: pd.DataFrame) -> dict:
         "xAxis": {"categories": df["période"].tolist(), "title": {"text": None}},
         "yAxis": {"title": {"text": "Ponctualité ≤ 5 min (%)"}, "min": 0, "max": 100},
         "series": [{"name": "Ponctualité", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>Retard moyen : {point.moy:+.0f} s"}}],
+                    "tooltip": {"pointFormat": "À l'heure : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>Retard moyen : {point.moy:.0f} s<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 4, "groupPadding": 0.05, "pointPadding": 0.08}},
+        "lexique": "a-l-heure-ponctualite",
     }
 
 
@@ -373,8 +418,9 @@ def period_mode_chart(df: pd.DataFrame) -> dict:
                 if pd.notna(r["pct_retard_5min"]) else {"y": None}
                 for _, r in pa.iterrows()]
         series.append({"name": mode_series_name(route_type, mode), "data": data, "color": BLACK_FOREST,
-                       "dataLabels": _glyph_labels(route_type)})
+                       "dataLabels": _glyph_labels(route_type), "tooltip": unit_tooltip(" %")})
     return {
+        "lexique": "retards-de-plus-de-5-min",
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
         "xAxis": {"categories": categories, "title": {"text": None}},
@@ -398,6 +444,9 @@ def engagement_trend_chart(trend: pd.DataFrame, metric: str) -> dict:
         "pct_arrets_sautes": "Arrêts non desservis (%)",
         "retard_moyen_s": "Retard moyen (s)",
     }
+    unit, decimals = (" s", 0) if metric == "retard_moyen_s" else (" %", 1)
+    terms = {"pct_a_l_heure": "a-l-heure-ponctualite", "pct_retard_5min": "retards-de-plus-de-5-min",
+             "pct_arrets_sautes": "arret-non-desservi", "retard_moyen_s": "retard-moyen"}
     y_axis = {"title": {"text": titles[metric]}, "min": 0}
     if metric != "retard_moyen_s":
         y_axis["max"] = 100
@@ -414,7 +463,8 @@ def engagement_trend_chart(trend: pd.DataFrame, metric: str) -> dict:
              "color": OLIVE_LEAF, "dashStyle": "ShortDash", "lineWidth": 2,
              "marker": {"enabled": False}},
         ],
-        "tooltip": {"shared": True},
+        "tooltip": {"shared": True, "valueSuffix": unit, "valueDecimals": decimals},
+        "lexique": terms[metric],
     }
 
 
@@ -434,9 +484,10 @@ def engagement_progression_chart(prog: pd.DataFrame) -> dict:
         "xAxis": {"categories": df["ligne"].tolist(), "title": {"text": None}},
         "yAxis": {"title": {"text": "Évolution du score (/100)"}},
         "series": [{"name": "Δ score", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:+.1f} pts</b><br/>"
-                                               "Récent : {point.score} · Précédent : {point.prec}"}}],
+                    "tooltip": {"pointFormat": "Évolution : <b>{point.y:+.1f} points</b><br/>"
+                                               "Score : {point.prec:.1f} → {point.score:.1f} / 100<br/>"}}],
         "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
+        "lexique": "evolution",
     }
 
 
@@ -453,13 +504,17 @@ def delay_distribution_chart(df: pd.DataFrame) -> dict:
     data = [{"y": int(r["observations"]),
              "color": palette_hex(drift_seconds.get(r["plage"], 1500), "retard")}
             for _, r in df.iterrows()]
+    labels = [p if "min" in p else f"{p} min" for p in df["plage"]]
     return {
         "legend": {"enabled": False},
         "chart": {"type": "column", "height": 280},
         "title": {"text": None},
-        "xAxis": {"categories": df["plage"].tolist(), "title": {"text": "Écart à l'horaire théorique"}, "labels": {"rotation": -35}},
+        "xAxis": {"categories": labels, "title": {"text": "Écart à l'horaire théorique"}, "labels": {"rotation": -35}},
         "yAxis": {"title": {"text": "Nombre de passages"}},
-        "series": [{"name": "Passages", "data": data}],
+        "series": [{"name": "Passages", "data": data,
+                    "tooltip": {"headerFormat": "Écart à l'horaire : {point.key}<br/>",
+                                "pointFormat": "<b>{point.y:,.0f} passages</b><br/>"}}],
+        "lexique": "retard-median",
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0, "pointPadding": 0.05}},
     }
 
@@ -495,7 +550,9 @@ def collection_minutely_chart(df: pd.DataFrame) -> dict:
             "trackBorderColor": SUNLIT_CLAY_40,
         },
         "title": {"text": None},
-        "series": [{"type": "line", "name": "Observations", "data": data, "color": BLACK_FOREST, "marker": {"enabled": False}}],
+        "series": [{"type": "line", "name": "Observations", "data": data, "color": BLACK_FOREST, "marker": {"enabled": False},
+                    "tooltip": {"pointFormat": "<b>{point.y:,.0f} observations</b> reçues dans la minute<br/>"}}],
+        "lexique": "observation",
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
     }
 
@@ -508,8 +565,11 @@ def hourly_distribution_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"categories": [str(int(r["heure"])) for _, r in df.iterrows()], "title": {"text": "Heure locale"}},
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
-        "series": [{"name": "Passages", "data": data, "color": BLACK_FOREST}],
+        "series": [{"name": "Observations", "data": data, "color": BLACK_FOREST,
+                    "tooltip": {"headerFormat": HOUR_HEADER,
+                                "pointFormat": "<b>{point.y:,.0f} observations</b><br/>"}}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.05, "pointPadding": 0.05}},
+        "lexique": "observation",
     }
 
 
@@ -571,11 +631,12 @@ def line_profile_chart(profile: pd.DataFrame, highlight_stop_id: str | None = No
         "yAxis": [{"title": {"text": "Retard (secondes)"}}],
         "series": [
             {"type": "column", "name": "Retard pris sur le tronçon", "data": gains, "color": BLACK_FOREST_35,
-             "tooltip": {"pointFormat": "Depuis {point.prev} : <b>{point.y:+.0f} s</b><br/>"}},
+             "tooltip": {"pointFormat": "Retard pris depuis {point.prev} : <b>{point.y:+.0f} s</b><br/>"}},
             {"type": "line", "name": "Retard moyen à l'arrêt", "data": delays, "color": BLACK_FOREST,
-             "lineWidth": 2, "marker": {"enabled": False}, "tooltip": {"valueSuffix": " s", "valueDecimals": 0}},
+             "lineWidth": 2, "marker": {"enabled": False}, "tooltip": unit_tooltip(" s", 0)},
         ],
         "tooltip": {"shared": True},
+        "lexique": "retard-deja-present-retard-pris",
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
         "legend": {"enabled": True},
     }
@@ -601,8 +662,9 @@ def slot_profile_chart(sp: pd.DataFrame, slot_label: str, highlight_stop_id: str
              "color": BLACK_FOREST_35, "dashStyle": "ShortDash", "lineWidth": 2,
              "marker": {"enabled": False}, "connectNulls": True},
         ],
-        "tooltip": {"shared": True, "valueSuffix": " s"},
+        "tooltip": {"shared": True, "valueSuffix": " s", "valueDecimals": 0},
         "legend": {"enabled": True},
+        "lexique": "retard-moyen",
     }
 
 
@@ -620,8 +682,9 @@ def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = Non
         "xAxis": _profile_axis(p, highlight_stop_id, commune_stop_ids, commune_label),
         "yAxis": {"title": {"text": "Arrêts non desservis (%)"}, "min": 0},
         "series": [{"name": "Arrêts non desservis", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b> ({point.skipped} passages non desservis)"}}],
+                    "tooltip": {"pointFormat": "Arrêts non desservis : <b>{point.y:.1f} %</b> ({point.skipped:,.0f} passages)<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+        "lexique": "arret-non-desservi",
     }
 
 
@@ -635,9 +698,12 @@ def stop_lines_chart(lines: pd.DataFrame) -> dict:
         "xAxis": {"categories": categories, "title": {"text": None}},
         "yAxis": {"title": {"text": "Passages"}, "min": 0, "allowDecimals": False},
         "series": [
-            {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": BLACK_FOREST},
-            {"name": "Arrêts non desservis", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35},
+            {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": BLACK_FOREST,
+             "tooltip": unit_tooltip(" passages", 0)},
+            {"name": "Arrêts non desservis", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35,
+             "tooltip": unit_tooltip(" passages", 0)},
         ],
+        "lexique": "retards-de-plus-de-5-min",
         "plotOptions": {"bar": {"stacking": "normal", "borderRadius": 3, "groupPadding": 0.1}},
         "legend": {"enabled": True},
     }
@@ -654,8 +720,9 @@ def risk_by_label_chart(table: pd.DataFrame, label_col: str) -> dict:
         "xAxis": {"categories": table[label_col].tolist(), "title": {"text": None}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": [{"name": "Retards > 5 min", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}"}}],
+                    "tooltip": {"pointFormat": "Retards de plus de 5 min : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.08, "pointPadding": 0.05}},
+        "lexique": "retards-de-plus-de-5-min",
     }
 
 
@@ -677,8 +744,9 @@ def daily_status_chart(daily: pd.DataFrame, threshold: float) -> dict:
                                  "zIndex": 3, "label": {"text": "jour dégradé", "align": "right",
                                                         "style": {"color": OLIVE_LEAF_70}}}]},
         "series": [{"name": "Retards > 5 min", "data": data,
-                    "tooltip": {"pointFormat": "<b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}"}}],
+                    "tooltip": {"pointFormat": "Retards de plus de 5 min : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+        "lexique": "jour-degrade",
     }
 
 
@@ -693,6 +761,7 @@ def cancellations_chart(df: pd.DataFrame) -> dict:
         "xAxis": {"type": "datetime", "title": {"text": None}},
         "yAxis": {"title": {"text": "Courses supprimées"}, "min": 0, "allowDecimals": False},
         "series": [{"name": "Courses supprimées", "data": data, "color": BLACK_FOREST,
-                    "tooltip": {"pointFormat": "<b>{point.y}</b> sur {point.trips} courses connues"}}],
+                    "tooltip": {"pointFormat": "<b>{point.y} courses supprimées</b> sur {point.trips:,.0f} connues<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
+        "lexique": "course-supprimee",
     }

@@ -376,3 +376,38 @@ class TestLegendes:
         p = pd.DataFrame({"stop_id": ["a"], "stop_name": ["A"], "order": [1], "prev_stop_name": [None],
                           "gain_s": [0.0], "delay_s": [10.0]})
         assert hc.line_profile_chart(p)["series"][0]["color"] == hc.BLACK_FOREST_35
+
+
+class TestInfobulles:
+    def test_francais_et_unites(self):
+        assert hc.LIGHT_THEME["lang"]["decimalPoint"] == ","
+        assert hc.LIGHT_THEME["lang"]["months"][8] == "septembre"
+        assert hc.unit_tooltip(" %")["pointFormat"] == "{series.name} : <b>{point.y:,.1f} %</b><br/>"
+        assert hc.unit_tooltip(" s", 0, header="H")["headerFormat"] == "H"
+
+    def test_chaque_graphique_renvoie_a_un_terme_du_lexique(self):
+        import app as app_mod
+
+        slugs = {app_mod.lexique_slug(term) for term, _ in app_mod.LEXIQUE}
+        hourly = pd.DataFrame({"heure": [7, 8], "pct_retard_5min": [10.0, 20.0], "observations": [5, 6]})
+        configs = [hc.network_hourly_chart(hourly), hc.hourly_distribution_chart(hourly),
+                   hc.ranking_chart(_ranking_df())]
+        for config in configs:
+            assert config["lexique"] in slugs
+            assert config["series"][0]["tooltip"]
+        source = (hc.__file__ and open(hc.__file__, encoding="utf-8").read())
+        import re
+        assert set(re.findall(r'"lexique": "([a-z0-9-]+)"', source)) <= slugs
+        trend = pd.DataFrame({"date_service": ["2026-09-01", "2026-09-02"], "pct_a_l_heure": [90.0, 91.0],
+                              "pct_retard_5min": [8.0, 7.0], "pct_arrets_sautes": [1.0, 1.5],
+                              "retard_moyen_s": [60.0, 55.0]})
+        for metric in ("pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "retard_moyen_s"):
+            config = hc.engagement_trend_chart(trend, metric)
+            assert config["lexique"] in slugs
+            assert config["tooltip"]["valueSuffix"] == (" s" if metric == "retard_moyen_s" else " %")
+
+    def test_lien_lexique_dans_le_html(self):
+        html = hc._html({"chart": {"type": "line"}, "series": [], "lexique": "retard-moyen"}, 300)
+        assert "Définitions dans le lexique" in html
+        assert '.replace("__TERME__", "retard-moyen")' in html
+        assert '"lexique"' not in html.split("Highcharts.chart(")[1]
