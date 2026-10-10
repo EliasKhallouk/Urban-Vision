@@ -34,6 +34,10 @@ from palette import (  # noqa: E402
     RISK_MEDIAN_S,
     RISK_PCT_GT300,
     RISK_ZONE_LABELS,
+    CRITICAL,
+    FREQUENT_SHORT,
+    LOW,
+    RARE_LONG,
     SUNLIT_CLAY,
     WHITE,
     hex as palette_hex,
@@ -206,7 +210,8 @@ def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
 
 def ranking_chart(df: pd.DataFrame) -> dict:
     df = df.sort_values("score_fiabilite")
-    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score")}
+    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score"),
+             "id": r.get("route_id")}
             for _, r in df.iterrows()]
     labels = df["ligne_plot"].tolist() if "ligne_plot" in df.columns else df["ligne"].tolist()
     return {
@@ -237,6 +242,25 @@ def commune_ranking_chart(df: pd.DataFrame) -> dict:
         "plotOptions": {"bar": {"borderRadius": 4, "groupPadding": 0.1}},
         "lexique": "score-de-fiabilite",
     }
+
+
+def zone_labels_series(df: pd.DataFrame) -> dict:
+    """Libellés des quatre zones de risque, posés aux coins de la carte de risque."""
+    x_low = min(0.0, float(df["retard_median_s"].min())) if not df.empty else 0.0
+    x_high = max(RISK_MEDIAN_S * 3, float(df["retard_median_s"].max())) if not df.empty else RISK_MEDIAN_S * 3
+    y_high = max(RISK_PCT_GT300 * 2, float(df["pct_retard_5min"].max())) if not df.empty else RISK_PCT_GT300 * 2
+    corners = [(x_low, y_high, "left", "top", RARE_LONG), (x_high, y_high, "right", "top", CRITICAL),
+               (x_high, 0.0, "right", "bottom", FREQUENT_SHORT), (x_low, 0.0, "left", "bottom", LOW)]
+    data = [{"x": x, "y": y, "dataLabels": {"align": align, "verticalAlign": valign,
+                                             "format": RISK_ZONE_LABELS[zone],
+                                             "x": 6 if align == "left" else -6, "y": 0}}
+            for x, y, align, valign, zone in corners]
+    return {"type": "scatter", "name": "Zones", "data": data, "showInLegend": False,
+            "enableMouseTracking": False, "marker": {"enabled": False},
+            "dataLabels": {"enabled": True, "crop": False, "overflow": "allow",
+                           "backgroundColor": "rgba(255, 255, 255, 0.88)", "borderRadius": 4, "padding": 4,
+                           "style": {"color": BLACK_FOREST, "fontSize": "13px", "fontWeight": "700",
+                                     "textOutline": "none"}}, "zIndex": 5}
 
 
 def scatter_chart(df: pd.DataFrame) -> dict:
@@ -273,6 +297,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
                                        "Score : {point.score:.1f} / 100<br/>Passages : {point.z:,.0f}<br/>"},
         })
     threshold_line = {"color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1, "zIndex": 3}
+    series.append(zone_labels_series(df))
     return {
         "lexique": "retard-median",
         "chart": {"type": "bubble", "height": 390},
@@ -291,46 +316,6 @@ def scatter_chart(df: pd.DataFrame) -> dict:
                                     "connectorColor": BLACK_FOREST, "ranges": [{}, {}, {}],
                                     "labels": {"format": "{value:,.0f} passages",
                                                "style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}}}},
-    }
-
-
-def network_daily_chart(df: pd.DataFrame) -> dict:
-    data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(r, 1),
-             "passages": int(obs), "color": palette_hex(r, "pourcent")}
-            for ts, r, obs in zip(df["date_service"], df["pct_retard_5min"], df["observations"])]
-    return {
-        "legend": {"enabled": False},
-        "chart": {"type": "line", "height": 300},
-        "title": {"text": None},
-        "xAxis": {"type": "datetime", "title": {"text": None}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"name": "Retards > 5 min", "data": data, "color": BLACK_FOREST, "lineWidth": 2,
-                    "marker": {"enabled": True, "radius": 5},
-                    "tooltip": {"pointFormat": "Retards de plus de 5 min : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>"}}],
-        "plotOptions": {"series": {"dataLabels": {"enabled": False}}},
-        "lexique": "retards-de-plus-de-5-min",
-    }
-
-
-def network_hourly_chart(df: pd.DataFrame) -> dict:
-    hm = {int(r["heure"]): r for _, r in df.iterrows()}
-    data = []
-    for h in range(24):
-        if h in hm:
-            v = round(hm[h]["pct_retard_5min"], 1)
-            data.append({"y": v, "color": palette_hex(v, "pourcent")})
-        else:
-            data.append({"y": 0, "color": SUNLIT_CLAY})
-    return {
-        "legend": {"enabled": False},
-        "chart": {"type": "column", "height": 300},
-        "title": {"text": None},
-        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": [{"name": "Retards de plus de 5 min", "data": data,
-                    "tooltip": unit_tooltip(" %", header=HOUR_HEADER)}],
-        "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0, "pointPadding": 0.05}},
-        "lexique": "retards-de-plus-de-5-min",
     }
 
 
@@ -357,56 +342,115 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
     }
 
 
-def mode_daily_chart(df: pd.DataFrame) -> dict:
-    series = []
-    for mode, sub in df.groupby("mode"):
-        sub = sub.sort_values("date_service")
-        data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(v, 1),
-                 "color": palette_hex(round(v, 1), "pourcent")}
-                for ts, v in zip(sub["date_service"], sub["pct_retard_5min"])]
-        series.append({**_mode_line_series(sub["route_type"].iloc[0], mode, data), "tooltip": unit_tooltip(" %")})
-    return {
-        "lexique": "retards-de-plus-de-5-min",
-        "chart": {"type": "line", "height": 300},
-        "title": {"text": None},
-        "xAxis": {"type": "datetime", "title": {"text": None}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": series,
-    }
+PERIOD_DETAILS = {
+    "Matin": "lun.–ven.<br>6\u00a0h–10\u00a0h", "Journée": "lun.–ven.<br>10\u00a0h–16\u00a0h",
+    "Pointe du soir": "lun.–ven.<br>16\u00a0h–20\u00a0h", "Soirée & nuit": "lun.–ven.<br>20\u00a0h–6\u00a0h",
+    "Week-end": "samedi<br>et dimanche",
+}
+TREND_METRICS = {
+    "score_fiabilite": ("Score de fiabilité", " / 100", 1, "score"),
+    "pct_a_l_heure": ("Ponctualité (5 min ou moins)", " %", 1, "score"),
+    "pct_retard_5min": ("Retards de plus de 5 min", " %", 1, "pourcent"),
+    "retard_moyen_s": ("Retard moyen", " s", 0, "retard"),
+    "pct_arrets_sautes": ("Arrêts non desservis", " %", 2, "pourcent"),
+}
+TREND_TERMS = {"score_fiabilite": "score-de-fiabilite", "pct_a_l_heure": "a-l-heure-ponctualite",
+               "pct_retard_5min": "retards-de-plus-de-5-min", "retard_moyen_s": "retard-moyen",
+               "pct_arrets_sautes": "arret-non-desservi"}
+GROUP_ALL = "Ensemble"
 
 
-def mode_hourly_chart(df: pd.DataFrame) -> dict:
-    series = []
-    for mode, sub in df.groupby("mode"):
-        hm = {int(r["heure"]): round(r["pct_retard_5min"], 1) for _, r in sub.iterrows()}
-        data = [{"y": hm[h], "color": palette_hex(hm[h], "pourcent")} if h in hm else {"y": None}
-                for h in range(24)]
-        series.append({**_mode_line_series(sub["route_type"].iloc[0], mode, data),
-                       "tooltip": unit_tooltip(" %", header=HOUR_HEADER)})
-    return {
-        "lexique": "retards-de-plus-de-5-min",
-        "chart": {"type": "line", "height": 330},
-        "title": {"text": None},
-        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
-        "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
-        "series": series,
-    }
+def period_category(label: str) -> str:
+    """Libellé d'axe d'un créneau : son nom, puis ses jours et heures en dessous."""
+    detail = PERIOD_DETAILS.get(label)
+    return f"{label}<br><span style=\"font-size:12px\">{detail}</span>" if detail else label
 
 
-def period_punctuality_chart(df: pd.DataFrame) -> dict:
-    data = [{"y": round(r["pct_a_l_heure"], 1), "color": palette_hex(r["pct_a_l_heure"], "score"),
-             "passages": int(r["observations"]), "moy": float(r["retard_moyen_s"])}
+def period_score_chart(df: pd.DataFrame) -> dict:
+    """Score de fiabilité par créneau (couleur = palier)."""
+    data = [{"y": round(float(r["score_fiabilite"]), 1), "color": palette_hex(r["score_fiabilite"], "score"),
+             "ponct": round(float(r["pct_a_l_heure"]), 1), "skip": round(float(r["pct_arrets_sautes"]), 2),
+             "passages": int(r["observations"])}
             for _, r in df.iterrows()]
     return {
         "legend": {"enabled": False},
-        "chart": {"type": "column", "height": 300},
+        "chart": {"type": "column", "height": 330},
         "title": {"text": None},
-        "xAxis": {"categories": df["période"].tolist(), "title": {"text": None}},
-        "yAxis": {"title": {"text": "Ponctualité ≤ 5 min (%)"}, "min": 0, "max": 100},
-        "series": [{"name": "Ponctualité", "data": data,
-                    "tooltip": {"pointFormat": "À l'heure : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>Retard moyen : {point.moy:.0f} s<br/>"}}],
+        "xAxis": {"categories": [period_category(p) for p in df["période"]], "title": {"text": None}},
+        "yAxis": {"title": {"text": "Score de fiabilité / 100"}, "min": 0, "max": 100},
+        "series": [{"name": "Score de fiabilité", "data": data,
+                    "tooltip": {"pointFormat": "Score de fiabilité : <b>{point.y:.1f} / 100</b><br/>"
+                                               "À l'heure : {point.ponct:.1f} %<br/>"
+                                               "Arrêts non desservis : {point.skip:.2f} %<br/>"
+                                               "Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 4, "groupPadding": 0.05, "pointPadding": 0.08}},
-        "lexique": "a-l-heure-ponctualite",
+        "lexique": "score-de-fiabilite",
+    }
+
+
+def _group_series(group: str, route_type, data: list, unit: str, decimals: int) -> dict:
+    tooltip = unit_tooltip(unit, decimals)
+    if group == GROUP_ALL:
+        return {"name": GROUP_ALL, "data": data, "color": BLACK_FOREST, "lineWidth": 3, "zIndex": 3,
+                "marker": {"enabled": True, "radius": 4, "symbol": "circle"}, "tooltip": tooltip}
+    return {**_mode_line_series(route_type, mode_series_name(route_type, group), data), "lineWidth": 1.5,
+            "marker": {"enabled": True, "symbol": mode_marker(route_type), "radius": 4,
+                       "fillColor": BLACK_FOREST, "lineColor": BLACK_FOREST, "lineWidth": 1},
+            "tooltip": tooltip}
+
+
+def groups_trend_chart(df: pd.DataFrame, metric: str, groups: list[str]) -> dict:
+    """Une série par groupe (« Ensemble » ou un mode), jour par jour ; moyenne sur 7 jours pour l'ensemble seul."""
+    label, unit, decimals, kind = TREND_METRICS[metric]
+    series = []
+    for group in groups:
+        sub = df[df["groupe"] == group].sort_values("date_service")
+        if sub.empty:
+            continue
+        values = sub[metric].astype(float)
+        dates = [int(pd.Timestamp(ts).timestamp() * 1000) for ts in sub["date_service"]]
+        data = [{"x": ms, "y": round(float(v), decimals), "color": palette_hex(abs(float(v)), kind)}
+                for ms, v in zip(dates, values) if pd.notna(v)]
+        series.append(_group_series(group, sub["route_type"].iloc[0], data, unit, decimals))
+        if groups == [GROUP_ALL]:
+            ma = [[ms, round(float(values.iloc[max(0, i - 6):i + 1].mean()), decimals)] for i, ms in enumerate(dates)]
+            series.append({"name": "Moyenne sur 7 jours", "data": ma, "color": OLIVE_LEAF, "dashStyle": "ShortDash",
+                           "lineWidth": 2, "marker": {"enabled": False}, "tooltip": unit_tooltip(unit, decimals)})
+    y_axis = {"title": {"text": f"{label} ({unit.strip()})"}, "min": 0}
+    if unit != " s":
+        y_axis["max"] = 100
+    return {
+        "chart": {"type": "line", "height": 340},
+        "title": {"text": None},
+        "xAxis": {"type": "datetime", "title": {"text": None}},
+        "yAxis": y_axis,
+        "series": series,
+        "tooltip": {"shared": True},
+        "legend": {"enabled": len(series) > 1},
+        "lexique": TREND_TERMS[metric],
+    }
+
+
+def groups_hourly_chart(df: pd.DataFrame, groups: list[str]) -> dict:
+    """Retards de plus de 5 min heure par heure, pour l'ensemble et les modes choisis."""
+    series = []
+    for group in groups:
+        sub = df[df["groupe"] == group]
+        if sub.empty:
+            continue
+        by_hour = {int(h): round(float(v), 1) for h, v in zip(sub["heure"], sub["pct_retard_5min"]) if pd.notna(v)}
+        data = [{"y": by_hour[h], "color": palette_hex(by_hour[h], "pourcent")} if h in by_hour else {"y": None}
+                for h in range(24)]
+        series.append({**_group_series(group, sub["route_type"].iloc[0], data, " %", 1),
+                       "tooltip": unit_tooltip(" %", header=HOUR_HEADER)})
+    return {
+        "chart": {"type": "line", "height": 330},
+        "title": {"text": None},
+        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
+        "yAxis": {"title": {"text": "Retards de plus de 5 min (%)"}, "min": 0},
+        "series": series,
+        "legend": {"enabled": len(series) > 1},
+        "lexique": "retards-de-plus-de-5-min",
     }
 
 
@@ -426,48 +470,11 @@ def period_mode_chart(df: pd.DataFrame) -> dict:
         "lexique": "retards-de-plus-de-5-min",
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
-        "xAxis": {"categories": categories, "title": {"text": None}},
+        "xAxis": {"categories": [period_category(p) for p in categories], "title": {"text": None}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": series,
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.06, "pointPadding": 0.05}},
         "legend": GLYPH_LEGEND,
-    }
-
-
-def engagement_trend_chart(trend: pd.DataFrame, metric: str) -> dict:
-    """Série quotidienne d'une métrique + moyenne glissante sur 7 jours."""
-    df = trend.sort_values("date_service").reset_index(drop=True)
-    dates_ms = [int(pd.Timestamp(ts).timestamp() * 1000) for ts in df["date_service"]]
-    values = df[metric].astype(float)
-    raw = [[ms, round(float(v), 1)] for ms, v in zip(dates_ms, values)]
-    ma = [round(float(values.iloc[max(0, i - 6):i + 1].mean()), 1) for i in range(len(df))]
-    titles = {
-        "pct_a_l_heure": "Ponctualité ≤ 5 min (%)",
-        "pct_retard_5min": "Retards > 5 min (%)",
-        "pct_arrets_sautes": "Arrêts non desservis (%)",
-        "retard_moyen_s": "Retard moyen (s)",
-    }
-    unit, decimals = (" s", 0) if metric == "retard_moyen_s" else (" %", 1)
-    terms = {"pct_a_l_heure": "a-l-heure-ponctualite", "pct_retard_5min": "retards-de-plus-de-5-min",
-             "pct_arrets_sautes": "arret-non-desservi", "retard_moyen_s": "retard-moyen"}
-    y_axis = {"title": {"text": titles[metric]}, "min": 0}
-    if metric != "retard_moyen_s":
-        y_axis["max"] = 100
-    return {
-        "chart": {"type": "line", "height": 320},
-        "title": {"text": None},
-        "xAxis": {"type": "datetime", "title": {"text": None}},
-        "yAxis": y_axis,
-        "series": [
-            {"name": "Quotidien", "data": raw, "color": BLACK_FOREST, "lineWidth": 2,
-             "marker": {"enabled": True, "radius": 3},
-             "zIndex": 2},
-            {"name": "Moyenne 7 jours", "data": [[ms, v] for ms, v in zip(dates_ms, ma)],
-             "color": OLIVE_LEAF, "dashStyle": "ShortDash", "lineWidth": 2,
-             "marker": {"enabled": False}},
-        ],
-        "tooltip": {"shared": True, "valueSuffix": unit, "valueDecimals": decimals},
-        "lexique": terms[metric],
     }
 
 

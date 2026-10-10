@@ -613,67 +613,71 @@ def line_hints(origin: dict, skips: dict, cancelled: int, peak: dict | None = No
     return hints
 
 
-WATCH_DECLINE_POINTS = 5.0
-WATCH_SCORE_BELOW = 80.0
+PRIORITY_KINDS = ("arret_retard", "ligne_retard", "arret_baisse", "ligne_baisse")
 
 
-def watchlist(progression: pd.DataFrame | None, lines: pd.DataFrame | None,
-              stops: pd.DataFrame | None, min_obs: int, limit: int = 3,
-              prev_label: str | None = None) -> list[dict]:
-    """Points à surveiller en priorité, sans notification : au plus `limit` éléments.
+def _stop_title(row) -> str:
+    n_dirs = int(row["n_sens"]) if "n_sens" in row and pd.notna(row["n_sens"]) else 1
+    if n_dirs > 1:
+        return f"{row['stop_name']} ({n_dirs} {'sens' if n_dirs == 2 else 'quais'})"
+    direction = row.get("direction") or ""
+    return f"{row['stop_name']} — {direction}" if direction else str(row["stop_name"])
 
-    1. parmi les lignes dont le score baisse d'au moins WATCH_DECLINE_POINTS points
-       par rapport à la période de comparaison (`prev_label`), celle dont la baisse
-       pèse le plus (baisse × passages de la période) ;
-    2. l'arrêt qui cumule le plus de passages > 5 min parmi ceux sous
-       WATCH_SCORE_BELOW (avec `n_sens`, un arrêt regroupé sur plusieurs sens est
-       cité une fois, avec son sens le moins fiable) ;
-    3. la ligne qui cumule le plus de passages > 5 min parmi celles sous
-       WATCH_SCORE_BELOW, si elle n'est pas déjà citée.
+
+def _late(df: pd.DataFrame) -> pd.Series:
+    return df["observations"] * df["pct_retard_5min"] / 100
+
+
+def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now: pd.DataFrame | None,
+               stops_before: pd.DataFrame | None, progression: pd.DataFrame | None, min_obs: int,
+               prev_label: str | None = None) -> dict:
+    """Les quatre priorités du moment, par type (None quand rien ne s'applique).
+
+    - arret_retard : l'arrêt (quais regroupés, `stops`) qui a le plus de passages à plus de 5 min ;
+    - ligne_retard : la ligne (`lines`, périmètre du territoire) qui a le plus de passages à plus de 5 min ;
+    - arret_baisse : le quai dont le score baisse le plus entre `stops_before` et `stops_now` ;
+    - ligne_baisse : la ligne dont le score baisse le plus (`progression`).
+    Seuls comptent les arrêts et lignes d'au moins `min_obs` passages (sur chaque période pour une baisse).
     """
-    items: list[dict] = []
-    if progression is not None and not progression.empty:
-        declining = progression[progression["delta_score"] <= -WATCH_DECLINE_POINTS]
-        if not declining.empty:
-            weight = -declining["delta_score"] * declining["observations"]
-            worst = declining.loc[weight.idxmax()]
-            items.append({
-                "kind": "ligne", "id": worst["route_id"], "title": f"Ligne {worst['ligne']}",
-                "reason": (f"score en baisse de {format_number(abs(float(worst['delta_score'])), 1)} points"
-                           f"{' par rapport à ' + prev_label if prev_label else ''} "
-                           f"({format_number(float(worst['score_fiabilite_prev']), 1)} → {format_number(float(worst['score_fiabilite']), 1)})"),
-            })
+    out = dict.fromkeys(PRIORITY_KINDS)
+    since = f" par rapport à {prev_label}" if prev_label else ""
     if stops is not None and not stops.empty:
-        s = stops[(stops["observations"] >= min_obs) & (stops["score_fiabilite"] < WATCH_SCORE_BELOW)]
+        s = stops[stops["observations"] >= min_obs]
         if not s.empty:
-            s = s.assign(late=s["observations"] * s["pct_retard_5min"] / 100).sort_values("late", ascending=False)
-            top = s.iloc[0]
-            n_dirs = int(top["n_sens"]) if "n_sens" in top and pd.notna(top["n_sens"]) else 1
-            direction = top.get("direction") or ""
-            score = float(top["score_fiabilite"])
-            if n_dirs > 1:
-                title = f"{top['stop_name']} ({n_dirs} {'sens' if n_dirs == 2 else 'quais'})"
-                tail = f" ; le moins fiable : {direction}, {format_number(score, 1)}/100" if direction else f" ; score {format_number(score, 1)}/100"
-            else:
-                title = f"{top['stop_name']} — {direction}" if direction else str(top["stop_name"])
-                tail = f" ; score {format_number(score, 1)}/100"
-            items.append({
-                "kind": "arrêt", "id": top["stop_id"], "title": title,
-                "reason": f"le plus de passages en retard du territoire : {float(top['late']):.0f} à plus de 5 min{tail}",
-            })
+            top = s.loc[_late(s).idxmax()]
+            out["arret_retard"] = {
+                "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
+                "figure": f"{_late(s).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
+                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100"}
     if lines is not None and not lines.empty:
-        cited = {i["id"] for i in items if i["kind"] == "ligne"}
-        l = lines[(lines["observations"] >= min_obs) & (lines["score_fiabilite"] < WATCH_SCORE_BELOW)
-                  & ~lines["route_id"].isin(cited)]
+        l = lines[lines["observations"] >= min_obs]
         if not l.empty:
-            l = l.assign(late=l["observations"] * l["pct_retard_5min"] / 100).sort_values("late", ascending=False)
-            top = l.iloc[0]
-            items.append({
+            top = l.loc[_late(l).idxmax()]
+            out["ligne_retard"] = {
                 "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
-                "reason": (f"le plus de passages en retard des lignes : {float(top['late']):.0f} à plus de 5 min ; "
-                           f"score {format_number(float(top['score_fiabilite']), 1)}/100"),
-            })
-    return items[:limit]
+                "figure": f"{_late(l).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
+                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100"}
+    if stops_now is not None and stops_before is not None and not stops_now.empty and not stops_before.empty:
+        before = stops_before[stops_before["observations"] >= min_obs][["stop_id", "score_fiabilite"]]
+        now = stops_now[stops_now["observations"] >= min_obs]
+        both = now.merge(before.rename(columns={"score_fiabilite": "score_prev"}), on="stop_id")
+        if not both.empty:
+            both = both.assign(delta=both["score_fiabilite"] - both["score_prev"])
+            top = both.loc[both["delta"].idxmin()]
+            if top["delta"] < 0:
+                out["arret_baisse"] = {
+                    "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
+                    "figure": f"{format_number(float(top['delta']), 1, signed=True)} pts", "unit": f"de score{since}",
+                    "reason": f"{format_number(float(top['score_prev']), 1)} → {format_number(float(top['score_fiabilite']), 1)} / 100"}
+    if progression is not None and not progression.empty:
+        top = progression.loc[progression["delta_score"].idxmin()]
+        if top["delta_score"] < 0:
+            out["ligne_baisse"] = {
+                "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
+                "figure": f"{format_number(float(top['delta_score']), 1, signed=True)} pts", "unit": f"de score{since}",
+                "reason": (f"{format_number(float(top['score_fiabilite_prev']), 1)} → "
+                           f"{format_number(float(top['score_fiabilite']), 1)} / 100")}
+    return out
 
 
 MIN_CELL_PASSAGES = 3

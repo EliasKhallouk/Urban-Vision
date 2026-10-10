@@ -466,19 +466,6 @@ class TestLoadEngagement:
         )
         conn.commit()
 
-    def test_tendance_quotidienne_du_reseau(self, conn):
-        self._seed(conn)
-        cutoff = _epoch_local(2026, 9, 12)
-        since = _epoch_local(2026, 9, 1)
-        end = _epoch_local(2026, 9, 12)
-        df = app_mod.load_engagement_trend(conn, cutoff, since, end_ts=end)
-        assert len(df) == 4
-        row = df[df["date_service"] == pd.Timestamp("2026-09-01")].iloc[0]
-        assert row["observations"] == 200
-        assert round(row["pct_a_l_heure"], 6) == 65.0
-        assert round(row["pct_retard_5min"], 6) == 35.0
-        assert round(row["retard_moyen_s"], 6) == 350.0
-
     def test_progression_par_rapport_a_la_periode_precedente(self, conn):
         self._seed(conn)
         cutoff = _epoch_local(2026, 9, 12)
@@ -501,7 +488,6 @@ class TestLoadEngagement:
         cutoff = _epoch_local(2026, 9, 12)
         since = _epoch_local(2026, 9, 1)
         end = _epoch_local(2026, 9, 12)
-        assert app_mod.load_engagement_trend(conn, cutoff, since, end).empty
         assert app_mod.load_engagement_progression(conn, cutoff, since, end, since, end).empty
         assert app_mod.load_engagement_progression(conn, cutoff, since, end, None, None).empty
 

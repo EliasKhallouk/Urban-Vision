@@ -478,14 +478,11 @@ class TestVueRapide:
                              "score_fiabilite": [85.0, 40.0], "pct_retard_5min": [5.0, 30.0],
                              "pct_arrets_sautes": [0.5, 2.0], "observations": [1000, 400]})
 
-    def test_tableau_des_lignes_rapide_puis_detaille(self):
-        quick = app_mod.lines_table(self._ranking(), {"B"}, detailed=False)
-        assert list(quick.columns) == ["Ligne", "État", "Score / 100"]
-        assert quick["État"].tolist() == ["Fiable", "Problématique"]
-        assert quick["Ligne"].tolist() == ["● A", "■ ⚠ 12"]
-        full = app_mod.lines_table(self._ranking(), set(), detailed=True)
-        assert list(full.columns) == ["Ligne", "État", "Score / 100", "Retards > 5 min",
-                                      "Arrêts non desservis", "Passages"]
+    def test_tableau_des_lignes_sans_colonne_etat(self):
+        table = app_mod.lines_table(self._ranking(), {"B"})
+        assert list(table.columns) == ["Ligne", "Score / 100", "Retards > 5 min",
+                                       "Arrêts non desservis", "Passages"]
+        assert table["Ligne"].tolist() == ["● A", "■ ⚠ 12"]
 
     def test_bandeau_rapide_en_mots(self):
         cards = app_mod.header_kpis(88.0, 90.2, 136.0, 1.32, 1_277_999, 131, 17_079, 1_294_616,
@@ -692,3 +689,72 @@ class TestEchelleTypographique:
         from pathlib import Path
 
         assert "text-transform: uppercase" not in Path(app_mod.__file__).read_text(encoding="utf-8")
+
+
+class TestIndicateursParGroupe:
+    def _core(self):
+        return pd.DataFrame({
+            "date_service": pd.to_datetime(["2026-09-05", "2026-09-05", "2026-09-07"]),
+            "route_type": [0, 3, 3],
+            "obs": [100, 100, 200], "sum_delay": [6000, 12000, 20000],
+            "cnt_le300": [90, 70, 180], "cnt_gt300": [10, 30, 20],
+            "skipped": [0, 10, 0], "eligible": [100, 100, 200]})
+
+    def test_ensemble_et_modes_par_jour(self):
+        g = app_mod.group_metrics(self._core(), "date_service")
+        ensemble = g[(g["groupe"] == "Ensemble") & (g["date_service"] == pd.Timestamp("2026-09-05"))].iloc[0]
+        assert ensemble["route_type"] == -1
+        assert ensemble["observations"] == 200
+        assert ensemble["pct_a_l_heure"] == 80.0
+        assert ensemble["pct_retard_5min"] == 20.0
+        assert ensemble["retard_moyen_s"] == 90.0
+        assert ensemble["pct_arrets_sautes"] == 5.0
+        assert ensemble["score_fiabilite"] == 70.0
+        assert set(g["groupe"]) == {"Ensemble", "Tramway", "Bus"}
+
+    def test_toute_la_periode_et_score_global(self):
+        g = app_mod.group_metrics(self._core(), None)
+        assert len(g) == 3
+        assert round(app_mod.period_totals(g), 6) == round(85.0 - 2 * 2.5, 6)
+        assert app_mod.period_totals(g.head(0)) == 0.0
+
+    def test_sans_arrets_non_desservis_pas_de_score(self):
+        g = app_mod.group_metrics(self._core().drop(columns=["skipped", "eligible"]), "date_service")
+        assert "score_fiabilite" not in g.columns
+        assert app_mod.group_metrics(self._core().head(0), "heure").empty
+
+    def test_taux_d_arrets_non_desservis_semaine_et_week_end(self):
+        rates = app_mod.period_skip_rates(self._core())
+        assert rates == {"semaine": 0.0, "week-end": 5.0}
+        assert app_mod.period_skip_rates(self._core().head(0)) == {"semaine": 0.0, "week-end": 0.0}
+
+
+class TestTerritoireEtFiches:
+    def test_carte_de_priorite_avec_chiffre(self):
+        item = {"kind": "ligne", "id": "A", "title": "Ligne <1>", "figure": "500",
+                "unit": "passages à plus de 5 min", "reason": "score 60,0 / 100"}
+        card = app_mod.priority_card_html("ligne_retard", item, "août 2026")
+        assert "Ligne la plus en retard" in card
+        assert '<div class="prio-figure">500</div>' in card
+        assert "Ligne &lt;1&gt;" in card
+        assert card.count("<svg") == 2
+
+    def test_carte_de_priorite_vide(self):
+        assert "Aucune donnée sur la période précédente" in app_mod.priority_card_html("arret_baisse", None, None)
+        assert "Aucune baisse sur la période." in app_mod.priority_card_html("arret_baisse", None, "août 2026")
+        assert "Pas assez de passages" in app_mod.priority_card_html("arret_retard", None, None)
+
+    def test_legende_de_la_carte(self):
+        legend = app_mod.map_legend_html()
+        for text in ("Couleur", "Forme", "Taille", "Fiable", "À surveiller", "Problématique",
+                     "●</span>Tramway", "■</span>Bus", "▲</span>Ferry"):
+            assert text in legend
+
+    def test_bandeau_type_de_retard(self):
+        banner = app_mod.zone_banner_html(30.0, 22.0)
+        assert "Type de retard" in banner
+        assert "Retards rares mais longs" in banner
+        assert "22,0 %" in banner
+        assert "Retards fréquents mais courts" in app_mod.zone_banner_html(400.0, 8.0)
+        assert app_mod.zone_banner_html(None, 8.0) == ""
+        assert app_mod.zone_banner_html(float("nan"), 8.0) == ""

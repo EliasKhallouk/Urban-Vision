@@ -309,7 +309,7 @@ class TestTronconDominant:
                          "de parcours de la ligne plus que d'un aménagement local. Voir la fiche de la ligne 5."]
 
 
-class TestASurveiller:
+class TestPriorites:
     def _prog(self, delta):
         return pd.DataFrame({"route_id": ["A", "B"], "ligne": ["1", "2"], "delta_score": [delta, 3.0],
                              "observations": [1000, 1000],
@@ -325,35 +325,39 @@ class TestASurveiller:
                              "direction": ["vers Parc", ""], "observations": [400, 900],
                              "pct_retard_5min": [50.0, 5.0], "score_fiabilite": [50.0, 95.0]})
 
-    def test_trois_signaux_distincts(self):
-        items = dg.watchlist(self._prog(-12.0), self._lines(), self._stops(), 50, prev_label="août 2026")
-        assert [(i["kind"], i["id"]) for i in items] == [("ligne", "A"), ("arrêt", "s1"), ("ligne", "C")]
-        assert items[0]["reason"] == "score en baisse de 12,0 points par rapport à août 2026 (80,0 → 68,0)"
-        assert items[1]["title"] == "Gare — vers Parc"
-        assert items[1]["reason"] == "le plus de passages en retard du territoire : 200 à plus de 5 min ; score 50,0/100"
-        assert items[2]["reason"].startswith("le plus de passages en retard des lignes : 500 à plus de 5 min")
+    def test_quatre_priorites(self):
+        before = self._stops().assign(score_fiabilite=[60.0, 99.0])
+        items = dg.priorities(self._stops(), self._lines(), self._stops(), before, self._prog(-12.0), 50,
+                              prev_label="août 2026")
+        assert list(items) == list(dg.PRIORITY_KINDS)
+        assert items["arret_retard"]["id"] == "s1"
+        assert items["arret_retard"]["title"] == "Gare — vers Parc"
+        assert items["arret_retard"]["figure"] == "200"
+        assert items["ligne_retard"]["id"] == "C"
+        assert items["ligne_retard"]["figure"] == "500"
+        assert items["arret_baisse"]["id"] == "s1"
+        assert items["arret_baisse"]["figure"] == "−10,0 pts"
+        assert items["arret_baisse"]["unit"] == "de score par rapport à août 2026"
+        assert items["ligne_baisse"]["id"] == "A"
+        assert items["ligne_baisse"]["reason"] == "80,0 → 68,0 / 100"
 
     def test_arret_regroupe_sur_deux_sens(self):
         stops = pd.DataFrame({"stop_id": ["s1"], "stop_name": ["Blancherie"], "direction": ["vers Blancherie"],
                               "n_sens": [2], "observations": [2950], "pct_retard_5min": [16.8],
                               "score_fiabilite": [67.9]})
-        item = dg.watchlist(None, None, stops, 50)[0]
+        item = dg.priorities(stops, None, None, None, None, 50)["arret_retard"]
         assert item["title"] == "Blancherie (2 sens)"
-        assert item["reason"] == ("le plus de passages en retard du territoire : 496 à plus de 5 min ; "
-                                  "le moins fiable : vers Blancherie, 67,9/100")
+        assert item["figure"] == "496"
 
-    def test_baisse_ponderee_par_les_passages(self):
-        prog = pd.DataFrame({"route_id": ["A", "B"], "ligne": ["Arena", "24"],
-                             "delta_score": [-50.0, -6.0], "observations": [60, 9000],
-                             "score_fiabilite_prev": [97.0, 85.0], "score_fiabilite": [47.0, 79.0]})
-        assert dg.watchlist(prog, None, None, 50)[0]["id"] == "B"
-
-    def test_baisse_faible_ignoree_et_petit_echantillon_exclu(self):
-        items = dg.watchlist(self._prog(-2.0), self._lines(), None, 50)
-        assert [(i["kind"], i["id"]) for i in items] == [("ligne", "C")]
+    def test_petit_echantillon_exclu_et_aucune_hausse_retenue(self):
+        items = dg.priorities(None, self._lines().iloc[[2]], self._stops(), self._stops(),
+                              self._prog(2.0).iloc[[0]], 50)
+        assert items["ligne_retard"] is None
+        assert items["arret_baisse"] is None
+        assert items["ligne_baisse"] is None
 
     def test_rien_a_signaler(self):
-        assert dg.watchlist(None, None, None, 50) == []
+        assert dg.priorities(None, None, None, None, None, 50) == dict.fromkeys(dg.PRIORITY_KINDS)
 
 
 def _fridays_hourly(bad_fridays=4, n_weeks=5, route="A"):

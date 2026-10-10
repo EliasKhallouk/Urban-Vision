@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import highcharts as hc
-from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, hex as palette_hex
+from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, hex as palette_hex
 
 
 def _assert_json_serializable(config):
@@ -59,7 +59,7 @@ class TestScatterChart:
 
     def test_serie_par_mode_forme_dediee(self):
         config = hc.scatter_chart(self._df())
-        assert len(config["series"]) == 2
+        assert [x["name"] for x in config["series"]] == ["Bus", "Tramway", "Zones"]
         bus = next(s for s in config["series"] if s["name"] == "Bus")
         assert bus["marker"]["symbol"] == "square"
         assert len(bus["data"]) == 2
@@ -84,33 +84,70 @@ class TestScatterChart:
         assert config["xAxis"]["plotLines"][0]["value"] == 60.0
         assert config["yAxis"]["plotLines"][0]["value"] == 15.0
 
+    def test_libelles_des_zones_aux_quatre_coins(self):
+        zones = hc.scatter_chart(self._df())["series"][-1]
+        assert zones["enableMouseTracking"] is False and zones["showInLegend"] is False
+        labels = {(d["dataLabels"]["align"], d["dataLabels"]["verticalAlign"]): d["dataLabels"]["format"]
+                  for d in zones["data"]}
+        assert labels == {("left", "top"): "Retards rares mais longs", ("right", "top"): "Zone critique",
+                          ("right", "bottom"): "Retards fréquents mais courts", ("left", "bottom"): "Risque faible"}
+        top_left = next(d for d in zones["data"] if d["dataLabels"]["align"] == "left")
+        assert top_left["x"] == 0.0
 
-class TestSerieTemporelles:
-    def test_network_daily_chart_ms_epoch(self):
-        df = pd.DataFrame(
-            {
-                "date_service": pd.to_datetime(["2026-09-01", "2026-09-02"]),
-                "pct_retard_5min": [12.0, 3.0],
-                "observations": [1000, 1200],
-            }
-        )
-        config = hc.network_daily_chart(df)
-        assert config["xAxis"]["type"] == "datetime"
-        assert config["series"][0]["data"][0]["x"] == int(
-            pd.Timestamp("2026-09-01").timestamp() * 1000
-        )
-        assert config["series"][0]["data"][0]["color"] == palette_hex(12.0, "pourcent")
-        assert config["series"][0]["data"][1]["color"] == palette_hex(3.0, "pourcent")
 
-    def test_network_hourly_chart_remplit_les_24_heures(self):
-        df = pd.DataFrame({"heure": [8, 20], "pct_retard_5min": [26.5, 4.0]})
-        config = hc.network_hourly_chart(df)
-        assert config["xAxis"]["categories"] == [str(h) for h in range(24)]
-        data = config["series"][0]["data"]
-        assert len(data) == 24
-        assert data[8] == {"y": 26.5, "color": palette_hex(26.5, "pourcent")}
-        assert data[0] == {"y": 0, "color": SUNLIT_CLAY}
-        assert data[20] == {"y": 4.0, "color": palette_hex(4.0, "pourcent")}
+class TestCreneauxEtGroupes:
+    def test_libelle_de_creneau_avec_jours_et_heures(self):
+        assert hc.period_category("Matin") == ('Matin<br><span style="font-size:12px">lun.–ven.<br>'
+                                               '6\u00a0h–10\u00a0h</span>')
+        assert hc.period_category("Week-end").endswith("samedi<br>et dimanche</span>")
+        assert hc.period_category("Autre") == "Autre"
+
+    def test_score_par_creneau(self):
+        df = pd.DataFrame({"période": ["Matin", "Week-end"], "score_fiabilite": [82.0, 45.0],
+                           "pct_a_l_heure": [86.0, 50.0], "pct_arrets_sautes": [2.0, 2.5],
+                           "observations": [1000, 400]})
+        config = hc.period_score_chart(df)
+        assert config["xAxis"]["categories"][0].startswith("Matin<br>")
+        assert config["yAxis"]["max"] == 100
+        point = config["series"][0]["data"][1]
+        assert point["y"] == 45.0 and point["color"] == palette_hex(45.0, "score") and point["skip"] == 2.5
+        assert config["lexique"] == "score-de-fiabilite"
+        _assert_json_serializable(config)
+
+    def _daily(self):
+        return pd.DataFrame({
+            "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-01", "2026-09-02"]),
+            "groupe": ["Ensemble", "Ensemble", "Bus", "Bus"], "route_type": [-1, -1, 3, 3],
+            "score_fiabilite": [80.0, 70.0, 60.0, 50.0], "retard_moyen_s": [100.0, 120.0, 150.0, 170.0]})
+
+    def test_tendance_ensemble_seul_avec_moyenne_glissante(self):
+        config = hc.groups_trend_chart(self._daily(), "score_fiabilite", ["Ensemble"])
+        assert [x["name"] for x in config["series"]] == ["Ensemble", "Moyenne sur 7 jours"]
+        first = config["series"][0]["data"][0]
+        assert first["x"] == int(pd.Timestamp("2026-09-01").timestamp() * 1000)
+        assert first["color"] == palette_hex(80.0, "score")
+        assert config["series"][1]["data"][1][1] == 75.0
+        assert config["yAxis"]["max"] == 100
+        assert config["lexique"] == "score-de-fiabilite"
+        _assert_json_serializable(config)
+
+    def test_tendance_par_mode_avec_forme(self):
+        config = hc.groups_trend_chart(self._daily(), "retard_moyen_s", ["Ensemble", "Bus", "Ferry"])
+        assert [x["name"] for x in config["series"]] == ["Ensemble", "■ Bus"]
+        assert config["series"][1]["marker"]["symbol"] == "square"
+        assert "max" not in config["yAxis"]
+        assert config["legend"]["enabled"] is True
+
+    def test_retards_par_heure_et_par_groupe(self):
+        df = pd.DataFrame({"heure": [8, 8], "groupe": ["Ensemble", "Tramway"], "route_type": [-1, 0],
+                           "pct_retard_5min": [12.0, 4.0]})
+        config = hc.groups_hourly_chart(df, ["Ensemble", "Tramway"])
+        ensemble, tram = config["series"]
+        assert len(ensemble["data"]) == 24
+        assert ensemble["data"][8] == {"y": 12.0, "color": palette_hex(12.0, "pourcent")}
+        assert ensemble["data"][0] == {"y": None}
+        assert tram["marker"]["symbol"] == "circle"
+        assert config["xAxis"]["labels"]["step"] == 2
 
 
 class TestModeCharts:
@@ -136,43 +173,6 @@ class TestModeCharts:
         assert bus["data"][1]["color"] == palette_hex(5.0, "pourcent")
         assert bus["dataLabels"]["format"] == "■"
 
-    def _mode_daily_df(self):
-        return pd.DataFrame(
-            {
-                "mode": ["Bus", "Bus", "Tramway"],
-                "route_type": [3, 3, 0],
-                "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-01"]),
-                "pct_retard_5min": [6.0, 7.0, 2.0],
-            }
-        )
-
-    def test_mode_daily_chart(self):
-        config = hc.mode_daily_chart(self._mode_daily_df())
-        names = [s["name"] for s in config["series"]]
-        assert names == ["Bus", "Tramway"]
-        bus, tram = config["series"]
-        assert bus["color"] == BLACK_FOREST
-        assert bus["marker"]["symbol"] == "square"
-        assert tram["marker"]["symbol"] == "circle"
-        assert bus["dashStyle"] != tram["dashStyle"]
-        assert len(bus["data"]) == 2
-        assert bus["data"][0]["color"] == palette_hex(6.0, "pourcent")
-
-    def test_mode_hourly_chart_marque_les_trous(self):
-        df = pd.DataFrame(
-            {
-                "mode": ["Bus"],
-                "route_type": [3],
-                "heure": [8],
-                "pct_retard_5min": [10.0],
-            }
-        )
-        config = hc.mode_hourly_chart(df)
-        data = config["series"][0]["data"]
-        assert len(data) == 24
-        assert data[8] == {"y": 10.0, "color": palette_hex(10.0, "pourcent")}
-        assert data[0] == {"y": None}
-
     def test_period_mode_chart_glyphe_et_palier(self):
         df = pd.DataFrame(
             {
@@ -183,7 +183,7 @@ class TestModeCharts:
             }
         )
         config = hc.period_mode_chart(df)
-        assert config["xAxis"]["categories"] == ["Matin", "Journée"]
+        assert [c.split("<br>")[0] for c in config["xAxis"]["categories"]] == ["Matin", "Journée"]
         bus = next(s for s in config["series"] if s["name"] == "■ Bus")
         assert bus["data"][0] == {"y": 20.0, "color": palette_hex(20.0, "pourcent")}
         assert bus["dataLabels"]["format"] == "■"
@@ -231,32 +231,6 @@ class TestDistribution:
 
 
 class TestEngagement:
-    def _trend(self):
-        return pd.DataFrame(
-            {
-                "date_service": pd.to_datetime(["2026-09-01", "2026-09-02", "2026-09-03"]),
-                "pct_a_l_heure": [90.0, 80.0, 70.0],
-                "retard_moyen_s": [100.0, 110.0, 120.0],
-            }
-        )
-
-    def test_trend_serie_et_moyenne_glissante(self):
-        config = hc.engagement_trend_chart(self._trend(), "pct_a_l_heure")
-        names = [s["name"] for s in config["series"]]
-        assert names == ["Quotidien", "Moyenne 7 jours"]
-        assert config["xAxis"]["type"] == "datetime"
-        assert config["yAxis"]["max"] == 100
-        assert config["series"][0]["data"][0][0] == int(
-            pd.Timestamp("2026-09-01").timestamp() * 1000
-        )
-        assert config["series"][0]["data"][0][1] == 90.0
-        assert config["series"][1]["data"][2][1] == 80.0  # moyenne des 3 points
-        _assert_json_serializable(config)
-
-    def test_trend_retard_moyen_sans_max(self):
-        config = hc.engagement_trend_chart(self._trend(), "retard_moyen_s")
-        assert "max" not in config["yAxis"]
-
     def _prog(self):
         return pd.DataFrame(
             {
@@ -390,7 +364,8 @@ class TestInfobulles:
 
         slugs = {app_mod.lexique_slug(term) for term, _ in app_mod.LEXIQUE}
         hourly = pd.DataFrame({"heure": [7, 8], "pct_retard_5min": [10.0, 20.0], "observations": [5, 6]})
-        configs = [hc.network_hourly_chart(hourly), hc.hourly_distribution_chart(hourly),
+        groups = hourly.assign(groupe="Ensemble", route_type=-1)
+        configs = [hc.groups_hourly_chart(groups, ["Ensemble"]), hc.hourly_distribution_chart(hourly),
                    hc.ranking_chart(_ranking_df())]
         for config in configs:
             assert config["lexique"] in slugs
@@ -398,13 +373,14 @@ class TestInfobulles:
         source = (hc.__file__ and open(hc.__file__, encoding="utf-8").read())
         import re
         assert set(re.findall(r'"lexique": "([a-z0-9-]+)"', source)) <= slugs
-        trend = pd.DataFrame({"date_service": ["2026-09-01", "2026-09-02"], "pct_a_l_heure": [90.0, 91.0],
+        trend = pd.DataFrame({"date_service": ["2026-09-01", "2026-09-02"], "groupe": ["Ensemble"] * 2,
+                              "route_type": [-1, -1], "score_fiabilite": [88.0, 87.0], "pct_a_l_heure": [90.0, 91.0],
                               "pct_retard_5min": [8.0, 7.0], "pct_arrets_sautes": [1.0, 1.5],
                               "retard_moyen_s": [60.0, 55.0]})
-        for metric in ("pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "retard_moyen_s"):
-            config = hc.engagement_trend_chart(trend, metric)
+        for metric in hc.TREND_METRICS:
+            config = hc.groups_trend_chart(trend, metric, ["Ensemble"])
             assert config["lexique"] in slugs
-            assert config["tooltip"]["valueSuffix"] == (" s" if metric == "retard_moyen_s" else " %")
+            assert config["series"][0]["tooltip"]["pointFormat"].endswith(f"{hc.TREND_METRICS[metric][1]}</b><br/>")
 
     def test_lien_lexique_dans_le_html(self):
         html = hc._html({"chart": {"type": "line"}, "series": [], "lexique": "retard-moyen"}, 300)
