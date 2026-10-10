@@ -158,7 +158,7 @@ def render_tier_legend(title: str = "", invert: bool = False) -> None:
             f'<b>{TIER_LABELS[tier_name].capitalize()}</b></span>'
         )
     st.markdown(
-        f'<div style="margin:.15rem 0 .6rem;font-size:.78rem;color:{OLIVE_LEAF_70}">'
+        f'<div class="tier-legend">'
         f'{(f"<b>{title}</b>&nbsp; " if title else "")}{chips}</div>',
         unsafe_allow_html=True,
     )
@@ -303,6 +303,13 @@ def get_cutoff_ts(conn: sqlite3.Connection) -> int | None:
     return None if row["max_ts"] is None else int(row["max_ts"]) - FRESHNESS_BUFFER_SECONDS
 
 
+def _date_and_time(ts: int | None) -> tuple[str, str | None]:
+    if not ts:
+        return "inconnue", None
+    moment = datetime.fromtimestamp(ts)
+    return moment.strftime("%d/%m/%Y"), moment.strftime("à %H:%M")
+
+
 def format_date(ts: int | None) -> str:
     if not ts:
         return "inconnue"
@@ -435,7 +442,18 @@ def inject_style() -> None:
     st.markdown(
         f"""
         <style>
-        .stApp {{ background: #FFFFFF; color: #283618; }}
+        :root {{
+            --fs-page: 1.75rem; --fs-figure: 1.6rem; --fs-section: 1.3rem; --fs-block: 1.0625rem;
+            --fs-body: 1rem; --fs-small: .875rem; --fs-label: .8125rem; --fs-micro: .75rem;
+            --lh-title: 1.2; --lh-body: 1.55; --lh-small: 1.45;
+            --ink: #283618; --ink-2: #606c38;
+        }}
+        .stApp {{ background: #FFFFFF; color: var(--ink); }}
+        [data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMain"] [data-testid="stMarkdownContainer"] li {{ font-size: var(--fs-body); line-height: var(--lh-body); }}
+        [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: var(--fs-small) !important; line-height: var(--lh-small); color: var(--ink-2) !important; opacity: 1 !important; }}
+        [data-testid="stMain"] [data-testid="stWidgetLabel"] p {{ font-size: var(--fs-small); font-weight: 600; color: var(--ink); }}
+        [data-testid="stExpander"] summary p {{ font-size: var(--fs-body); font-weight: 600; }}
         [data-testid="stHeader"] {{ background: transparent; }}
         .block-container {{ max-width: 1500px; padding-top: 2.1rem; padding-bottom: 3rem; }}
 
@@ -445,20 +463,20 @@ def inject_style() -> None:
         [data-testid="stSidebar"] > div:first-child {{ padding-top: 1.2rem; }}
         .sidebar-brand {{ display: flex; flex-direction: column; align-items: flex-start; gap: .55rem; margin: .1rem 0 1rem; }}
         .sidebar-brand img {{ height: 74px; width: auto; max-width: 100%; }}
-        .sidebar-brand span {{ color: #FEFAE0; font-size: 1.45rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }}
-        .sidebar-nav-label {{ color: #FFFFFF; font-size: .76rem; text-transform: uppercase; letter-spacing: .16em; font-weight: 600; margin: .8rem 0 .4rem; opacity: .9; }}
+        .sidebar-brand span {{ color: #FEFAE0; font-size: var(--fs-section); font-weight: 700; letter-spacing: -.01em; line-height: var(--lh-title); }}
+        .sidebar-nav-label {{ color: #FEFAE0; font-size: var(--fs-small); font-weight: 600; margin: .8rem 0 .4rem; opacity: .85; }}
         [data-testid="stSidebar"] [data-testid="stButton"] button:hover,
         [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {{ background: #DDA15E; border-color: #DDA15E; color: #283618; }}
         [data-testid="stSidebar"] [data-testid="stButton"] button:hover p {{ color: #283618; }}
         [data-testid="stSidebar"] hr {{ border-color: rgba(221, 161, 94, .3); }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] {{ margin-top: 1.2rem; }}
-        [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {{ color: #FEFAE0; font-weight: 600; font-size: .95rem; }}
+        [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {{ color: #FEFAE0; font-weight: 600; font-size: var(--fs-body); }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] label > span + div {{ background-color: rgba(254, 250, 224, .30) !important; }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] label:has(input:checked) > span + div {{ background-color: #DDA15E !important; }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] [data-testid="stTooltipIcon"] svg {{ stroke: #FEFAE0; }}
         /* Items de navigation : actif = pastille Cornsilk / inactif = blanc opaque, gros */
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label {{
-            color: #FFFFFF; opacity: 1; padding: .5rem .6rem; border-radius: 8px; font-size: 1.02rem; font-weight: 600;
+            color: #FFFFFF; opacity: 1; padding: .5rem .6rem; border-radius: 8px; font-size: var(--fs-body); font-weight: 600;
             margin-bottom: .15rem; cursor: pointer; transition: background .12s ease, color .12s ease;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:hover {{ background: rgba(254, 250, 224, .14); }}
@@ -466,33 +484,32 @@ def inject_style() -> None:
             background: #FEFAE0; font-weight: 700;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] p {{
-            color: #FFFFFF !important; margin: 0; font-weight: 600;
+            color: #FFFFFF !important; margin: 0; font-size: var(--fs-body); font-weight: 600;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) [data-testid="stMarkdownContainer"] p {{
             color: #283618 !important; font-weight: 700;
         }}
 
         /* ---- Titres ---- */
-        h1, h2, h3, h4 {{ color: #283618 !important; letter-spacing: -.025em; }}
-        h1 {{ font-size: 2rem !important; font-weight: 700 !important; margin-bottom: .15rem !important; }}
-        h2 {{ font-size: 1.375rem !important; font-weight: 600 !important; }}
-        h3 {{ font-size: 1.125rem !important; font-weight: 600 !important; }}
-        h4 {{ font-size: .94rem !important; font-weight: 600 !important; }}
+        h1, h2, h3, h4 {{ color: var(--ink) !important; letter-spacing: -.01em; line-height: var(--lh-title) !important; }}
+        h1 {{ font-size: var(--fs-page) !important; font-weight: 700 !important; padding: 0 !important; margin: 0 0 .35rem !important; }}
+        h2, h3 {{ font-size: var(--fs-section) !important; font-weight: 700 !important; padding: 0 !important; margin: 1.6rem 0 .6rem !important; }}
+        h4 {{ font-size: var(--fs-block) !important; font-weight: 700 !important; padding: 0 !important; margin: 1.3rem 0 .45rem !important; }}
 
         /* ---- Cartes KPI : fond blanc uniforme + bordure gauche sémantique ---- */
         .kpi-card {{ background: #ffffff; border: 1px solid rgba(221, 161, 94, .35); border-left: 3px solid rgba(221, 161, 94, .5); border-radius: 12px; padding: .95rem 1.05rem; height: 100%; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
-        .kpi-label {{ color: #606c38; font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }}
-        .kpi-value {{ color: #283618; font-size: 23px; font-weight: 700; margin-top: .3rem; line-height: 1.15; }}
-        .kpi-sublabel {{ color: rgba(96, 108, 56, .70); font-size: 12px; margin-top: .25rem; font-weight: 500; }}
+        .kpi-label {{ display: flex; align-items: center; color: var(--ink-2); font-size: var(--fs-label); font-weight: 600; line-height: var(--lh-small); }}
+        .kpi-value {{ color: var(--ink); font-size: var(--fs-figure); font-weight: 700; margin-top: .25rem; line-height: var(--lh-title); }}
+        .kpi-sublabel {{ color: var(--ink-2); font-size: var(--fs-label); margin-top: .3rem; font-weight: 400; line-height: var(--lh-small); }}
         [data-testid="stMain"] [data-testid="stMarkdownContainer"] a {{ color: #283618; text-decoration-color: #DDA15E; }}
         .kpi-filled, .kpi-filled .kpi-label, .kpi-filled .kpi-value, .kpi-filled .kpi-sublabel {{ color: var(--kpi-ink) !important; }}
-        .kpi-filled .kpi-sublabel {{ opacity: .9; }}
+        .kpi-filled .kpi-sublabel {{ opacity: .92; }}
         .lexique-item {{ padding: .5rem .75rem; margin: 0 -.75rem; border-left: 3px solid transparent; border-radius: 4px; }}
         .lexique-focus {{ background: #FEFAE0; border-left-color: #DDA15E; }}
-        .kpi-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: .35rem; border-radius: 50%; background: #283618; color: #FEFAE0; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: none; vertical-align: 1px; cursor: help; }}
+        .kpi-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: .35rem; border-radius: 50%; background: #283618; color: #FEFAE0; font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0; text-transform: none; flex: none; cursor: help; }}
         .kpi-filled .kpi-help {{ background: var(--kpi-ink); color: var(--kpi-bg); }}
         .kpi-help:focus-visible {{ outline: 2px solid #DDA15E; outline-offset: 2px; }}
-        .kpi-tip {{ display: none; position: absolute; z-index: 30; top: calc(100% + 8px); left: -12px; width: 260px; padding: .65rem .75rem; border-radius: 8px; background: #FFFFFF; border: 1px solid rgba(221, 161, 94, .6); box-shadow: 0 6px 18px rgba(40, 54, 24, .18); color: #283618 !important; font-size: 13px; font-weight: 500; line-height: 1.45; letter-spacing: 0; text-transform: none; text-align: left; white-space: normal; cursor: default; }}
+        .kpi-tip {{ display: none; position: absolute; z-index: 30; top: calc(100% + 8px); left: -12px; width: 260px; padding: .65rem .75rem; border-radius: 8px; background: #FFFFFF; border: 1px solid rgba(221, 161, 94, .6); box-shadow: 0 6px 18px rgba(40, 54, 24, .18); color: #283618 !important; font-size: var(--fs-small); font-weight: 400; line-height: var(--lh-small); letter-spacing: 0; text-transform: none; text-align: left; white-space: normal; cursor: default; }}
         .kpi-tip::before {{ content: ""; position: absolute; top: -10px; left: 0; right: 0; height: 10px; }}
         .kpi-tip a {{ display: block; margin-top: .45rem; color: #283618 !important; font-weight: 700; text-decoration-color: #DDA15E; }}
         .kpi-help:hover .kpi-tip, .kpi-help:focus-within .kpi-tip {{ display: block; }}
@@ -500,31 +517,30 @@ def inject_style() -> None:
         [data-testid="stTooltipIcon"] svg {{ width: 19px; height: 19px; stroke: #283618; stroke-width: 2.4; }}
         [data-testid="stTooltipIcon"] button {{ opacity: 1; }}
 
-        .eyebrow {{ color: #283618; font-size: .76rem; text-transform: uppercase; letter-spacing: .15em; font-weight: 700; }}
-        .hero-subtitle {{ color: rgba(96, 108, 56, .70); font-size: .94rem; font-weight: 500; margin-bottom: 1.4rem; }}
-        .section-note {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin-top: -.45rem; margin-bottom: .75rem; }}
-        .insight {{ background: #ffffff; border-left: 3px solid #283618; border-radius: 8px; padding: .8rem 1rem; color: #283618; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .eyebrow {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-top: .4rem; }}
+        .hero-subtitle {{ color: var(--ink-2); font-size: var(--fs-body); line-height: var(--lh-body); margin-bottom: 1.2rem; }}
+        .section-note {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin: 0 0 .75rem; }}
+        .insight {{ background: #ffffff; border-left: 3px solid #283618; border-radius: 8px; padding: .8rem 1rem; margin: .4rem 0 .9rem; color: var(--ink); font-size: var(--fs-body); line-height: var(--lh-body); box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
         .insight.brief {{ margin: 1rem 0 .6rem; }}
         .insight.brief ul, .hints ul {{ margin: .35rem 0 0 1.1rem; padding: 0; }}
-        .insight.brief li {{ margin-bottom: .3rem; line-height: 1.45; }}
+        .insight.brief li {{ margin-bottom: .3rem; line-height: var(--lh-body); }}
         .hints {{ border: 1px dashed rgba(221, 161, 94, .7); border-radius: 8px; padding: .7rem 1rem; color: #283618; margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
-        .hint-note {{ color: rgba(96, 108, 56, .70); font-size: .8rem; }}
+        .tier-legend {{ margin: .15rem 0 .6rem; color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); }}
+        .mode-card {{ flex: 1 1 0; min-width: 220px; background: #ffffff; border: 1px solid rgba(221, 161, 94, .35); border-left-width: 4px; border-radius: 10px; padding: .9rem 1rem; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .hint-note {{ color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; }}
         .fiche-title, .carte-anchor {{ scroll-margin-top: 1.2rem; }}
-        .sibling-label {{ color: rgba(96, 108, 56, .70); font-size: .82rem; font-weight: 600; margin-bottom: -.3rem; }}
-        .fiche-title {{ color: #283618; font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; margin-top: 1.4rem; padding-top: 1rem; border-top: 2px solid #283618; }}
-        .fiche-sub {{ color: rgba(96, 108, 56, .70); font-size: .88rem; margin: .2rem 0 .9rem; }}
+        .sibling-label {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-bottom: -.3rem; }}
+        .fiche-title {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; line-height: var(--lh-title); letter-spacing: -.01em; margin-top: 1.6rem; padding-top: 1rem; border-top: 2px solid #283618; }}
+        .fiche-sub {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin: .3rem 0 .9rem; }}
         .wh-wrap {{ overflow-x: auto; margin: .2rem 0 .3rem; }}
-        .wh-grid {{ border-collapse: separate; border-spacing: 2px; font-size: 11px; }}
-        .wh-grid th {{ color: rgba(96, 108, 56, .70); font-weight: 600; padding: 0 3px; text-align: center; white-space: nowrap; }}
+        .wh-grid {{ border-collapse: separate; border-spacing: 2px; font-size: var(--fs-micro); }}
+        .wh-grid th {{ color: var(--ink-2); font-weight: 600; padding: 0 3px; text-align: center; white-space: nowrap; }}
         .wh-grid td {{ min-width: 26px; height: 22px; text-align: center; border-radius: 3px; font-weight: 600; cursor: default; }}
         .wh-grid td.wh-empty {{ background: #FFFFFF; border: 1px dashed rgba(221, 161, 94, .35); }}
         .wh-grid td.wh-total {{ box-shadow: inset 0 0 0 1px rgba(40, 54, 24, .45); }}
-        .watch-title {{ color: #283618; font-size: 1.05rem; font-weight: 700; margin-top: .3rem; line-height: 1.25; }}
+        .watch-title {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; margin-top: .25rem; line-height: var(--lh-title); }}
         .zone-badge {{ display: inline-block; background: #FEFAE0; border: 1px solid #283618; border-radius: 999px; padding: .3rem .9rem; font-weight: 700; color: #283618; }}
-        .stTabs [data-baseweb="tab-list"] {{ gap: 1.3rem; border-bottom: 1px solid rgba(221, 161, 94, .35); }}
-        .stTabs [data-baseweb="tab"] {{ color: rgba(96, 108, 56, .70); padding: .55rem .15rem; font-size: .95rem; font-weight: 500; }}
-        .stTabs [aria-selected="true"] {{ color: #283618; border-bottom-color: #283618; }}
         .stDataFrame {{ border: 1px solid rgba(221, 161, 94, .35); border-radius: 10px; overflow: hidden; }}
         [data-testid="stSelectbox"] [role="group"] {{ border: 1px solid rgba(40, 54, 24, .45); background: #FFFFFF; box-shadow: 0 1px 2px rgba(40, 54, 24, .08); cursor: pointer; }}
         [data-testid="stSelectbox"] [role="group"]:hover {{ border-color: #283618; }}
@@ -536,18 +552,15 @@ def inject_style() -> None:
         .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid #283618; }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
         .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3)::before,
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: 1.5rem; line-height: 1; color: #DDA15E; }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: var(--fs-section); line-height: 1; color: #DDA15E; }}
         .st-key-ctx_bar [data-testid="stColumn"]:nth-child(5) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid rgba(221, 161, 94, .45); }}
         .st-key-ctx_back button {{ background: #283618; color: #FEFAE0; border-color: #283618; }}
-        .st-key-ctx_back button p {{ color: #FEFAE0; font-weight: 700; }}
+        .st-key-ctx_back button p {{ color: #FEFAE0; font-size: var(--fs-small); font-weight: 700; }}
         .st-key-ctx_back button:hover {{ background: #DDA15E; border-color: #DDA15E; }}
         .st-key-ctx_back button:hover p {{ color: #283618; }}
         .st-key-ctx_back button:disabled {{ background: #FFFFFF; border-color: rgba(221, 161, 94, .45); }}
         .st-key-ctx_back button:disabled p {{ color: rgba(96, 108, 56, .55); font-weight: 600; }}
-        .topbar-logo {{ display: flex; align-items: center; gap: .6rem; font-size: 1.05rem; font-weight: 700; color: #283618; letter-spacing: -.02em; white-space: nowrap; }}
-        .topbar-logo img {{ height: 28px; width: auto; }}
-        .topbar-logo .dot {{ width: .65rem; height: .65rem; border-radius: 50%; background: #283618; }}
-        [data-testid="stPopoverButton"] {{ background: #ffffff; border: 1px solid rgba(221, 161, 94, .40); border-radius: 8px; font-size: .88rem; font-weight: 500; color: #283618; padding: .4rem .8rem; white-space: nowrap; }}
+        [data-testid="stPopoverButton"] {{ background: #ffffff; border: 1px solid rgba(221, 161, 94, .40); border-radius: 8px; font-size: var(--fs-small); font-weight: 500; color: #283618; padding: .4rem .8rem; white-space: nowrap; }}
         [data-testid="stPopoverButton"]:hover, [data-testid="stPopoverButton"][aria-expanded="true"] {{ background: #283618; border-color: #283618; color: #ffffff; }}
         </style>
         """,
@@ -3085,11 +3098,10 @@ def render_page_network(c: PageContext) -> None:
     for r in mode_stats.itertuples():
         ponct_color = palette_hex(r.pct_a_l_heure, "score")
         card_html += (
-            f'<div style="flex:1 1 0;min-width:220px;background:#ffffff;border:1px solid rgba(221,161,94,.35);'
-            f'border-left:4px solid {ponct_color};border-radius:10px;padding:.9rem 1rem;box-shadow:0 1px 3px rgba(40,54,24,.08)">'
-            f'<div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:{OLIVE_LEAF_70}">{mode_glyph(r.route_type)} {r.mode}</div>'
-            f'<div style="font-size:1.9rem;font-weight:700;color:{BLACK_FOREST};line-height:1.15">{format_number(r.pct_a_l_heure, 1)} %</div>'
-            f'<div style="font-size:.82rem;color:{OLIVE_LEAF_70}">à l’heure · {fmt_int(r.observations)} passages · '
+            f'<div class="mode-card" style="border-left-color:{ponct_color}">'
+            f'<div class="kpi-label">{mode_glyph(r.route_type)} {r.mode}</div>'
+            f'<div class="kpi-value">{format_number(r.pct_a_l_heure, 1)} %</div>'
+            f'<div class="kpi-sublabel">à l’heure · {fmt_int(r.observations)} passages · '
             f'retard médian {format_seconds(r.retard_median_s, signed=True)} · {format_number(r.pct_retard_5min, 1)} % &gt; 5 min</div>'
             f'</div>'
         )
@@ -3300,8 +3312,8 @@ def _render_collection(c: PageContext) -> None:
         ("Observations (brutes)", f"{stats['total']:,}".replace(",", " "), None, "neutral"),
         ("Passages analysés", f"{stats['analysed']:,}".replace(",", " "), "retard connu", "neutral"),
         ("Courses suivies", f"{stats['trajets']:,}".replace(",", " "), None, "neutral"),
-        ("Première date", format_date(stats["first_ts"]), None, "neutral"),
-        ("Dernière date", format_date(stats["last_ts"]), None, "neutral"),
+        ("Première date", *_date_and_time(stats["first_ts"]), "neutral"),
+        ("Dernière date", *_date_and_time(stats["last_ts"]), "neutral"),
     ])
     left, right = st.columns(2, gap="large")
     with left:
@@ -3610,7 +3622,7 @@ def main() -> None:
         eligible_total = int(ranking["eligible"].sum())
         skip_rate = skipped_total / max(eligible_total, 1) * 100
         if page not in INFO_PAGES:
-            st.markdown('<div class="eyebrow">Observatoire opérationnel · Bordeaux Métropole</div>', unsafe_allow_html=True)
+            st.markdown('<div class="eyebrow">Observatoire de la fiabilité, Bordeaux Métropole</div>', unsafe_allow_html=True)
 
             if commune is not None:
                 st.title(f"La fiabilité de {commune}, en un coup d’œil.")

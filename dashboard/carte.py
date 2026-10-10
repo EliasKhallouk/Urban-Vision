@@ -52,27 +52,27 @@ _CSS = f"""
 .uv-tip {{ position: absolute; z-index: 3; display: none; pointer-events: none; max-width: 340px;
           background: #FFFFFF; color: {BLACK_FOREST}; border: 1px solid rgba(221, 161, 94, .6);
           border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 18px rgba(40, 54, 24, .18);
-          font-size: 12.5px; line-height: 1.45; }}
-.uv-title {{ font-weight: 700; font-size: 14px; margin-bottom: 2px; }}
-.uv-sub {{ color: rgba(96, 108, 56, .8); font-size: 11.5px; margin-bottom: 4px; }}
+          font-size: 13px; line-height: 1.45; }}
+.uv-title {{ font-weight: 700; font-size: 15px; margin-bottom: 2px; }}
+.uv-sub {{ color: rgba(96, 108, 56, .8); font-size: 12px; margin-bottom: 4px; }}
 .uv-row {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
 .uv-chip {{ flex: none; width: 10px; height: 10px; border-radius: 2px; }}
 .uv-num {{ margin-left: auto; padding-left: 10px; white-space: nowrap; color: rgba(40, 54, 24, .8); }}
-.uv-more {{ color: rgba(96, 108, 56, .8); font-size: 11.5px; }}
+.uv-more {{ color: rgba(96, 108, 56, .8); font-size: 12px; }}
 .uv-foot {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(221, 161, 94, .35);
-           color: rgba(96, 108, 56, .85); font-size: 11.5px; }}
+           color: rgba(96, 108, 56, .85); font-size: 12px; }}
 .uv-cta {{ margin-top: 6px; font-weight: 600; }}
 .uv-badge {{ position: absolute; z-index: 2; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px;
             max-width: calc(100% - 20px); background: {CORNSILK}; color: {BLACK_FOREST};
             border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; padding: 5px 6px 5px 12px;
-            font-size: 12.5px; box-shadow: 0 2px 8px rgba(40, 54, 24, .18); }}
+            font-size: 13px; box-shadow: 0 2px 8px rgba(40, 54, 24, .18); }}
 .uv-badge span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .uv-dot {{ flex: none; width: 10px; height: 10px; border-radius: 50%; background: {BLACK_FOREST};
           box-shadow: 0 0 0 3px rgba(40, 54, 24, .25); }}
 .uv-badge button {{ flex: none; border: none; border-radius: 999px; background: {BLACK_FOREST}; color: #FFFFFF;
                    padding: 3px 10px; font-size: 12px; cursor: pointer; }}
 .uv-hint {{ position: absolute; z-index: 2; left: 10px; bottom: 8px; background: rgba(255, 255, 255, .88);
-           color: rgba(40, 54, 24, .85); border-radius: 6px; padding: 2px 8px; font-size: 11.5px; }}
+           color: rgba(40, 54, 24, .85); border-radius: 6px; padding: 2px 8px; font-size: 12px; }}
 .uv-error {{ padding: 24px; color: {BLACK_FOREST}; font-size: 14px; }}
 """
 

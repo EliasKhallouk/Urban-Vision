@@ -240,7 +240,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 520 tests pytest
+└── tests/                          # 27 fichiers, 522 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -464,6 +464,29 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 
 Référence unique des couleurs **et** des seuils KPI, partagée par le dashboard,
 les graphiques Highcharts et les rapports (via un ajout au `sys.path`).
+
+**Échelle typographique du dashboard** (variables CSS de `inject_style`, seule
+source des tailles ; test `TestEchelleTypographique`) :
+
+| Variable | Taille | Usage |
+|---|---|---|
+| `--fs-page` | 1,75 rem (28 px), gras | titre de page (`st.title`) |
+| `--fs-figure` | 1,6 rem, gras | valeur des cartes indicateurs |
+| `--fs-section` | 1,3 rem, gras | titre de section (`###`), titre de fiche, nom du site |
+| `--fs-block` | 1,0625 rem (17 px), gras | titre de bloc (`####`), titres des priorités |
+| `--fs-body` | 1 rem (16 px) | texte courant, verdicts, « En bref », menu, replis |
+| `--fs-small` | 0,875 rem (14 px) | légendes (`st.caption`), notes, libellés de listes, aides |
+| `--fs-label` | 0,8125 rem (13 px), demi-gras | libellés et sous-textes des cartes, légendes de paliers |
+| `--fs-micro` | 0,75 rem (12 px) | grille jour × heure, pastille « ? » |
+
+Interlignage 1,2 (titres), 1,55 (texte), 1,45 (légendes). Texte secondaire en
+Olive Leaf plein (`--ink-2`, contraste 5,6:1 sur blanc), sans transparence ;
+aucune étiquette en capitales espacées. Graphiques : police Source Sans 3
+chargée dans chaque graphique depuis jsDelivr (`CHART_FONT_CSS`, même famille
+que l'application), libellés d'axes et légendes en 13 px, infobulles en 14 px,
+étiquettes de données en 12 px, libellés d'axe non pivotés (les longs passent à
+la ligne ; heures une sur deux). Carte des arrêts : infobulle en 13 px, titre en
+15 px.
 
 Mots affichés au lecteur (`TIER_LABELS`, `tier_label(value, kind)`) : palier
 positif = « fiable », moyen = « à surveiller », négatif = « problématique ».
@@ -2457,7 +2480,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 520, isolés (suite `pytest` complète : 520 passed), flux synthétiques
+- Tests : 522, isolés (suite `pytest` complète : 522 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2502,7 +2525,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 le 10/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2531,6 +2554,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I24 | Le guide de lecture se rouvrait à chaque rechargement (nouvelle session Streamlit) ; le bouton « Guide de lecture » devenait illisible au survol | Cookie `uv_guide_vu` ; couleur de survol des boutons de la sidebar (fond ocre, texte vert foncé) |
 | I25 | Test utilisateur du 04/10/2026 : la commune se choisissait dans un réglage peu visible, la ligne seulement dans « Lignes », l'arrêt seulement dans « Mon territoire », et une fiche ligne ouverte autrement que depuis un arrêt n'avait pas de retour | Barre de contexte persistante en fil d'Ariane avec « ← Revenir » et historique (§11.3) ; listes « Chercher un arrêt » et « Ligne analysée » et bouton « Revenir à l'arrêt » remplacés par la barre ; tests `TestFilDAriane` |
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
+| I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 
 ### 26.4 Dette documentaire
 

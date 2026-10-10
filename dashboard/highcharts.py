@@ -66,7 +66,7 @@ def _glyph_labels(route_type) -> dict:
     return {
         "enabled": True,
         "format": mode_glyph(route_type),
-        "style": {"color": BLACK_FOREST, "fontSize": "11px", "textOutline": "none", "fontWeight": "400"},
+        "style": {"color": BLACK_FOREST, "fontSize": "12px", "textOutline": "none", "fontWeight": "400"},
     }
 
 
@@ -88,33 +88,33 @@ LIGHT_THEME = {
     "colors": [BLACK_FOREST, BLACK_FOREST_35, OLIVE_LEAF, SUNLIT_CLAY, COPPERWOOD],
     "chart": {
         "backgroundColor": "#FFFFFF",
-        "style": {"color": OLIVE_LEAF_70, "fontFamily": "Inter, 'Segoe UI', sans-serif"},
+        "style": {"color": OLIVE_LEAF_70, "fontFamily": "'Source Sans', 'Source Sans 3', sans-serif", "fontSize": "13px"},
         "borderRadius": 8,
         "spacing": [12, 12, 12, 12],
     },
-    "title": {"style": {"color": BLACK_FOREST, "fontSize": "14px", "fontWeight": "700"}},
+    "title": {"style": {"color": BLACK_FOREST, "fontSize": "17px", "fontWeight": "700"}},
     "xAxis": {
-        "labels": {"style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
+        "labels": {"autoRotation": False, "style": {"color": OLIVE_LEAF, "fontSize": "13px"}},
         "lineColor": SUNLIT_CLAY_40,
         "tickColor": SUNLIT_CLAY_40,
         "gridLineColor": SUNLIT_CLAY_30,
-        "title": {"style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
+        "title": {"style": {"color": OLIVE_LEAF, "fontSize": "13px", "fontWeight": "600"}},
     },
     "yAxis": {
-        "labels": {"style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
+        "labels": {"style": {"color": OLIVE_LEAF, "fontSize": "13px"}},
         "lineColor": SUNLIT_CLAY_40,
         "tickColor": SUNLIT_CLAY_40,
         "gridLineColor": SUNLIT_CLAY_30,
-        "title": {"style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
+        "title": {"style": {"color": OLIVE_LEAF, "fontSize": "13px", "fontWeight": "600"}},
     },
     "legend": {
-        "itemStyle": {"color": OLIVE_LEAF_70, "fontSize": "11px"},
+        "itemStyle": {"color": BLACK_FOREST, "fontSize": "13px", "fontWeight": "600"},
         "itemHoverStyle": {"color": BLACK_FOREST},
     },
     "tooltip": {
         "backgroundColor": "#FFFFFF",
         "borderColor": SUNLIT_CLAY_40,
-        "style": {"color": BLACK_FOREST, "fontSize": "12px"},
+        "style": {"color": BLACK_FOREST, "fontSize": "14px"},
         "shadow": True,
         "xDateFormat": "%A %e %B %Y",
     },
@@ -134,9 +134,9 @@ LIGHT_THEME = {
     "credits": {"enabled": False},
 }
 
-HOUR_HEADER = '<span style="font-size:11px">De {point.key} h à {point.key} h 59</span><br/>'
+HOUR_HEADER = '<span style="font-size:12px">De {point.key} h à {point.key} h 59</span><br/>'
 LEXIQUE_FOOTER = ('<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(221, 161, 94, 0.40);'
-                  'font-size:11px"><a href="__BASE__?lexique=__TERME__" target="_blank" rel="noopener" '
+                  'font-size:13px"><a href="__BASE__?lexique=__TERME__" target="_blank" rel="noopener" '
                   'style="color:#283618;text-decoration-color:#DDA15E">Définitions dans le lexique ↗</a></div>')
 
 
@@ -162,6 +162,7 @@ def _accessibility_description(chart_config: dict) -> str:
 
 
 HIGHCHARTS_CDN = "https://cdn.jsdelivr.net/npm/highcharts@13.1.1"
+CHART_FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource/source-sans-3@5.2.5"
 
 
 def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
@@ -173,12 +174,14 @@ def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
     config["accessibility"] = acc
     chart_id = "hc_" + str(abs(hash(json.dumps(config, sort_keys=True, default=str, ensure_ascii=False))))[:10]
     constructor = "stockChart" if use_stock else "chart"
-    scripts = f'<script src="{HIGHCHARTS_CDN}/highstock.js"></script>'
+    scripts = "".join(f'<link rel="stylesheet" href="{CHART_FONT_CSS}/{w}.css">' for w in (400, 600, 700))
+    scripts += f'\n<script src="{HIGHCHARTS_CDN}/highstock.js"></script>'
     if not use_stock:
         scripts += f'\n<script src="{HIGHCHARTS_CDN}/highcharts-more.js"></script>'
         scripts += f'\n<script src="{HIGHCHARTS_CDN}/modules/accessibility.js"></script>'
     return f"""<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8">
+<style>body{{margin:0;font-family:'Source Sans 3',sans-serif}}</style>
 {scripts}
 </head><body>
 <div id="{chart_id}" style="width:100%;height:{height}px;"></div>
@@ -287,7 +290,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
                    "bubbleLegend": {"enabled": True, "color": BLACK_FOREST_35, "borderColor": BLACK_FOREST,
                                     "connectorColor": BLACK_FOREST, "ranges": [{}, {}, {}],
                                     "labels": {"format": "{value:,.0f} passages",
-                                               "style": {"color": OLIVE_LEAF_70, "fontSize": "10px"}}}},
+                                               "style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}}}},
     }
 
 
@@ -322,7 +325,7 @@ def network_hourly_chart(df: pd.DataFrame) -> dict:
         "legend": {"enabled": False},
         "chart": {"type": "column", "height": 300},
         "title": {"text": None},
-        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}},
+        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": [{"name": "Retards de plus de 5 min", "data": data,
                     "tooltip": unit_tooltip(" %", header=HOUR_HEADER)}],
@@ -384,7 +387,7 @@ def mode_hourly_chart(df: pd.DataFrame) -> dict:
         "lexique": "retards-de-plus-de-5-min",
         "chart": {"type": "line", "height": 330},
         "title": {"text": None},
-        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}},
+        "xAxis": {"categories": [str(h) for h in range(24)], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0},
         "series": series,
     }
@@ -533,7 +536,7 @@ def collection_minutely_chart(df: pd.DataFrame) -> dict:
             ],
             "selected": 2,
             "inputEnabled": False,
-            "buttonTheme": {"fill": "#FFFFFF", "stroke": SUNLIT_CLAY_40, "style": {"color": OLIVE_LEAF_70, "fontSize": "11px"}},
+            "buttonTheme": {"fill": "#FFFFFF", "stroke": SUNLIT_CLAY_40, "style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
         },
         "navigator": {
             "enabled": True,
@@ -563,7 +566,7 @@ def hourly_distribution_chart(df: pd.DataFrame) -> dict:
         "legend": {"enabled": False},
         "chart": {"type": "column", "height": 280},
         "title": {"text": None},
-        "xAxis": {"categories": [str(int(r["heure"])) for _, r in df.iterrows()], "title": {"text": "Heure locale"}},
+        "xAxis": {"categories": [str(int(r["heure"])) for _, r in df.iterrows()], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
         "series": [{"name": "Observations", "data": data, "color": BLACK_FOREST,
                     "tooltip": {"headerFormat": HOUR_HEADER,
@@ -588,7 +591,7 @@ def commune_bands(stop_ids: list, commune_stop_ids: set | None, commune_label: s
                     "borderWidth": 1, "zIndex": 0}
             if not bands and commune_label:
                 band["label"] = {"text": commune_label, "align": "left", "x": 4, "y": 12,
-                                 "style": {"color": OLIVE_LEAF_70, "fontSize": "10px", "fontWeight": "600"}}
+                                 "style": {"color": OLIVE_LEAF_70, "fontSize": "12px", "fontWeight": "600"}}
             bands.append(band)
             start = None
     return bands
@@ -599,12 +602,12 @@ def _stop_line(stop_ids: list, stop_id: str | None) -> list:
         return []
     return [{"value": stop_ids.index(stop_id), "color": BLACK_FOREST, "dashStyle": "Dash", "width": 2,
              "zIndex": 4, "label": {"text": "Cet arrêt", "rotation": 0, "y": 12, "x": 4,
-                                    "style": {"color": BLACK_FOREST, "fontWeight": "600", "fontSize": "11px"}}}]
+                                    "style": {"color": BLACK_FOREST, "fontWeight": "600", "fontSize": "12px"}}}]
 
 
 def _profile_axis(p: pd.DataFrame, highlight_stop_id, commune_stop_ids, commune_label) -> dict:
     ids = p["stop_id"].tolist()
-    return {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": "10px"}},
+    return {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": "12px"}},
             "plotBands": commune_bands(ids, commune_stop_ids, commune_label),
             "plotLines": _stop_line(ids, highlight_stop_id)}
 

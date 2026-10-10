@@ -673,3 +673,22 @@ class TestNombresALaFrancaise:
         fmt = app_mod.number_formatter(2, " %")
         assert fmt(1.234) == "1,23 %"
         assert fmt(float("nan")) == "—"
+
+
+class TestEchelleTypographique:
+    def test_toutes_les_tailles_du_tableau_de_bord_viennent_de_l_echelle(self):
+        import re
+        from pathlib import Path
+
+        source = Path(app_mod.__file__).read_text(encoding="utf-8")
+        sizes = re.findall(r"font-size: ?([^;}\"']+)", source)
+        assert sizes
+        assert all(size.strip().startswith("var(--fs-") for size in sizes), sorted(set(sizes))
+        for token in ("--fs-page", "--fs-figure", "--fs-section", "--fs-block", "--fs-body", "--fs-small",
+                      "--fs-label", "--fs-micro"):
+            assert f"{token}:" in source
+
+    def test_pas_d_etiquettes_en_capitales(self):
+        from pathlib import Path
+
+        assert "text-transform: uppercase" not in Path(app_mod.__file__).read_text(encoding="utf-8")
