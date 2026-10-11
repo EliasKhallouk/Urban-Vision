@@ -1452,8 +1452,13 @@ lecteur qui n'est pas analyste :
    scolaire et non sur la période de la barre du haut ; sur cette page, le
    choix « Période » est grisé, « Période scolaire », avec la raison en aide :
    `period_picker(locked=True)`) — carte des points de contention
-   (section 10.5). Choix « Jour » (semaine, samedi, dimanche type) dans
-   Streamlit ; tout le reste se passe dans le navigateur, sans relancer
+   (section 10.5). Le choix « Jour » (semaine, samedi, dimanche type) est sur
+   la ligne du titre, suivi d'une phrase d'explication ; la carte prend la
+   hauteur de l'écran (`fitHeight` : entre 400 et 760 px sur ordinateur, entre
+   460 et 720 px sous 640 px de large) pour que la carte, le curseur et la
+   légende tiennent dans un écran de 768 px de haut comme sur un téléphone
+   (390 px de large : barre de contexte non collante, légende courte, panneau en
+   bas de l'écran). Tout le reste se passe dans le navigateur, sans relancer
    Streamlit (`dashboard/carte_troncons.py` + `carte_troncons.js`, deck.gl sur
    fond Positron) :
    - **données** (`troncons_payload`) : toutes les tranches partent en une
@@ -1467,24 +1472,31 @@ lecteur qui n'est pas analyste :
      ouverture sur l'heure où le plus de tronçons perdent beaucoup de temps dans
      le périmètre (`worst_slot`) ;
    - **verdict** en haut à gauche, recalculé à chaque cran : « À 17 h,
-     17 tronçons ralentissent nettement les bus à Mérignac, et 20 un peu. »,
-     puis le nombre de tronçons mesurés ; le nom du périmètre est écrit au-dessus ;
-   - **panneau au clic** sur un tronçon : lignes qui l'empruntent, temps perdu
-     et part du temps prévu à l'heure choisie, part des passages qui perdent plus
-     de 2 min, « l'un des endroits où le retard des bus se crée », heure où les
+     17 portions entre deux arrêts ralentissent nettement les bus à Mérignac, et
+     20 un peu. », puis le nombre de portions mesurées ; le nom du périmètre est
+     écrit au-dessus ;
+   - **panneau au clic** sur un tronçon : lignes mesurées qui l'empruntent (avec
+     « d'autres lignes y passent mais ne sont pas mesurables » si une ligne au
+     temps réel douteux y passe aussi), temps perdu à l'heure choisie, en clair
+     par rapport au temps prévu (« soit 40 % de temps en plus que prévu »,
+     « plus du double du temps prévu » au-delà de 100 %, « plus du triple »
+     au-delà de 200 %), part des passages qui perdent plus de 2 min, « l'un des endroits où le retard des bus se crée », heure où les
      bus y perdent le plus, frise des 24 heures ; pour un tronçon gris, la
      raison : service très peu fréquent, temps réel non fiable sur la ligne,
      début ou fin de ligne, ou aucun passage ;
    - **dessin** : couleurs des trois paliers, gris pour le non mesuré ; bus en
      trait plein, ferry en tirets, tram en gris hachuré (« mesure par tronçon
-     indisponible pour le tram ») ; le vert est fin et clair, les tronçons qui
-     perdent du temps sont épais, liserés de blanc et dessinés par-dessus ;
+     indisponible pour le tram ») ; sur tout le réseau, le vert est fin et clair,
+     les tronçons qui perdent du temps sont épais, liserés de blanc et dessinés
+     par-dessus ;
    - **fil d'Ariane** (`contention_scope`, `in_scope`) : la commune, la ligne et
      l'arrêt de la barre de contexte définissent le périmètre (tronçons dont
      l'un des arrêts est dans la commune, qu'emprunte la ligne, qui touchent
-     l'arrêt) ; les autres sont estompés, le verdict dit « à Mérignac », « sur
-     la ligne 23 », « autour de l'arrêt … » ; la carte se cadre sur les arrêts du
-     périmètre avec une marge pour la légende. Sur cette page, choisir une ligne
+     l'arrêt) ; ils restent tous épais et liserés, vert compris, et c'est le
+     reste du réseau qui s'estompe (trait de 1,2 px, transparent) ; le verdict
+     dit « à Mérignac », « sur la ligne 23 », « autour de l'arrêt … » ; la carte
+     se cadre sur les arrêts du périmètre entre le verdict et le bandeau du bas
+     (`fitPadding` mesure leur hauteur). Sur cette page, choisir une ligne
      ou un arrêt dans la barre ne change pas de page.
 3. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour

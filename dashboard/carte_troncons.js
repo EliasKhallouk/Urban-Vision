@@ -5,7 +5,6 @@ const STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json
 const ORDER = { "-": 0, d: 1, t: 1, p: 1, v: 2, o: 3, c: 4 };
 const FERRY = 4;
 const WHOLE_DAY = 24;
-const FIT_PADDING = { top: 120, left: 40, right: 40, bottom: 150 };
 
 function loadScript(url, globalName) {
   if (window[globalName]) return Promise.resolve(window[globalName]);
@@ -59,27 +58,34 @@ function verdict(data, slot) {
   if (measured === 0) {
     text = `${time}, pas assez de données pour se prononcer ${place}.`;
   } else if (red > 0) {
-    text = `${time}, ${red} ${plural(red, "tronçon ralentit", "tronçons ralentissent")} nettement les bus ${place}`
+    text = `${time}, ${red} ${plural(red, "portion entre deux arrêts ralentit", "portions entre deux arrêts ralentissent")} nettement les bus ${place}`
       + (ochre > 0 ? `, et ${ochre} un peu.` : ".");
   } else if (ochre > 0) {
-    text = `${time}, aucun tronçon ne ralentit nettement les bus ${place} ; ${ochre} les ${plural(ochre, "ralentit", "ralentissent")} un peu.`;
+    text = `${time}, aucune portion entre deux arrêts ne ralentit nettement les bus ${place} ; ${ochre} les ${plural(ochre, "ralentit", "ralentissent")} un peu.`;
   } else {
     text = `${time}, les bus ne perdent pas de temps ${place}.`;
   }
-  const sub = `${measured} ${plural(measured, "tronçon mesuré", "tronçons mesurés")} sur ${scope.length}, les autres en gris.`;
+  const sub = `${measured} ${plural(measured, "portion mesurée", "portions mesurées")} sur ${scope.length}, les autres en gris.`;
   return { text, sub };
 }
 
 const GREY_REASONS = {
   p: "Service très peu fréquent à ce moment : trop peu de passages pour se prononcer.",
-  d: "Temps réel non fiable sur la ligne qui passe ici : ce tronçon n'est pas mesuré.",
+  d: "Temps réel non fiable sur la ligne qui passe ici : cette portion n'est pas mesurée.",
   t: "Début ou fin de ligne : le temps n'y est pas mesuré.",
   "-": "Aucun passage à ce moment.",
 };
 
-function lineText(seg) {
-  if (!seg.l) return "";
-  return `${seg.l.includes(",") ? "Lignes" : "Ligne"} ${esc(seg.l)}`;
+function lineText(seg, long = false) {
+  const others = long ? "d'autres lignes y passent mais ne sont pas mesurables" : "et des lignes non mesurables";
+  if (!seg.l) return seg.u ? "Lignes non mesurables ici" : "";
+  return `${seg.l.includes(",") ? "Lignes" : "Ligne"} ${esc(seg.l)}${seg.u ? ` ; ${others}` : ""}`;
+}
+
+function extraTime(pct) {
+  if (pct >= 200) return "Le trajet prend alors plus du triple du temps prévu.";
+  if (pct >= 100) return "Le trajet prend alors plus du double du temps prévu.";
+  return `Soit ${pct} % de temps en plus que prévu.`;
 }
 
 function measuredAt(seg, slot) {
@@ -124,7 +130,7 @@ function panelHtml(seg, slot, colors) {
   if (measuredAt(seg, slot)) {
     const [s, pct, n, part] = seg.v[slot];
     body = s > 0
-      ? `<div class="uvt-figure">${seconds(s)}</div><p>C'est le temps que les bus perdent habituellement ici ${when(slot)}, soit ${pct} % du temps prévu pour ce trajet.</p>`
+      ? `<div class="uvt-figure t-${code}">${seconds(s)}</div><p>C'est le temps que les bus perdent habituellement ici ${when(slot)}. ${extraTime(pct)}</p>`
       : `<div class="uvt-figure ok">Pas de temps perdu</div><p>Les bus n'y perdent pas de temps ${when(slot)}.</p>`;
     if (part > 0) body += `<p>${part} % des passages y perdent plus de 2 minutes.</p>`;
     if ("oc".includes(code)) body += "<p>C'est l'un des endroits où le retard des bus se crée : circulation, feux ou montée des voyageurs.</p>";
@@ -136,17 +142,17 @@ function panelHtml(seg, slot, colors) {
   const worst = worstHour(seg);
   const worstText = worst ? `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>` : "";
   return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>${esc(seg.n)}</h3>`
-    + `<div class="uvt-lines">${lineText(seg)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
+    + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
 }
 
 function legendHtml(colors) {
-  return `<div class="uvt-bar"><span style="background:${colors.v}">ne perdent pas de temps</span>`
-    + `<span class="o" style="background:${colors.o}">perdent un peu de temps</span>`
-    + `<span style="background:${colors.c}">perdent beaucoup de temps</span></div>`
-    + '<span class="uvt-key"><span class="uvt-swatch"></span>gris : non mesuré</span>'
+  const item = (cls, color, long, short) => `<span class="${cls}" style="background:${color}"><b class="lg">${long}</b><b class="sh">${short}</b></span>`;
+  return `<div class="uvt-bar">${item("", colors.v, "ne perdent pas de temps", "pas de perte")}`
+    + `${item("o", colors.o, "perdent un peu de temps", "un peu")}${item("", colors.c, "perdent beaucoup de temps", "beaucoup")}</div>`
+    + '<span class="uvt-key keep"><span class="uvt-swatch"></span>gris : non mesuré</span>'
     + '<span class="uvt-key"><span class="uvt-swatch bus"></span>bus</span>'
     + '<span class="uvt-key"><span class="uvt-swatch ferry"></span>ferry</span>'
-    + '<span class="uvt-key"><span class="uvt-swatch tram"></span>tram : mesure par tronçon indisponible</span>';
+    + '<span class="uvt-key keep"><span class="uvt-swatch tram"></span>tram : mesure par tronçon indisponible</span>';
 }
 
 function buildLayers(deck, state) {
@@ -155,14 +161,19 @@ function buildLayers(deck, state) {
   const rank = (s) => s.c * 10 + ORDER[s.t[slot]];
   const sorted = data.segments.slice().sort((a, b) => rank(a) - rank(b));
   const dashed = new deck.PathStyleExtension({ dash: true });
+  const focused = data.focused;
   const colorOf = (seg) => {
     const code = seg.t[slot];
-    if (!seg.c) return measuredAt(seg, slot) ? rgb(colors[code], 55) : rgb(colors.grey, 50);
-    if (code === "v") return rgb(colors.v, 120);
+    if (!seg.c) return measuredAt(seg, slot) ? rgb(colors[code], focused ? 40 : 55) : rgb(colors.grey, focused ? 35 : 50);
+    if (code === "v") return rgb(colors.v, focused ? 235 : 120);
     if ("oc".includes(code)) return rgb(colors[code], 255);
-    return rgb(colors.grey, 210);
+    return rgb(colors.grey, focused ? 240 : 210);
   };
-  const widthOf = (seg) => ({ c: 5.5, o: 4.5, v: 1.6 }[seg.t[slot]] || 2.2);
+  const widthOf = (seg) => {
+    if (focused && !seg.c) return 1.2;
+    if (focused) return { c: 6, o: 5.5, v: 4 }[seg.t[slot]] || 3.5;
+    return { c: 5.5, o: 4.5, v: 1.6 }[seg.t[slot]] || 2.2;
+  };
   const common = { getPath: (d) => d.p, widthUnits: "pixels", capRounded: true, jointRounded: true, parameters: { depthTest: false } };
   const layers = [
     new deck.PathLayer({
@@ -170,7 +181,7 @@ function buildLayers(deck, state) {
       getDashArray: [1, 1.4], dashJustified: true, extensions: [dashed], parameters: { depthTest: false }, pickable: true,
     }),
     new deck.PathLayer({
-      id: "lisere", ...common, data: sorted.filter((d) => d.c && "oc".includes(d.t[slot])),
+      id: "lisere", ...common, data: sorted.filter((d) => d.c && (focused || "oc".includes(d.t[slot]))),
       getWidth: (d) => widthOf(d) + 3, getColor: [255, 255, 255, 235],
     }),
     new deck.PathLayer({
@@ -186,6 +197,28 @@ function buildLayers(deck, state) {
     layers.push(new deck.PathLayer({ id: "selection-coeur", ...common, data: [sel], getWidth: widthOf(sel) + 1, getColor: colorOf(sel) }));
   }
   return layers;
+}
+
+function fitPadding(state) {
+  const box = state.root.getBoundingClientRect();
+  const head = state.head.getBoundingClientRect();
+  const bottom = state.root.querySelector(".uvt-bottom").getBoundingClientRect();
+  const top = state.data && state.data.focused ? Math.max(head.bottom - box.top + 16, 40) : 24;
+  const below = Math.max(box.bottom - bottom.top + 16, 40);
+  const room = box.height - top - below;
+  return room < 120
+    ? { top: 40, bottom: 40, left: 24, right: 24 }
+    : { top, bottom: below, left: 32, right: 56 };
+}
+
+function fitHeight(state) {
+  const mobile = window.innerWidth < 640;
+  const top = state.root.getBoundingClientRect().top;
+  const h = mobile
+    ? Math.min(Math.max(window.innerHeight - 24, 460), 720)
+    : Math.min(Math.max(window.innerHeight - Math.max(top, 0) - 14, 400), 760);
+  state.root.style.height = `${Math.round(h)}px`;
+  if (state.map) state.map.resize();
 }
 
 function render(state) {
@@ -254,7 +287,11 @@ export default async function (component) {
     state = parentElement.__uvTroncons = { root, canvasBox, head, tip, panel };
     buildControls(state);
   }
-  state.root.style.height = `${data.height}px`;
+  if (!state.sized) {
+    state.sized = true;
+    fitHeight(state);
+    window.addEventListener("resize", () => fitHeight(state));
+  }
   const key = `${data.view_key}|${data.segments.length}|${data.slot}`;
   state.data = data;
   if (state.dataKey !== key) {
@@ -274,8 +311,9 @@ export default async function (component) {
     return undefined;
   }
   state.deck = deck;
+  render(state);
   const fit = (duration) => {
-    if (data.bounds) state.map.fitBounds(data.bounds, { padding: FIT_PADDING, duration, maxZoom: 15 });
+    if (data.bounds) state.map.fitBounds(data.bounds, { padding: fitPadding(state), duration, maxZoom: 15 });
   };
   if (!state.map) {
     state.viewKey = data.view_key;
@@ -296,7 +334,7 @@ export default async function (component) {
         if (!hit) { state.tip.style.display = "none"; return; }
         state.tip.innerHTML = info.layer.id === "tram"
           ? "<b>Tram</b><div>Mesure par tronçon indisponible pour le tram : son temps réel est publié par paliers.</div>"
-          : `<b>${esc(info.object.n)}</b><div class="l">${lineText(info.object)}</div><div>${shortStatus(info.object, state.slot)}</div><div class="m">Cliquer pour le détail</div>`;
+          : `<b>${esc(info.object.n)}</b><div class="l">${lineText(info.object)}</div><div>${shortStatus(info.object, state.slot)}</div><div class="m">Touchez ou cliquez pour le détail</div>`;
         state.tip.style.display = "block";
         const left = Math.min(info.x + 16, state.root.clientWidth - state.tip.offsetWidth - 8);
         const top = Math.min(info.y + 16, state.root.clientHeight - state.tip.offsetHeight - 150);

@@ -608,6 +608,8 @@ def inject_style() -> None:
         [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] {{ color: #283618; }}
         [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] svg {{ width: 1.45rem; height: 1.45rem; }}
         [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: sticky; top: 3.75rem; z-index: 60; background: #FFFFFF; box-shadow: 0 -3.75rem 0 #FFFFFF; }}
+        @media (max-width: 640px) {{ [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: static; box-shadow: none; }} }}
+        .contention-note {{ margin: -.35rem 0 .5rem; }}
         .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid #283618; }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
         .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3)::before,
@@ -3592,8 +3594,7 @@ def load_troncons(_conn, jour_type: str, computed_at: int) -> dict:
         route_ids.setdefault((a, b), []).append(route_id)
     tram = [json.loads(c) for (c,) in _conn.execute(
         "SELECT s.coords FROM route_shapes s JOIN routes r ON r.route_id = s.route_id WHERE r.route_type = 0")]
-    return {"geo": geo, "cells": cells, "lines": {k: ", ".join(dict.fromkeys(v)) for k, v in lines.items()},
-            "route_ids": route_ids,
+    return {"geo": geo, "cells": cells, "lines": lines, "route_ids": route_ids,
             "names": dict(_conn.execute("SELECT stop_id, stop_name FROM stops")),
             "communes": dict(_conn.execute("SELECT stop_id, commune_name FROM stop_municipalities")),
             "tram": tram}
@@ -3619,21 +3620,21 @@ def contention_scope(commune: str | None, route_id: str | None, line_name: str |
 
 
 def render_page_contention(c: PageContext) -> None:
-    st.markdown("### Où les bus perdent du temps")
     meta = load_troncons_meta(c.conn)
+    title, choice = st.columns([0.72, 0.28], vertical_alignment="bottom")
+    title.markdown("### Où les bus perdent du temps")
     if not meta.get("calcule_le"):
-        st.info("La carte des tronçons n'est pas encore calculée : elle l'est chaque nuit.")
+        st.info("La carte n'est pas encore calculée : elle l'est chaque nuit.")
         return
+    with choice:
+        jour = st.selectbox("Jour", list(CONTENTION_DAYS), format_func=CONTENTION_DAYS.get, key="contention_jour",
+                            label_visibility="collapsed")
     since = datetime.strptime(meta["depuis"], "%Y-%m-%d")
     until = datetime.strptime(meta["jusqu_a"], "%Y-%m-%d") - timedelta(days=1)
     st.markdown(
-        '<div class="section-note">Chaque tronçon entre deux arrêts est colorié selon le temps que les bus y perdent '
-        "(circulation, feux ou montée des voyageurs). Ce sont les valeurs habituelles de la période scolaire, du "
-        f"{since:%d/%m/%Y} au {until:%d/%m/%Y}, recalculées chaque nuit. Faites glisser le curseur sous la carte "
-        "pour voir chaque heure ; cliquez sur un tronçon pour le détail.</div>", unsafe_allow_html=True)
-    left, _ = st.columns([0.3, 0.7])
-    with left:
-        jour = st.selectbox("Jour", list(CONTENTION_DAYS), format_func=CONTENTION_DAYS.get, key="contention_jour")
+        '<div class="section-note contention-note">Temps que les bus perdent entre deux arrêts (circulation, feux '
+        f"ou montée des voyageurs), période scolaire du {since:%d/%m} au {until:%d/%m/%Y}.</div>",
+        unsafe_allow_html=True)
     data = load_troncons(c.conn, jour, int(meta["calcule_le"]))
     route_id, stop_id = st.session_state.get("line_id"), st.session_state.get("stop_id")
     line_name = None
@@ -3642,8 +3643,9 @@ def render_page_contention(c: PageContext) -> None:
                              (route_id,)).fetchone()
         line_name = row[0] if row else route_id
     scope = contention_scope(c.commune, route_id, line_name, stop_id, data["names"].get(stop_id) if stop_id else None)
+    measurable = {r for r, q in meta.get("lignes", {}).items() if q.get("ok")}
     payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
-                               data["tram"], scope, data["route_ids"])
+                               data["tram"], scope, data["route_ids"], measurable)
     carte_troncons(payload, key="carte_troncons")
 
 

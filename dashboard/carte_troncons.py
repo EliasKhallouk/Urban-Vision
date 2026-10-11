@@ -88,6 +88,8 @@ _CSS = f"""
 .uvt-lines {{ color: #606c38; font-size: 12.5px; }}
 .uvt-figure {{ margin-top: 10px; font-size: 28px; font-weight: 700; line-height: 1.1; color: {COPPERWOOD}; }}
 .uvt-figure.ok {{ font-size: 20px; color: {OLIVE_LEAF}; }}
+.uvt-figure.t-v {{ color: {OLIVE_LEAF}; }}
+.uvt-figure.t-o {{ color: #9a6420; }}
 .uvt-grey-reason {{ margin-top: 10px !important; font-weight: 600; }}
 .uvt-foot {{ color: #606c38; font-size: 12px; }}
 .uvt-close {{ position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 50%;
@@ -97,6 +99,24 @@ _CSS = f"""
 .uvt-strip span.now {{ outline: 2px solid {BLACK_FOREST}; outline-offset: 1px; }}
 .uvt-strip-axis {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11px; margin-top: 3px; }}
 .uvt-error {{ padding: 24px; font-size: 14px; }}
+.uvt-bar b {{ font-weight: 600; }}
+.uvt-bar .sh {{ display: none; }}
+@media (max-width: 640px) {{
+  .uvt-head {{ max-width: calc(100% - 60px); top: 8px; left: 8px; padding: 8px 10px; }}
+  .uvt-label {{ font-size: 17px; margin-bottom: 2px; }}
+  .uvt-verdict {{ font-size: 14px; }}
+  .uvt-sub {{ font-size: 11.5px; }}
+  .uvt-bottom {{ left: 6px; right: 6px; bottom: 6px; padding: 8px 10px 7px; }}
+  .uvt-controls {{ flex-wrap: wrap; gap: 6px 10px; }}
+  .uvt-clock {{ min-width: 0; font-size: 18px; }}
+  .uvt-range-box {{ order: 3; flex-basis: 100%; }}
+  .uvt-allday {{ margin-left: auto; padding: 4px 10px; font-size: 13px; }}
+  .uvt-legend {{ gap: 4px 10px; margin-top: 6px; padding-top: 6px; font-size: 11.5px; }}
+  .uvt-bar .lg {{ display: none; }}
+  .uvt-bar .sh {{ display: inline; }}
+  .uvt-key:not(.keep) {{ display: none; }}
+  .uvt-panel {{ top: auto; bottom: 6px; left: 6px; right: 6px; width: auto; max-height: 64%; }}
+}}
 """
 
 COMPONENT_NAME = "urban_vision_carte_troncons"
@@ -169,14 +189,17 @@ def in_scope(seg_from: str, seg_to: str, routes: list, communes: dict, scope: di
 
 
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
-                     tram_paths: list, scope: dict | None = None, route_ids: dict | None = None) -> dict:
+                     tram_paths: list, scope: dict | None = None, route_ids: dict | None = None,
+                     measurable: set | None = None) -> dict:
     """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
     appartenance au périmètre), tracés du tram, cadrage, tranche d'ouverture et textes du périmètre.
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
     to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
-    « 1, 16 » ; `route_ids` : (de, vers) -> identifiants des lignes ; `communes` : stop_id -> commune ;
-    `scope` : commune, route_id, stop_id, place (« à Mérignac »), label (nom affiché sur la carte).
+    noms des lignes ; `route_ids` : (de, vers) -> identifiants des lignes, dans le même ordre ;
+    `measurable` : lignes dont le temps réel est fiable (les autres ne sont pas citées, `u` les
+    signale) ; `communes` : stop_id -> commune ; `scope` : commune, route_id, stop_id, place
+    (« à Mérignac »), label (nom affiché sur la carte).
     """
     scope = scope or {}
     route_ids = route_ids or {}
@@ -207,10 +230,16 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
                       if scope.get("commune") and not (scope.get("route_id") or scope.get("stop_id")) else g.coords)
             lons += [pt[0] for pt in points]
             lats += [pt[1] for pt in points]
+        names_here = lines.get((g.from_stop_id, g.to_stop_id), [])
+        if isinstance(names_here, str):
+            names_here = [n.strip() for n in names_here.split(",") if n.strip()]
+        shown = [n for n, r in zip(names_here, routes or [None] * len(names_here))
+                 if measurable is None or r in measurable]
         segments.append({
             "p": offset_right(g.coords), "m": int(g.route_type), "t": "".join(seg["codes"]), "v": seg["values"],
             "n": f"{names.get(g.from_stop_id, g.from_stop_id)} vers {names.get(g.to_stop_id, g.to_stop_id)}",
-            "l": lines.get((g.from_stop_id, g.to_stop_id), ""), "c": 1 if inside else 0,
+            "l": ", ".join(dict.fromkeys(shown)), "u": 1 if len(set(shown)) < len(set(names_here)) else 0,
+            "c": 1 if inside else 0,
         })
     view = dict(NETWORK_VIEW)
     box_lons, box_lats = (lons, lats) if lons else (all_lons, all_lats)
@@ -225,7 +254,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
     return {"segments": segments, "tram": tram_paths, "slot": WHOLE_DAY_SLOT if default is None else default,
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
-            "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "",
+            "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
             "colors": COLORS, "height": MAP_HEIGHT}
 
 
@@ -233,9 +262,9 @@ def carte_troncons(payload: dict, key: str) -> None:
     """Affiche la carte des tronçons (réenregistre le composant s'il a été importé hors du serveur)."""
     global _carte
     try:
-        _carte(key=key, data=payload, height=MAP_HEIGHT)
+        _carte(key=key, data=payload, height="content")
     except ValueError as error:
         if "is not registered" not in str(error):
             raise
         _carte = _register()
-        _carte(key=key, data=payload, height=MAP_HEIGHT)
+        _carte(key=key, data=payload, height="content")
