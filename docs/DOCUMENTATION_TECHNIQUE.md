@@ -228,6 +228,7 @@ Urban-Vision/
 ├── src/
 │   ├── scripts/
 │   │   ├── analyze.py              # bilan quotidien par ligne
+│   │   ├── analyse_troncons.py     # faisabilité de la carte des tronçons (analyse, lecture seule)
 │   │   ├── archive_gtfs.py         # archive du GTFS statique quand il change
 │   │   ├── assign_stop_municipalities.py  # rattachement arrêts↔communes
 │   │   ├── collect.py              # collecteur TripUpdates (60 s)
@@ -1885,6 +1886,7 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/sauvegarde.py` | Sauvegarde quotidienne, contrôle, rotation, copie hors VM | `--db`, `--dest`, `--verifier [archive]`, `--sans-envoi` |
 | `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien), puis recharge les tracés | `--dest`, `--db` |
 | `src/scripts/route_shapes.py` | Tracés des lignes depuis un GTFS archivé (`route_shapes`) | `--zip`, `--db` |
+| `src/scripts/analyse_troncons.py` | Faisabilité de la carte des points de contention : temps perdu par tronçon entre deux arrêts consécutifs, bruit, seuils (lecture seule, sorties dans `data/analyses/troncons/`) | `--db`, `--lignes`, `--temoin`, `--depuis`, `--jusqu-a`, `--seuils`, `--reseau-jours`, `--sortie` |
 | `deploy/deployer.sh` | Déploiement sur la VM (section 20.2) | `--sans-pull`, `--sans-redemarrage` |
 | `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
 | `dashboard/app.py` | Dashboard Streamlit | `streamlit run dashboard/app.py` |
