@@ -46,7 +46,27 @@ function plural(n, one, many) {
   return n > 1 ? many : one;
 }
 
+const TRAM_NOTE = "Le détail par portion entre deux arrêts n'est pas mesurable pour le tram : son temps réel est publié par paliers.";
+
+function listText(items) {
+  return items.length > 1 ? `${items.slice(0, -1).join(", ")} et ${items[items.length - 1]}` : items[0];
+}
+
+function tramLost(s) {
+  return s > 0 ? seconds(s) : "rien";
+}
+
+function tramVerdict(line, slot) {
+  const time = slot === WHOLE_DAY ? "Sur toute la journée" : `À ${slot} h`;
+  const rows = line.s.filter((d) => d.v[slot]);
+  const text = rows.length
+    ? `${time}, le tram ${line.n} perd habituellement ${listText(rows.map((d) => `${tramLost(d.v[slot][0])} vers ${d.vers}`))} sur l'ensemble du trajet.`
+    : `${time}, pas assez de trajets de tram mesurés pour se prononcer.`;
+  return { text, sub: TRAM_NOTE };
+}
+
 function verdict(data, slot) {
+  if (data.tram_line && data.tram_lines[data.tram_line]) return tramVerdict(data.tram_lines[data.tram_line], slot);
   const scope = data.segments.filter((s) => s.c);
   const count = (code) => scope.filter((s) => s.t[slot] === code).length;
   const red = count("c");
@@ -145,6 +165,35 @@ function panelHtml(seg, slot, colors) {
     + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
 }
 
+function minutes(s) {
+  const m = Math.round(s / 60);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${m} min`;
+}
+
+function tramPanelHtml(line, slot) {
+  const rows = line.s.map((d) => {
+    const v = d.v[slot];
+    if (!v) return `<div class="uvt-tram-row"><span>Vers ${esc(d.vers)}</span><b class="na">pas assez de trajets</b></div>`;
+    const [s, planned] = v;
+    const pct = s > 0 ? Math.round((100 * s) / planned) : 0;
+    return `<div class="uvt-tram-row"><span>Vers ${esc(d.vers)}</span><b>${s > 0 ? seconds(s) : "pas de temps perdu"}</b></div>`
+      + `<p class="uvt-foot">Sur ${minutes(planned)} de trajet prévu${pct > 0 ? `, soit ${pct} % de temps en plus` : ""}.</p>`;
+  }).join("");
+  let worst = null;
+  for (const d of line.s) {
+    for (let h = 0; h < WHOLE_DAY; h += 1) {
+      const v = d.v[h];
+      if (v && v[0] > 0 && (worst === null || v[0] > worst.s)) worst = { h, s: v[0], vers: d.vers };
+    }
+  }
+  const trips = line.s.reduce((n, d) => n + (d.v[slot] ? d.v[slot][2] : 0), 0);
+  return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>Tram ${esc(line.n)}</h3>`
+    + `<div class="uvt-lines">Temps perdu de bout en bout ${when(slot)}</div>${rows}`
+    + (worst ? `<p>C'est vers <b>${worst.h} h</b> que le tram perd le plus de temps (${seconds(worst.s)} vers ${esc(worst.vers)}).</p>` : "")
+    + `<p class="uvt-grey-reason">${TRAM_NOTE}</p>`
+    + (trips ? `<p class="uvt-foot">Valeur habituelle sur ${trips} trajets complets de la période scolaire.</p>` : "");
+}
+
 function legendHtml(colors) {
   const item = (cls, color, long, short) => `<span class="${cls}" style="background:${color}"><b class="lg">${long}</b><b class="sh">${short}</b></span>`;
   return `<div class="uvt-bar">${item("", colors.v, "ne perdent pas de temps", "pas de perte")}`
@@ -177,7 +226,9 @@ function buildLayers(deck, state) {
   const common = { getPath: (d) => d.p, widthUnits: "pixels", capRounded: true, jointRounded: true, parameters: { depthTest: false } };
   const layers = [
     new deck.PathLayer({
-      id: "tram", data: data.tram, getPath: (d) => d, widthUnits: "pixels", getWidth: 6, getColor: [169, 169, 160, 190],
+      id: "tram", data: data.tram, getPath: (d) => d.p, widthUnits: "pixels",
+      getWidth: (d) => (focused ? (d.c ? 8 : 4) : 6),
+      getColor: (d) => (focused ? (d.c ? [120, 120, 112, 240] : [169, 169, 160, 90]) : [169, 169, 160, 190]),
       getDashArray: [1, 1.4], dashJustified: true, extensions: [dashed], parameters: { depthTest: false }, pickable: true,
     }),
     new deck.PathLayer({
@@ -191,7 +242,13 @@ function buildLayers(deck, state) {
       updateTriggers: { getColor: slot, getWidth: slot },
     }),
   ];
-  if (state.selected) {
+  if (state.selected && state.selected.tram) {
+    const paths = data.tram.filter((d) => d.r === state.selected.tram);
+    layers.splice(1, 0, new deck.PathLayer({
+      id: "selection-tram", data: paths, getPath: (d) => d.p, widthUnits: "pixels", getWidth: 11,
+      getColor: [40, 54, 24, 200], capRounded: true, jointRounded: true, parameters: { depthTest: false },
+    }));
+  } else if (state.selected) {
     const sel = state.selected;
     layers.push(new deck.PathLayer({ id: "selection", ...common, data: [sel], getWidth: widthOf(sel) + 6, getColor: [40, 54, 24, 230] }));
     layers.push(new deck.PathLayer({ id: "selection-coeur", ...common, data: [sel], getWidth: widthOf(sel) + 1, getColor: colorOf(sel) }));
@@ -231,7 +288,8 @@ function render(state) {
   state.range.classList.toggle("off", slot === WHOLE_DAY);
   state.allDay.setAttribute("aria-pressed", slot === WHOLE_DAY ? "true" : "false");
   if (state.selected) {
-    state.panel.innerHTML = panelHtml(state.selected, slot, data.colors);
+    const tram = state.selected.tram && data.tram_lines[state.selected.tram];
+    state.panel.innerHTML = tram ? tramPanelHtml(tram, slot) : panelHtml(state.selected, slot, data.colors);
     state.panel.style.display = "block";
     state.panel.querySelector(".uvt-close").onclick = () => { state.selected = null; render(state); };
   } else {
@@ -332,8 +390,10 @@ export default async function (component) {
         const hit = info.object && info.layer && !info.layer.id.startsWith("selection");
         state.map.getCanvas().style.cursor = hit ? "pointer" : "";
         if (!hit) { state.tip.style.display = "none"; return; }
+        const tramLine = info.layer.id === "tram" && state.data.tram_lines[info.object.r];
         state.tip.innerHTML = info.layer.id === "tram"
-          ? "<b>Tram</b><div>Mesure par tronçon indisponible pour le tram : son temps réel est publié par paliers.</div>"
+          ? `<b>Tram${tramLine ? ` ${esc(tramLine.n)}` : ""}</b><div>Mesure par portion entre deux arrêts indisponible pour le tram.</div>`
+            + (tramLine ? '<div class="m">Touchez ou cliquez pour le temps perdu de bout en bout</div>' : "")
           : `<b>${esc(info.object.n)}</b><div class="l">${lineText(info.object)}</div><div>${shortStatus(info.object, state.slot)}</div><div class="m">Touchez ou cliquez pour le détail</div>`;
         state.tip.style.display = "block";
         const left = Math.min(info.x + 16, state.root.clientWidth - state.tip.offsetWidth - 8);
@@ -342,7 +402,9 @@ export default async function (component) {
         state.tip.style.top = `${Math.max(8, top)}px`;
       },
       onClick: (info) => {
-        state.selected = info.object && info.layer && info.layer.id === "troncons" ? info.object : null;
+        const layer = info.object && info.layer ? info.layer.id : null;
+        if (layer === "tram") state.selected = state.data.tram_lines[info.object.r] ? { tram: info.object.r } : null;
+        else state.selected = layer === "troncons" ? info.object : null;
         state.tip.style.display = "none";
         render(state);
       },

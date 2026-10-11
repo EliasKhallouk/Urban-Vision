@@ -7,7 +7,8 @@ voyageurs), aussi rapporté au temps prévu entre les deux arrêts. Chaque nuit 
 2. les médianes par jour type (semaine, samedi, dimanche) et par heure, sur la période scolaire,
    vont dans `troncons_carte`, avec le statut de chaque tronçon ;
 3. `troncons_lignes` liste les lignes de chaque tronçon et `troncons_geo` sa géométrie.
-Le tram n'est pas mesuré (temps réel publié par paliers, section 10.5 de la documentation).
+Le tram n'est pas mesuré par tronçon (temps réel publié par paliers, section 10.5 de la
+documentation) : `troncons_tram` donne seulement son temps perdu de bout en bout.
 """
 
 import argparse
@@ -50,6 +51,10 @@ MEASURED, FEW, TERMINUS, DOUBTFUL = "mesure", "peu", "terminus", "douteux"
 SNAP_METERS = 150.0
 BACKFILL_PAUSE_SECONDS = 1.0
 PARTITIONS = [f"GLOB '*{d}'" for d in "0123456789"] + ["NOT GLOB '*[0-9]'"]
+TRAM_MIN_COVERAGE = 0.8
+TRAM_OUTLIER_SECONDS = 1800
+TRAM_MAIN_SHARE = 0.15
+TRAM_MAIN_DURATION = 0.6
 
 logger = logging.getLogger("troncons")
 
@@ -269,6 +274,96 @@ def build_map(conn, since: str, end: str) -> dict:
     return meta
 
 
+_TRAM_BOUNDS = """
+FROM observations o
+WHERE o.departure_time >= ? AND o.departure_time < ?
+  AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+  AND o.route_id IN (SELECT route_id FROM routes WHERE route_type = 0)
+GROUP BY o.trip_id, o.start_date
+"""
+TRAM_FIRST_SQL = """
+SELECT o.trip_id, o.start_date, o.route_id, COALESCE(o.direction_id, -1) AS direction_id,
+       MIN(o.stop_sequence) AS seq0, o.departure_time AS t0, o.departure_delay AS dep0,
+       date(datetime(o.departure_time, 'unixepoch', 'localtime')) AS ds,
+       CAST(strftime('%H', datetime(o.departure_time, 'unixepoch', 'localtime')) AS INTEGER) AS heure,
+       COUNT(*) AS n, SUM(o.departure_delay <> 0) AS nonzero
+""" + _TRAM_BOUNDS
+TRAM_LAST_SQL = """
+SELECT o.trip_id, o.start_date, MAX(o.stop_sequence) AS seq1, o.stop_id AS terminus_id,
+       o.departure_time AS t1, o.departure_delay AS dep1, o.arrival_delay AS arr1
+""" + _TRAM_BOUNDS
+
+
+def tram_trips(first: pd.DataFrame, last: pd.DataFrame) -> pd.DataFrame:
+    """Un trajet de tram par ligne, avec son temps perdu de bout en bout.
+
+    perte = retard à l'arrivée au dernier arrêt observé (départ à défaut) − retard au départ du premier ;
+    prevu = durée prévue entre ces deux arrêts. Sont écartés les trajets sans temps réel (au moins
+    deux départs, tous à 0 s), ceux observés sur moins de TRAM_MIN_COVERAGE de leurs arrêts et les
+    valeurs au-delà de ±TRAM_OUTLIER_SECONDS (erreurs de flux).
+    """
+    trips = first.merge(last, on=["trip_id", "start_date"])
+    arrival = trips["arr1"].where(trips["arr1"].notna(), trips["dep1"])
+    trips["perte"] = arrival - trips["dep0"]
+    trips["prevu"] = (trips["t1"] - trips["dep1"]) - (trips["t0"] - trips["dep0"])
+    span = trips["seq1"] - trips["seq0"] + 1
+    without_rt = (trips["n"] >= ind.SANS_TR_MIN_PASSAGES) & (trips["nonzero"] == 0)
+    keep = (~without_rt & (span >= 2) & (trips["n"] >= TRAM_MIN_COVERAGE * span) & (trips["prevu"] > 0)
+            & (trips["perte"].abs() <= TRAM_OUTLIER_SECONDS))
+    return trips[keep].reset_index(drop=True)
+
+
+def summarize_tram(trips: pd.DataFrame) -> pd.DataFrame:
+    """Médianes par jour type, ligne, terminus et heure de départ (et sur la journée, heure WHOLE_DAY).
+
+    Seuls les terminus principaux de chaque sens sont gardés : au moins TRAM_MAIN_SHARE des trajets du
+    sens sur la journée et une durée prévue d'au moins TRAM_MAIN_DURATION de la plus longue (les
+    services partiels et les trajets de dépôt sont écartés). Une case n'est gardée qu'avec au moins
+    MIN_PASSAGES trajets sur MIN_DAYS jours distincts.
+    """
+    columns = ["jour_type", "heure", "route_id", "direction_id", "terminus", "perte_s", "prevu_s", "trajets", "jours"]
+    if trips.empty:
+        return pd.DataFrame(columns=columns)
+    trips = trips.assign(jour_type=pd.to_datetime(trips["ds"]).dt.weekday.map(DAY_TYPES))
+    keys = ["jour_type", "route_id", "terminus"]
+    frames = []
+    for hourly in (True, False):
+        group = keys + ["heure"] if hourly else keys
+        out = trips.groupby(group).agg(direction_id=("direction_id", lambda x: int(x.mode().iloc[0])),
+                                       perte_s=("perte", "median"), prevu_s=("prevu", "median"),
+                                       trajets=("perte", "size"), jours=("ds", "nunique")).reset_index()
+        if not hourly:
+            out["heure"] = WHOLE_DAY
+        frames.append(out)
+    day = frames[1]
+    direction = ["jour_type", "route_id", "direction_id"]
+    total = day.groupby(direction)["trajets"].transform("sum")
+    main = day[day["trajets"] >= TRAM_MAIN_SHARE * total]
+    main = main[main["prevu_s"] >= TRAM_MAIN_DURATION * main.groupby(direction)["prevu_s"].transform("max")]
+    out = pd.concat(frames, ignore_index=True).merge(main[keys], on=keys)
+    out = out[(out["trajets"] >= MIN_PASSAGES) & (out["jours"] >= MIN_DAYS)]
+    return out[columns].sort_values(["jour_type", "route_id", "direction_id", "terminus", "heure"]).reset_index(drop=True)
+
+
+def build_tram(conn, since: str, end: str) -> int:
+    """Recalcule `troncons_tram` : temps perdu de bout en bout du tram, sur la période et hors jours incomplets."""
+    lo = int(datetime.strptime(since, "%Y-%m-%d").timestamp())
+    hi = int(datetime.strptime(end, "%Y-%m-%d").timestamp())
+    first = pd.read_sql_query(TRAM_FIRST_SQL, conn, params=(lo, hi))
+    last = pd.read_sql_query(TRAM_LAST_SQL, conn, params=(lo, hi))
+    trips = tram_trips(first, last)
+    trips = trips[~trips["ds"].isin(set(ind.excluded_days(conn, since, end)))]
+    names = dict(conn.execute("SELECT stop_id, stop_name FROM stops"))
+    trips = trips.assign(terminus=trips["terminus_id"].map(lambda s: names.get(s, s)))
+    rows = summarize_tram(trips)
+    with conn:
+        conn.execute("DELETE FROM troncons_tram")
+        conn.executemany("INSERT INTO troncons_tram VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         [(j, int(h), r, int(d), t, float(p), float(v), int(n), int(k))
+                          for j, h, r, d, t, p, v, n, k in rows.itertuples(index=False, name=None)])
+    return len(rows)
+
+
 def _xy(lon: float, lat: float, lat0: float) -> tuple[float, float]:
     return lon * 111_320.0 * math.cos(math.radians(lat0)), lat * 111_320.0
 
@@ -360,6 +455,7 @@ def run(conn, since: str, today: str, pause: float = BACKFILL_PAUSE_SECONDS) -> 
         time.sleep(pause)
     meta = build_map(conn, since, today)
     n_geo = build_geometry(conn)
+    build_tram(conn, since, today)
     logger.info("Tronçons : carte recalculée en %.0f s (%d jour(s) ajouté(s), %d tronçons)",
                 time.monotonic() - start, len(days), n_geo)
     return meta

@@ -102,7 +102,8 @@ def _trips(conn, since, end):
 def _components(r, trips):
     scheduled, cancelled, added = trips.get((r["date_service"], r["route_id"]), (0, 0, 0))
     return ind.route_day_components(int(r["obs"]), int(r["cnt_le300"]) - int(r["cnt_lt60"]), int(r["eligible"]),
-                                    int(r["skipped"]), cancelled, added, scheduled, int(r["cnt_lt60"]))
+                                    int(r["skipped"]), cancelled, added, scheduled, int(r["cnt_lt60"]),
+                                    int(r["cnt_sans_tr"]))
 
 
 def _score(comp):
@@ -127,7 +128,7 @@ def _rows_lignes(conn, since, end):
         f"""
         SELECT d.date_service, d.route_id, {ligne_col}, {type_col},
                d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-               d.skipped, d.eligible, d.histogram
+               d.skipped, d.eligible, d.histogram, d.cnt_sans_tr
         FROM agg_daily d {route_join}
         WHERE d.date_service >= ? AND d.date_service < ?
         ORDER BY d.date_service, d.route_id
@@ -145,6 +146,7 @@ def _rows_lignes(conn, since, end):
             "route_type": r["route_type"],
             "mode": _mode(r["route_type"]),
             "observations": obs,
+            "passages_sans_temps_reel": int(r["cnt_sans_tr"]),
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
             "retard_median_s": _median_seconds(r["histogram"]),
             "pct_a_l_heure": _on_time_pct(r, obs),
@@ -180,7 +182,7 @@ def _rows_arrets(conn, since, end):
         SELECT d.date_service, d.route_id, {ligne_col}, {type_col},
                d.stop_id, s.stop_name, {commune_col}, s.stop_lat, s.stop_lon,
                d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-               d.skipped, d.eligible, d.histogram
+               d.skipped, d.eligible, d.histogram, d.cnt_sans_tr
         FROM agg_daily_stop d {route_join}{joins}
         WHERE d.date_service >= ? AND d.date_service < ?
         ORDER BY d.date_service, d.route_id, d.stop_id
@@ -207,6 +209,7 @@ def _rows_arrets(conn, since, end):
             "stop_lat": r["stop_lat"],
             "stop_lon": r["stop_lon"],
             "observations": obs,
+            "passages_sans_temps_reel": int(r["cnt_sans_tr"]),
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
             "pct_a_l_heure": _on_time_pct(r, obs),
             "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
@@ -223,7 +226,7 @@ def _rows_horaire(conn, since, end):
     rows = conn.execute(
         f"""
         SELECT d.date_service, d.route_id, {ligne_col}, {type_col}, d.heure,
-               d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60
+               d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.cnt_zero, d.cnt_sans_tr
         FROM agg_hourly d {route_join}
         WHERE d.date_service >= ? AND d.date_service < ?
         ORDER BY d.date_service, d.route_id, d.heure
@@ -240,6 +243,8 @@ def _rows_horaire(conn, since, end):
             "mode": _mode(r["route_type"]),
             "heure": int(r["heure"]),
             "observations": obs,
+            "retards_nuls": int(r["cnt_zero"]),
+            "passages_sans_temps_reel": int(r["cnt_sans_tr"]),
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
             "pct_a_l_heure": _on_time_pct(r, obs),
             "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
@@ -255,7 +260,7 @@ def _rows_communes(conn, since, end):
         SELECT d.date_service, sm.commune_name, sm.insee_code, d.route_id,
                SUM(d.obs) AS obs, SUM(d.sum_delay) AS sum_delay,
                SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300, SUM(d.cnt_lt60) AS cnt_lt60,
-               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible
+               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible, SUM(d.cnt_sans_tr) AS cnt_sans_tr
         FROM agg_daily_stop d
         JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
         WHERE d.date_service >= ? AND d.date_service < ?
@@ -268,11 +273,11 @@ def _rows_communes(conn, since, end):
     for r in _kept(rows, _excluded(conn, since, end)):
         key = (r["date_service"], r["commune_name"])
         g = groups.setdefault(key, {"insee_code": r["insee_code"], "routes": set(), "obs": 0, "sum_delay": 0,
-                                    "on_time": 0, "cnt_gt300": 0, "skipped": 0, "eligible": 0,
+                                    "on_time": 0, "cnt_gt300": 0, "skipped": 0, "eligible": 0, "cnt_sans_tr": 0,
                                     "expected": 0.0, "assured_on_time": 0.0})
         g["insee_code"] = min(g["insee_code"], r["insee_code"])
         g["routes"].add(r["route_id"])
-        for col in ("obs", "sum_delay", "cnt_gt300", "skipped", "eligible"):
+        for col in ("obs", "sum_delay", "cnt_gt300", "skipped", "eligible", "cnt_sans_tr"):
             g[col] += int(r[col])
         g["on_time"] += int(r["cnt_le300"]) - int(r["cnt_lt60"])
         comp = _components(r, trips)
@@ -286,6 +291,7 @@ def _rows_communes(conn, since, end):
             "commune": commune,
             "insee_code": g["insee_code"],
             "observations": obs,
+            "passages_sans_temps_reel": g["cnt_sans_tr"],
             "retard_moyen_s": round(g["sum_delay"] / obs, 2) if obs else None,
             "pct_a_l_heure": round(g["on_time"] / obs * 100, 2) if obs else None,
             "pct_retard_5min": round(g["cnt_gt300"] / obs * 100, 2) if obs else None,
@@ -335,6 +341,9 @@ def write_datasets(conn, out_dir, since="0000-00-00", end="9999-12-31"):
         "definitions": {
             "pct_a_l_heure": "part des passages partis entre 1 min d'avance et 5 min de retard",
             "score_fiabilite": "passages assurés (arrêt desservi, course non supprimée) et à l'heure / passages prévus",
+            "passages_sans_temps_reel": "passages des courses dont tous les départs relevés (au moins 2) valent "
+                                        "exactement 0 s, écartés des observations et des retards",
+            "retards_nuls": "passages observés dont le retard vaut exactement 0 s (hors courses sans temps réel)",
         },
         "exclusions": {"jours": sorted(_excluded(conn, since, end)[0]),
                        "lignes": sorted(_excluded(conn, since, end)[1])},

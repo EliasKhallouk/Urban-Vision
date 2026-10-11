@@ -33,7 +33,7 @@ import pandas as pd
 import streamlit as st
 
 from carte import carte_arrets, map_payload
-from carte_troncons import carte_troncons, troncons_payload
+from carte_troncons import carte_troncons, tram_lines_payload, troncons_payload
 from graphique import graphique_cliquable
 
 import diagnostic as dg
@@ -661,7 +661,7 @@ def _load_daily_core(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
             SELECT d.date_service, d.route_id,
                    COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
                    d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-                   d.skipped, d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
+                   d.skipped, d.eligible, d.histogram, d.cnt_sans_tr, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
             FROM agg_daily d LEFT JOIN routes r ON r.route_id = d.route_id
             LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
             WHERE d.date_service >= ? AND d.date_service < ? {route_sql} {excl_sql}
@@ -674,7 +674,7 @@ def _load_daily_core(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
             SELECT d.date_service, d.route_id, d.stop_id,
                    COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
                    d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-                   d.skipped, d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
+                   d.skipped, d.eligible, d.histogram, d.cnt_sans_tr, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
             FROM agg_daily_stop d
             JOIN routes r ON r.route_id = d.route_id
             JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
@@ -697,13 +697,11 @@ def _group_daily_stop_to_route(df: pd.DataFrame) -> pd.DataFrame:
     Somme les compteurs et fusionne les histogrammes JSON arrêt par arrêt ; les
     courses (prévues, supprimées, ajoutées) sont celles de la ligne ce jour-là.
     """
+    sums = {col: (col, "sum") for col in ("obs", "sum_delay", "cnt_le300", "cnt_gt300", "cnt_lt60", "skipped",
+                                          "eligible", "cnt_sans_tr") if col in df}
     agg = (
         df.groupby(["date_service", "route_id", "ligne", "route_type"], sort=False)
-        .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"),
-             cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"),
-             cnt_lt60=("cnt_lt60", "sum"), skipped=("skipped", "sum"),
-             eligible=("eligible", "sum"), scheduled=("scheduled", "first"),
-             cancelled=("cancelled", "first"), added=("added", "first"))
+        .agg(**sums, scheduled=("scheduled", "first"), cancelled=("cancelled", "first"), added=("added", "first"))
         .reset_index()
     )
     hists = {}
@@ -1233,7 +1231,7 @@ def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int 
         SELECT sm.commune_name AS commune, d.date_service, d.route_id,
                SUM(d.obs) AS obs, SUM(d.sum_delay) AS sum_delay,
                SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300, SUM(d.cnt_lt60) AS cnt_lt60,
-               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible,
+               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible, SUM(d.cnt_sans_tr) AS cnt_sans_tr,
                COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d
         JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
@@ -1395,7 +1393,7 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         f"""
         SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
                d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
-               d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.obs, d.skipped, d.eligible,
+               d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.obs, d.skipped, d.eligible, d.cnt_sans_tr,
                COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d
         JOIN stops s ON s.stop_id = d.stop_id
@@ -1586,7 +1584,7 @@ def load_stop_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
         f"""
         SELECT d.date_service, d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne,
                r.route_type, d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.skipped,
-               d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
+               d.eligible, d.histogram, d.cnt_sans_tr, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d LEFT JOIN routes r ON r.route_id = d.route_id
         LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
         WHERE d.stop_id = ? AND d.date_service >= ? AND d.date_service < ? {excl_sql}
@@ -1751,7 +1749,7 @@ def load_line_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
     rows = pd.read_sql_query(
         f"""
         SELECT d.stop_id, s.stop_name, sm.commune_name AS commune,
-               d.obs, d.cnt_le300, d.cnt_lt60, d.cnt_gt300, d.skipped, d.eligible, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
+               d.obs, d.cnt_le300, d.cnt_lt60, d.cnt_gt300, d.skipped, d.eligible, d.cnt_sans_tr, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d
         LEFT JOIN stops s ON s.stop_id = d.stop_id
         LEFT JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
@@ -1924,6 +1922,10 @@ LEXIQUE = [
     ("Jours et lignes écartés", "Les jours où la collecte des données est incomplète et les lignes dont le "
                                 "temps réel est douteux (au moins un quart des retards exactement nuls) ne sont "
                                 "comptés dans aucun chiffre de la période. « Méthode » en donne la liste."),
+    ("Trajet sans temps réel", "Une course d'un jour donné dont tous les départs relevés (au moins deux) "
+                               "valent exactement zéro : le flux republie l'horaire au lieu de la position "
+                               "réelle. Ses passages ne comptent pas dans la ponctualité ni les retards, mais "
+                               "comptent dans le service assuré. Un retard nul isolé reste une mesure."),
     ("Marge (±)", "L'incertitude d'un score, due aux écarts d'un jour à l'autre : le vrai niveau a 95 chances "
                   "sur 100 d'être dans la fourchette."),
     ("Observation", "Une ligne reçue du flux de données en temps réel de TBM. Sert à suivre le volume de la "
@@ -3392,7 +3394,9 @@ def _render_method_v2(c: PageContext) -> None:
     discarded = ", ".join(f"{r} ({z:.0f} % de retards nuls)" for r, z in sorted(v2["lignes_ecartees"].items()))
     st.caption(f"{v2['jours']} jour(s) évalué(s). Jours écartés (collecte incomplète) : {_short_days(v2['jours_exclus'])}. "
                f"Jours à collecte dégradée (conservés) : {_short_days(v2['jours_degrades'])}. "
-               f"Lignes écartées (temps réel douteux) : {discarded or 'aucune'}. La marge (±) est l'intervalle "
+               f"Lignes écartées (temps réel douteux) : {discarded or 'aucune'}. "
+               f"Passages de trajets sans temps réel, écartés de la ponctualité et des retards : "
+               f"{format_number(v2.get('sans_temps_reel', 0), 0)}. La marge (±) est l'intervalle "
                "de confiance à 95 %, calculé sur les écarts d'un jour à l'autre.")
 
 
@@ -3408,7 +3412,9 @@ def _render_method(c: PageContext) -> None:
                 "ajoutée le même jour compense une suppression). Score = service assuré × part à l'heure.")
     c2.markdown("**Jours et lignes écartés**  \nLes jours où la collecte est incomplète, les lignes au temps "
                 "réel douteux (au moins un quart des retards exactement nuls) et les lignes Flex' (à la "
-                "demande) ne sont comptés dans **aucun** chiffre du tableau de bord ni des rapports.")
+                "demande) ne sont comptés dans **aucun** chiffre du tableau de bord ni des rapports. Les "
+                "**trajets sans temps réel** (au moins deux départs relevés, tous exactement à l'heure à la "
+                "seconde près) sont écartés de la ponctualité et des retards, mais comptés dans le service assuré.")
     c3.markdown(f"**Seuil d'échantillon**  \nUne ligne n'apparaît dans les classements et graphiques que si "
                 f"elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes "
                 f"trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
@@ -3592,12 +3598,23 @@ def load_troncons(_conn, jour_type: str, computed_at: int) -> dict:
             "FROM troncons_lignes t LEFT JOIN routes r ON r.route_id = t.route_id ORDER BY t.passages DESC"):
         lines.setdefault((a, b), []).append(str(name))
         route_ids.setdefault((a, b), []).append(route_id)
-    tram = [json.loads(c) for (c,) in _conn.execute(
-        "SELECT s.coords FROM route_shapes s JOIN routes r ON r.route_id = s.route_id WHERE r.route_type = 0")]
+    tram = [{"r": r, "p": json.loads(c)} for r, c in _conn.execute(
+        "SELECT s.route_id, s.coords FROM route_shapes s JOIN routes r ON r.route_id = s.route_id "
+        "WHERE r.route_type = 0")]
+    try:
+        tram_rows = pd.read_sql_query(
+            "SELECT heure, route_id, direction_id, terminus, perte_s, prevu_s, trajets FROM troncons_tram "
+            "WHERE jour_type = ?", _conn, params=(jour_type,))
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        tram_rows = pd.DataFrame(columns=["heure", "route_id", "direction_id", "terminus", "perte_s", "prevu_s",
+                                          "trajets"])
+    tram_rows["terminus"] = tram_rows["terminus"].map(lambda t: t.title() if t.isupper() else t)
+    tram_names = dict(_conn.execute(
+        "SELECT route_id, COALESCE(route_short_name, route_id) FROM routes WHERE route_type = 0"))
     return {"geo": geo, "cells": cells, "lines": lines, "route_ids": route_ids,
             "names": dict(_conn.execute("SELECT stop_id, stop_name FROM stops")),
             "communes": dict(_conn.execute("SELECT stop_id, commune_name FROM stop_municipalities")),
-            "tram": tram}
+            "tram": tram, "tram_lines": tram_lines_payload(tram_rows, tram_names)}
 
 
 def contention_scope(commune: str | None, route_id: str | None, line_name: str | None, stop_id: str | None,
@@ -3645,7 +3662,7 @@ def render_page_contention(c: PageContext) -> None:
     scope = contention_scope(c.commune, route_id, line_name, stop_id, data["names"].get(stop_id) if stop_id else None)
     measurable = {r for r, q in meta.get("lignes", {}).items() if q.get("ok")}
     payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
-                               data["tram"], scope, data["route_ids"], measurable)
+                               data["tram"], scope, data["route_ids"], measurable, data["tram_lines"])
     carte_troncons(payload, key="carte_troncons")
 
 

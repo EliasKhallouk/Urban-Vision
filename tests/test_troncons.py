@@ -187,6 +187,80 @@ class TestComposant:
         assert payload["view_key"] == "||c"
 
 
+class TestTram:
+    def _first_last(self):
+        first = pd.DataFrame({
+            "trip_id": ["ok", "sans_tr", "partiel", "aberrant"], "start_date": ["20261007"] * 4,
+            "route_id": ["T"] * 4, "direction_id": [0] * 4, "seq0": [1, 1, 1, 1],
+            "t0": [_ts("2026-10-07", 8)] * 4, "dep0": [30, 0, 10, 10], "ds": ["2026-10-07"] * 4,
+            "heure": [8] * 4, "n": [10, 10, 3, 10], "nonzero": [9, 0, 3, 10]})
+        last = pd.DataFrame({
+            "trip_id": ["ok", "sans_tr", "partiel", "aberrant"], "start_date": ["20261007"] * 4,
+            "seq1": [10, 10, 10, 10], "terminus_id": ["s9"] * 4,
+            "t1": [_ts("2026-10-07", 8, 40, 20)] * 4, "dep1": [140, 0, 50, 4000], "arr1": [150, 0, None, 4000]})
+        return first, last
+
+    def test_temps_perdu_de_bout_en_bout(self):
+        trips = tr.tram_trips(*self._first_last())
+        assert list(trips["trip_id"]) == ["ok"]
+        assert trips.iloc[0]["perte"] == 120
+        assert trips.iloc[0]["prevu"] == 40 * 60 + 20 - 140 + 30
+
+    def test_terminus_principaux(self):
+        rows = []
+        for day in ("2026-10-05", "2026-10-06", "2026-10-07"):
+            rows += [("Nord", 0, 100 + k, 2400, day, 8) for k in range(8)]
+            rows += [("Dépôt", 0, 10, 600, day, 8) for _ in range(8)]
+            rows += [("Sud", 1, 60, 2300, day, 17 if k % 2 else 18) for k in range(8)]
+        trips = pd.DataFrame(rows, columns=["terminus", "direction_id", "perte", "prevu", "ds", "heure"]).assign(
+            route_id="T")
+        out = tr.summarize_tram(trips)
+        assert set(out["terminus"]) == {"Nord", "Sud"}
+        nord = out[(out.terminus == "Nord") & (out.heure == tr.WHOLE_DAY)].iloc[0]
+        assert (nord.perte_s, nord.prevu_s, nord.trajets, nord.jours) == (103.5, 2400, 24, 3)
+        assert set(out[out.terminus == "Sud"]["heure"]) == {tr.WHOLE_DAY}
+        assert set(out[out.terminus == "Nord"]["heure"]) == {tr.WHOLE_DAY, 8}
+
+    def test_table_du_tram(self, conn):
+        gtfs_static.create_static_tables(conn)
+        conn.execute("INSERT INTO routes VALUES ('T', 'A', 'Tram A', 0)")
+        conn.execute("INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon) VALUES ('t3', 'Terminus', 44.8, -0.6)")
+        rows = []
+        for day in ("2026-10-05", "2026-10-06", "2026-10-07"):
+            for k in range(8):
+                start = _ts(day, 8) + k * 300
+                for seq, (stop, delay) in enumerate([("t1", 20), ("t2", 60), ("t3", 140)], start=1):
+                    rows.append((f"{day}{k}", day.replace("-", ""), "T", 0, seq, stop, "SCHEDULED", delay, delay,
+                                 start + seq * 600 + delay, start + seq * 600 + delay + 60))
+        conn.executemany(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id, "
+            "schedule_relationship, arrival_delay, departure_delay, departure_time, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.commit()
+        assert tr.build_tram(conn, "2026-10-01", "2026-10-08") == 2
+        assert conn.execute(
+            "SELECT terminus, perte_s, prevu_s, trajets, jours FROM troncons_tram WHERE heure = -1"
+        ).fetchone() == ("Terminus", 120.0, 1200.0, 24, 3)
+
+    def test_donnees_du_composant(self):
+        rows = pd.DataFrame({"heure": [8, -1, -1], "route_id": ["T"] * 3, "direction_id": [0, 0, 1],
+                             "terminus": ["Nord", "Nord", "Sud"], "perte_s": [130.4, 100.0, 60.0],
+                             "prevu_s": [2400.0, 2400.0, 2300.0], "trajets": [40, 300, 280]})
+        lines = ct.tram_lines_payload(rows, {"T": "A"})
+        assert lines["T"]["n"] == "A" and [d["vers"] for d in lines["T"]["s"]] == ["Nord", "Sud"]
+        assert lines["T"]["s"][0]["v"][8] == [130, 2400, 40] and lines["T"]["s"][1]["v"][8] is None
+        paths = [{"r": "T", "p": [[-0.6, 44.8], [-0.5, 44.9]]}, {"r": "U", "p": [[-0.7, 44.7], [-0.6, 44.7]]}]
+        empty = pd.DataFrame(columns=["from_stop_id", "to_stop_id", "route_type", "coords"])
+        no_cells = pd.DataFrame(columns=["heure", "from_stop_id", "to_stop_id", "statut", "palier", "mediane_s",
+                                         "mediane_pct", "passages"])
+        payload = ct.troncons_payload(empty, no_cells, {}, {}, {}, paths, {"route_id": "T"}, {}, None, lines)
+        assert payload["tram_line"] == "T" and payload["slot"] == ct.WHOLE_DAY_SLOT
+        assert [t["c"] for t in payload["tram"]] == [1, 0]
+        assert payload["bounds"] == [[-0.6, 44.8], [-0.5, 44.9]]
+        network = ct.troncons_payload(empty, no_cells, {}, {}, {}, paths, {}, {}, None, lines)
+        assert network["tram_line"] is None and [t["c"] for t in network["tram"]] == [1, 1]
+
+
 def test_textes_du_perimetre():
     import app as app_mod
     assert app_mod.contention_scope(None, None, None, None, None) == {

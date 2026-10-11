@@ -92,6 +92,10 @@ _CSS = f"""
 .uvt-figure.t-o {{ color: #9a6420; }}
 .uvt-grey-reason {{ margin-top: 10px !important; font-weight: 600; }}
 .uvt-foot {{ color: #606c38; font-size: 12px; }}
+.uvt-tram-row {{ display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; align-items: baseline; }}
+.uvt-tram-row b {{ font-size: 18px; white-space: nowrap; }}
+.uvt-tram-row b.na {{ font-size: 13px; font-weight: 600; color: #606c38; }}
+.uvt-tram-row + .uvt-foot {{ margin-top: 0 !important; }}
 .uvt-close {{ position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 50%;
              background: #F2F2EE; color: {BLACK_FOREST}; font-size: 18px; line-height: 1; cursor: pointer; }}
 .uvt-strip {{ display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin-top: 10px; }}
@@ -188,11 +192,24 @@ def in_scope(seg_from: str, seg_to: str, routes: list, communes: dict, scope: di
     return True
 
 
+def tram_lines_payload(rows: pd.DataFrame, line_names: dict) -> dict:
+    """Temps perdu de bout en bout du tram : route_id -> nom et, par terminus principal, 25 tranches
+    [secondes perdues, durée prévue en secondes, trajets] ou None (`rows` : table troncons_tram d'un jour type)."""
+    out: dict = {}
+    for r in rows.sort_values(["route_id", "direction_id", "terminus"]).itertuples(index=False):
+        line = out.setdefault(r.route_id, {"n": str(line_names.get(r.route_id, r.route_id)), "s": []})
+        if not line["s"] or line["s"][-1]["vers"] != r.terminus:
+            line["s"].append({"vers": r.terminus, "v": [None] * SLOTS})
+        line["s"][-1]["v"][slot_index(r.heure)] = [int(round(r.perte_s)), int(round(r.prevu_s)), int(r.trajets)]
+    return out
+
+
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
                      tram_paths: list, scope: dict | None = None, route_ids: dict | None = None,
-                     measurable: set | None = None) -> dict:
+                     measurable: set | None = None, tram_lines: dict | None = None) -> dict:
     """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
-    appartenance au périmètre), tracés du tram, cadrage, tranche d'ouverture et textes du périmètre.
+    appartenance au périmètre), tracés du tram ({"r": route_id, "p": tracé}) et son temps perdu de
+    bout en bout (`tram_lines`, voir `tram_lines_payload`), cadrage, tranche d'ouverture et textes.
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
     to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
@@ -241,6 +258,15 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "l": ", ".join(dict.fromkeys(shown)), "u": 1 if len(set(shown)) < len(set(names_here)) else 0,
             "c": 1 if inside else 0,
         })
+    tram_lines = tram_lines or {}
+    tram_line = scope.get("route_id") if scope.get("route_id") in tram_lines else None
+    trams = []
+    for path in tram_paths:
+        inside = not focused or (tram_line is not None and path["r"] == tram_line)
+        trams.append({"r": path["r"], "p": path["p"], "c": 1 if inside else 0})
+        if tram_line is not None and inside:
+            lons += [pt[0] for pt in path["p"]]
+            lats += [pt[1] for pt in path["p"]]
     view = dict(NETWORK_VIEW)
     box_lons, box_lats = (lons, lats) if lons else (all_lons, all_lats)
     bounds = None
@@ -251,7 +277,8 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
         view = {"longitude": (lo_x + hi_x) / 2, "latitude": (lo_y + hi_y) / 2,
                 "zoom": COMMUNE_ZOOM if lons else NETWORK_VIEW["zoom"]}
     default = worst_slot([s["t"] for s in segments if s["c"]])
-    return {"segments": segments, "tram": tram_paths, "slot": WHOLE_DAY_SLOT if default is None else default,
+    return {"segments": segments, "tram": trams, "tram_lines": tram_lines, "tram_line": tram_line,
+            "slot": WHOLE_DAY_SLOT if default is None or tram_line else default,
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,

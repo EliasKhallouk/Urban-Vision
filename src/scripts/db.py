@@ -57,6 +57,18 @@ CREATE TABLE IF NOT EXISTS troncons_meta (
     cle TEXT PRIMARY KEY,
     valeur TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS troncons_tram (
+    jour_type TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    route_id TEXT NOT NULL,
+    direction_id INTEGER NOT NULL,
+    terminus TEXT NOT NULL,
+    perte_s REAL NOT NULL,
+    prevu_s REAL NOT NULL,
+    trajets INTEGER NOT NULL,
+    jours INTEGER NOT NULL,
+    PRIMARY KEY (jour_type, heure, route_id, terminus)
+);
 """
 
 AGG_DDL = """
@@ -71,6 +83,7 @@ CREATE TABLE IF NOT EXISTS agg_daily (
     skipped INTEGER NOT NULL,
     eligible INTEGER NOT NULL,
     histogram TEXT NOT NULL,
+    cnt_sans_tr INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_daily_service ON agg_daily(date_service);
@@ -83,6 +96,8 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     cnt_le300 INTEGER NOT NULL,
     cnt_gt300 INTEGER NOT NULL,
     cnt_lt60 INTEGER NOT NULL DEFAULT 0,
+    cnt_zero INTEGER NOT NULL DEFAULT 0,
+    cnt_sans_tr INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
@@ -98,6 +113,7 @@ CREATE TABLE IF NOT EXISTS agg_daily_stop (
     skipped INTEGER NOT NULL,
     eligible INTEGER NOT NULL,
     histogram TEXT NOT NULL,
+    cnt_sans_tr INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id, stop_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_daily_stop_service ON agg_daily_stop(date_service);
@@ -112,6 +128,8 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
     cnt_le300 INTEGER NOT NULL,
     cnt_gt300 INTEGER NOT NULL,
     cnt_lt60 INTEGER NOT NULL DEFAULT 0,
+    cnt_zero INTEGER NOT NULL DEFAULT 0,
+    cnt_sans_tr INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id, stop_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
@@ -160,6 +178,10 @@ CREATE TABLE IF NOT EXISTS agg_hourly_regularity (
     PRIMARY KEY (date_service, route_id, direction_id, stop_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_regularity_route ON agg_hourly_regularity(route_id, date_service);
+CREATE TABLE IF NOT EXISTS agg_meta (
+    cle TEXT PRIMARY KEY,
+    valeur TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quality_days (
     date_service TEXT PRIMARY KEY,
     passages INTEGER NOT NULL,
@@ -273,6 +295,12 @@ OBSERVATION_COLUMNS_ADDED = (
 AGG_COLUMNS_ADDED = (
     ("agg_hourly", "cnt_lt60", "INTEGER NOT NULL DEFAULT 0"),
     ("agg_hourly_stop", "cnt_lt60", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_daily", "cnt_sans_tr", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_daily_stop", "cnt_sans_tr", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_hourly", "cnt_zero", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_hourly", "cnt_sans_tr", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_hourly_stop", "cnt_zero", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_hourly_stop", "cnt_sans_tr", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -300,32 +328,55 @@ conn = sqlite3.connect(DB_PATH)
 init_db(conn)
 
 
-# ::SCHED_BOUNDS:: borne le scan aux jours traités (incrémental) ; chaîne vide = tout
-# (re)calculer. `hist` est un objet JSON {secondes_de_retard: effectif} qui permet
-# de reconstruire une médiane exacte sur n'importe quelle période de jours.
-_DAILY_SQL = """
-INSERT OR REPLACE INTO agg_daily
-    (date_service, route_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
-     skipped, eligible, histogram)
-WITH sched AS (
-    SELECT o.route_id, date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
-           o.departure_delay
+# ::SCHED_BOUNDS:: borne le scan aux jours traités, élargis de TRIP_MARGIN_SECONDS
+# pour voir chaque trajet en entier, et ::DAY_BOUNDS:: ramène aux jours traités
+# (incrémental) ; chaînes vides = tout (re)calculer. `hist` est un objet JSON
+# {secondes_de_retard: effectif} qui permet de reconstruire une médiane exacte
+# sur n'importe quelle période de jours. `sans_tr` marque les passages d'un
+# trajet sans temps réel (au moins SANS_TR_MIN_PASSAGES départs, tous à 0 s) :
+# ils sont comptés dans cnt_sans_tr et sortent des indicateurs de retard.
+SANS_TR_MIN_PASSAGES = 2
+TRIP_MARGIN_SECONDS = 3 * 3600
+
+_PASSAGES_CTE = f"""
+passages AS (
+    SELECT o.route_id, o.stop_id, o.departure_time, o.departure_delay,
+           COUNT(*) OVER t >= {SANS_TR_MIN_PASSAGES} AND MIN(o.departure_delay) OVER t = 0
+               AND MAX(o.departure_delay) OVER t = 0 sans_tr
     FROM observations o
     WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
           AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
+    WINDOW t AS (PARTITION BY o.trip_id, o.start_date)
 ),
+sched AS (
+    SELECT route_id, stop_id, date(datetime(departure_time, 'unixepoch', 'localtime')) ds,
+           CAST(strftime('%H', datetime(departure_time, 'unixepoch', 'localtime')) AS INTEGER) heure,
+           departure_delay, sans_tr
+    FROM passages
+    WHERE 1 = 1 ::DAY_BOUNDS::
+)"""
+
+_DELAY_COUNTS = """COALESCE(SUM(CASE WHEN sans_tr THEN 0 ELSE 1 END), 0) obs,
+           COALESCE(SUM(CASE WHEN sans_tr THEN 0 ELSE departure_delay END), 0) sum_delay,
+           COALESCE(SUM(CASE WHEN NOT sans_tr AND departure_delay <= 300 THEN 1 ELSE 0 END), 0) cnt_le300,
+           COALESCE(SUM(CASE WHEN NOT sans_tr AND departure_delay > 300 THEN 1 ELSE 0 END), 0) cnt_gt300,
+           COALESCE(SUM(CASE WHEN NOT sans_tr AND departure_delay < -60 THEN 1 ELSE 0 END), 0) cnt_lt60,
+           COALESCE(SUM(CASE WHEN sans_tr THEN 1 ELSE 0 END), 0) cnt_sans_tr"""
+
+_DAILY_SQL = """
+INSERT OR REPLACE INTO agg_daily
+    (date_service, route_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
+     skipped, eligible, histogram, cnt_sans_tr)
+WITH ::PASSAGES::,
 metrics AS (
-    SELECT route_id, ds, COUNT(*) obs, COALESCE(SUM(departure_delay), 0) sum_delay,
-           COALESCE(SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END), 0) cnt_le300,
-           COALESCE(SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END), 0) cnt_gt300,
-           COALESCE(SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END), 0) cnt_lt60
+    SELECT route_id, ds, ::DELAY_COUNTS::
     FROM sched GROUP BY route_id, ds
 ),
 hist AS (
     SELECT route_id, ds, json_group_object(departure_delay, cnt) h
     FROM (
         SELECT route_id, ds, departure_delay, COUNT(*) cnt
-        FROM sched GROUP BY route_id, ds, departure_delay
+        FROM sched WHERE NOT sans_tr GROUP BY route_id, ds, departure_delay
     ) GROUP BY route_id, ds
 ),
 skp AS (
@@ -344,67 +395,45 @@ skpagg AS (
 ),
 parts AS (
     SELECT ds, route_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
-           0 skipped, 0 eligible, NULL h
+           0 skipped, 0 eligible, NULL h, cnt_sans_tr
     FROM metrics
     UNION ALL
-    SELECT ds, route_id, 0, 0, 0, 0, 0, skipped, eligible, NULL FROM skpagg
+    SELECT ds, route_id, 0, 0, 0, 0, 0, skipped, eligible, NULL, 0 FROM skpagg
     UNION ALL
-    SELECT ds, route_id, 0, 0, 0, 0, 0, 0, 0, h FROM hist
+    SELECT ds, route_id, 0, 0, 0, 0, 0, 0, 0, h, 0 FROM hist
 )
 SELECT ds, route_id, SUM(obs), SUM(sum_delay), SUM(cnt_le300), SUM(cnt_gt300),
-       SUM(cnt_lt60), SUM(skipped), SUM(eligible), COALESCE(MAX(h), '{}')
+       SUM(cnt_lt60), SUM(skipped), SUM(eligible), COALESCE(MAX(h), '{}'), SUM(cnt_sans_tr)
 FROM parts
 GROUP BY ds, route_id
-"""
+""".replace("::PASSAGES::", _PASSAGES_CTE.strip()).replace("::DELAY_COUNTS::", _DELAY_COUNTS)
 
 _HOURLY_SQL = """
 INSERT OR REPLACE INTO agg_hourly
-    (date_service, route_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60)
-SELECT ds,
-       route_id,
-       heure,
-       COUNT(*) obs,
-       COALESCE(SUM(departure_delay), 0) sum_delay,
-       SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END) cnt_le300,
-       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300,
-       SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END) cnt_lt60
-FROM (
-    SELECT o.route_id,
-           date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
-           CAST(strftime('%H', datetime(o.departure_time, 'unixepoch', 'localtime')) AS INTEGER) heure,
-           o.departure_delay
-    FROM observations o
-    WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
-          AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
-)
+    (date_service, route_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
+     cnt_sans_tr, cnt_zero)
+WITH ::PASSAGES::
+SELECT ds, route_id, heure, ::DELAY_COUNTS::,
+       COALESCE(SUM(CASE WHEN NOT sans_tr AND departure_delay = 0 THEN 1 ELSE 0 END), 0) cnt_zero
+FROM sched
 GROUP BY route_id, ds, heure
-"""
+""".replace("::PASSAGES::", _PASSAGES_CTE.strip()).replace("::DELAY_COUNTS::", _DELAY_COUNTS)
 
 
 _DAILY_STOP_SQL = """
 INSERT OR REPLACE INTO agg_daily_stop
     (date_service, route_id, stop_id, obs, sum_delay, cnt_le300, cnt_gt300,
-     cnt_lt60, skipped, eligible, histogram)
-WITH sched AS (
-    SELECT o.route_id, o.stop_id,
-           date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
-           o.departure_delay
-    FROM observations o
-    WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
-          AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
-),
+     cnt_lt60, skipped, eligible, histogram, cnt_sans_tr)
+WITH ::PASSAGES::,
 metrics AS (
-    SELECT route_id, stop_id, ds, COUNT(*) obs, COALESCE(SUM(departure_delay), 0) sum_delay,
-           COALESCE(SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END), 0) cnt_le300,
-           COALESCE(SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END), 0) cnt_gt300,
-           COALESCE(SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END), 0) cnt_lt60
+    SELECT route_id, stop_id, ds, ::DELAY_COUNTS::
     FROM sched GROUP BY route_id, stop_id, ds
 ),
 hist AS (
     SELECT route_id, stop_id, ds, json_group_object(departure_delay, cnt) h
     FROM (
         SELECT route_id, stop_id, ds, departure_delay, COUNT(*) cnt
-        FROM sched GROUP BY route_id, stop_id, ds, departure_delay
+        FROM sched WHERE NOT sans_tr GROUP BY route_id, stop_id, ds, departure_delay
     ) GROUP BY route_id, stop_id, ds
 ),
 skp AS (
@@ -423,42 +452,29 @@ skpagg AS (
 ),
 parts AS (
     SELECT ds, route_id, stop_id, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
-           0 skipped, 0 eligible, NULL h
+           0 skipped, 0 eligible, NULL h, cnt_sans_tr
     FROM metrics
     UNION ALL
-    SELECT ds, route_id, stop_id, 0, 0, 0, 0, 0, skipped, eligible, NULL FROM skpagg
+    SELECT ds, route_id, stop_id, 0, 0, 0, 0, 0, skipped, eligible, NULL, 0 FROM skpagg
     UNION ALL
-    SELECT ds, route_id, stop_id, 0, 0, 0, 0, 0, 0, 0, h FROM hist
+    SELECT ds, route_id, stop_id, 0, 0, 0, 0, 0, 0, 0, h, 0 FROM hist
 )
 SELECT ds, route_id, stop_id, SUM(obs), SUM(sum_delay), SUM(cnt_le300), SUM(cnt_gt300),
-       SUM(cnt_lt60), SUM(skipped), SUM(eligible), COALESCE(MAX(h), '{}')
+       SUM(cnt_lt60), SUM(skipped), SUM(eligible), COALESCE(MAX(h), '{}'), SUM(cnt_sans_tr)
 FROM parts
 GROUP BY ds, route_id, stop_id
-"""
+""".replace("::PASSAGES::", _PASSAGES_CTE.strip()).replace("::DELAY_COUNTS::", _DELAY_COUNTS)
 
 _HOURLY_STOP_SQL = """
 INSERT OR REPLACE INTO agg_hourly_stop
-    (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60)
-SELECT ds,
-       route_id,
-       stop_id,
-       heure,
-       COUNT(*) obs,
-       COALESCE(SUM(departure_delay), 0) sum_delay,
-       SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END) cnt_le300,
-       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300,
-       SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END) cnt_lt60
-FROM (
-    SELECT o.route_id, o.stop_id,
-           date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
-           CAST(strftime('%H', datetime(o.departure_time, 'unixepoch', 'localtime')) AS INTEGER) heure,
-           o.departure_delay
-    FROM observations o
-    WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
-          AND o.departure_time IS NOT NULL ::SCHED_BOUNDS::
-)
+    (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60,
+     cnt_sans_tr, cnt_zero)
+WITH ::PASSAGES::
+SELECT ds, route_id, stop_id, heure, ::DELAY_COUNTS::,
+       COALESCE(SUM(CASE WHEN NOT sans_tr AND departure_delay = 0 THEN 1 ELSE 0 END), 0) cnt_zero
+FROM sched
 GROUP BY route_id, stop_id, ds, heure
-"""
+""".replace("::PASSAGES::", _PASSAGES_CTE.strip()).replace("::DELAY_COUNTS::", _DELAY_COUNTS)
 
 
 SKP_LAST_SEEN_MARGIN_SECONDS = 86400
@@ -470,17 +486,23 @@ def incremental_statements(days: list[str]) -> list[tuple[str, tuple]]:
     d1_ts = int((datetime.strptime(max(days), "%Y-%m-%d") + timedelta(days=1)).timestamp())
     day_ints = "', '".join(d.replace("-", "") for d in days)
     sched_bounds = "AND o.departure_time >= ? AND o.departure_time < ?"
+    day_bounds = "AND departure_time >= ? AND departure_time < ?"
     skp_bounds = f"AND o.start_date IN ('{day_ints}') AND o.last_seen_at >= ? AND o.last_seen_at < ?"
-    sched_params = (d0_ts, d1_ts)
+    sched_params = (d0_ts - TRIP_MARGIN_SECONDS, d1_ts + TRIP_MARGIN_SECONDS, d0_ts, d1_ts)
     daily_params = sched_params + (
         d0_ts - SKP_LAST_SEEN_MARGIN_SECONDS,
         d1_ts + SKP_LAST_SEEN_MARGIN_SECONDS,
     )
+
+    def bounded(sql: str) -> str:
+        return (sql.replace("::SCHED_BOUNDS::", sched_bounds).replace("::DAY_BOUNDS::", day_bounds)
+                   .replace("::SKP_BOUNDS::", skp_bounds))
+
     return [
-        (_DAILY_SQL.replace("::SCHED_BOUNDS::", sched_bounds).replace("::SKP_BOUNDS::", skp_bounds), daily_params),
-        (_HOURLY_SQL.replace("::SCHED_BOUNDS::", sched_bounds), sched_params),
-        (_DAILY_STOP_SQL.replace("::SCHED_BOUNDS::", sched_bounds).replace("::SKP_BOUNDS::", skp_bounds), daily_params),
-        (_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", sched_bounds), sched_params),
+        (bounded(_DAILY_SQL), daily_params),
+        (bounded(_HOURLY_SQL), sched_params),
+        (bounded(_DAILY_STOP_SQL), daily_params),
+        (bounded(_HOURLY_STOP_SQL), sched_params),
     ]
 
 
@@ -490,6 +512,22 @@ def hourly_early_missing_days(c) -> list[str]:
         """SELECT date_service FROM agg_daily GROUP BY date_service HAVING SUM(cnt_lt60) > 0
            EXCEPT SELECT date_service FROM agg_hourly GROUP BY date_service HAVING SUM(cnt_lt60) > 0
            ORDER BY 1""")]
+
+
+SANS_TR_META_KEY = "sans_temps_reel_jusqu_au"
+
+
+def sans_tr_pending_days(c, today: str) -> list[str]:
+    """Jours passés dont les agrégats datent d'avant la règle des trajets sans temps réel."""
+    row = c.execute("SELECT valeur FROM agg_meta WHERE cle = ?", (SANS_TR_META_KEY,)).fetchone()
+    return [d for (d,) in c.execute(
+        "SELECT DISTINCT date_service FROM agg_daily WHERE date_service > ? AND date_service < ? ORDER BY 1",
+        (row[0] if row else "", today))]
+
+
+def mark_sans_tr_done(c, day: str) -> None:
+    c.execute("INSERT OR REPLACE INTO agg_meta (cle, valeur) VALUES (?, ?)", (SANS_TR_META_KEY, day))
+    c.commit()
 
 
 def refresh_aggregates(c, days: list[str] | None = None) -> None:
@@ -502,10 +540,9 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
     migrate_agg_columns(c)
     c.executescript(AGG_DDL)
     if days is None:
-        c.execute(_DAILY_SQL.replace("::SCHED_BOUNDS::", "").replace("::SKP_BOUNDS::", ""))
-        c.execute(_HOURLY_SQL.replace("::SCHED_BOUNDS::", ""))
-        c.execute(_DAILY_STOP_SQL.replace("::SCHED_BOUNDS::", "").replace("::SKP_BOUNDS::", ""))
-        c.execute(_HOURLY_STOP_SQL.replace("::SCHED_BOUNDS::", ""))
+        for sql in (_DAILY_SQL, _HOURLY_SQL, _DAILY_STOP_SQL, _HOURLY_STOP_SQL):
+            c.execute(sql.replace("::SCHED_BOUNDS::", "").replace("::DAY_BOUNDS::", "")
+                         .replace("::SKP_BOUNDS::", ""))
     else:
         day_strs = "', '".join(days)
         for table in AGG_TABLES:
@@ -525,11 +562,14 @@ WITH seq AS (
     SELECT o.route_id, COALESCE(o.direction_id, -1) dir, o.stop_id, o.departure_time,
            o.departure_delay,
            LAG(o.departure_delay) OVER w prev_delay,
-           LAG(o.stop_id) OVER w prev_stop_id
+           LAG(o.stop_id) OVER w prev_stop_id,
+           COUNT(*) OVER t >= ::SANS_TR_MIN:: AND MIN(o.departure_delay) OVER t = 0
+               AND MAX(o.departure_delay) OVER t = 0 sans_tr
     FROM observations o
     WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
           AND o.departure_time IS NOT NULL ::WINDOW_BOUNDS::
-    WINDOW w AS (PARTITION BY o.trip_id, o.start_date ORDER BY o.stop_sequence)
+    WINDOW w AS (PARTITION BY o.trip_id, o.start_date ORDER BY o.stop_sequence),
+           t AS (PARTITION BY o.trip_id, o.start_date)
 ),
 d AS (
     SELECT route_id, dir, stop_id,
@@ -537,7 +577,7 @@ d AS (
            departure_delay, prev_delay, prev_stop_id,
            departure_delay - prev_delay gain
     FROM seq
-    WHERE 1 = 1 ::DAY_BOUNDS::
+    WHERE NOT sans_tr ::DAY_BOUNDS::
 ),
 metrics AS (
     SELECT route_id, dir, stop_id, ds, COUNT(*) obs,
@@ -601,7 +641,7 @@ SELECT ds, route_id, dir, stop_id,
        MAX(prev_stop_id), COALESCE(MAX(h), '{}')
 FROM parts
 GROUP BY ds, route_id, dir, stop_id
-"""
+""".replace("::SANS_TR_MIN::", str(SANS_TR_MIN_PASSAGES))
 
 SEGMENT_LOOKBACK_SECONDS = 3 * 3600
 
@@ -612,12 +652,12 @@ def incremental_segment_statement(days: list[str]) -> tuple[str, tuple]:
     day_ints = "', '".join(d.replace("-", "") for d in days)
     sql = (
         _SEGMENT_SQL.replace("::WINDOW_BOUNDS::", "AND o.departure_time >= ? AND o.departure_time < ?")
-                    .replace("::DAY_BOUNDS::", "AND departure_time >= ?")
+                    .replace("::DAY_BOUNDS::", "AND departure_time >= ? AND departure_time < ?")
                     .replace("::SKP_BOUNDS::", f"AND o.start_date IN ('{day_ints}') "
                                                "AND o.last_seen_at >= ? AND o.last_seen_at < ?")
     )
     params = (
-        d0_ts - SEGMENT_LOOKBACK_SECONDS, d1_ts, d0_ts,
+        d0_ts - SEGMENT_LOOKBACK_SECONDS, d1_ts + TRIP_MARGIN_SECONDS, d0_ts, d1_ts,
         d0_ts - SKP_LAST_SEEN_MARGIN_SECONDS, d1_ts + SKP_LAST_SEEN_MARGIN_SECONDS,
     )
     return sql, params
@@ -630,12 +670,14 @@ def refresh_segments(c, days: list[str] | None = None) -> None:
     l'arrêt observé précédent du même voyage (LAG sur stop_sequence) : `gain`
     est le retard pris sur le tronçon, `prev_delay` le retard déjà présent en
     arrivant. Les arrêts sautés et l'ordre moyen de l'arrêt dans la ligne
-    (sum_seq / eligible) sont comptés par direction.
+    (sum_seq / eligible) sont comptés par direction. Les passages des trajets
+    sans temps réel sont écartés des retards, pas des arrêts attendus.
 
     days=None  -> (re)calcul complet (coûteux, à faire une fois).
     days=[...] -> ne recalcule que les dates-service listées ; la fenêtre de
                   lecture remonte de SEGMENT_LOOKBACK_SECONDS pour que le premier
-                  arrêt d'un voyage à cheval sur minuit garde son prédécesseur.
+                  arrêt d'un voyage à cheval sur minuit garde son prédécesseur,
+                  et va TRIP_MARGIN_SECONDS au-delà pour voir chaque trajet entier.
     """
     c.executescript(AGG_DDL)
     if days is None:
@@ -765,7 +807,9 @@ def day_quality(hourly: dict, day: str) -> tuple[str, list[int]]:
 def refresh_quality_days(c, days: list[str] | None = None, today: str | None = None) -> None:
     today = today or datetime.now().strftime("%Y-%m-%d")
     hourly: dict = {}
-    for ds, hour, n in c.execute("SELECT date_service, heure, SUM(obs) FROM agg_hourly GROUP BY date_service, heure"):
+    for ds, hour, n in c.execute(
+        "SELECT date_service, heure, SUM(obs + cnt_sans_tr) FROM agg_hourly GROUP BY date_service, heure"
+    ):
         hourly.setdefault(ds, {})[hour] = n
     targets = sorted(hourly) if days is None else days
     for day in targets:

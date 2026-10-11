@@ -214,6 +214,13 @@ def on_time_share(delays: pd.Series) -> float:
     return float(window.mean() * 100) if len(delays) else float("nan")
 
 
+def without_realtime_filter(conn: sqlite3.Connection, lo: int, hi: int) -> str:
+    """Filtre SQL qui écarte les passages des trajets sans temps réel (règle des agrégats, `indicateurs`)."""
+    table = ind.load_trips_without_realtime(conn, lo, hi)
+    return (f" AND NOT EXISTS (SELECT 1 FROM {table} sans_tr "
+            "WHERE sans_tr.trip_id = o.trip_id AND sans_tr.start_date = o.start_date)")
+
+
 def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """Return scheduled and skipped observations for the calendar month and scope.
 
@@ -283,7 +290,8 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
     """
     scheduled = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, o.departure_delay, o.departure_time "
-        + base + " AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL" + departure_day_filter,
+        + base + " AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL"
+        + without_realtime_filter(conn, lo, hi) + departure_day_filter,
         conn, params=params + days,
     )
     skipped = pd.read_sql_query(
@@ -340,6 +348,7 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
           {exclusion_filter}
           AND +o.schedule_relationship = 'SCHEDULED'
           AND o.departure_delay IS NOT NULL
+          {without_realtime_filter(conn, lo, hi)}
     """
     df = pd.read_sql_query(query, conn, params=params)
     if df.empty:
@@ -625,6 +634,12 @@ def method_v2_section(v2: dict | None) -> str:
         f"{latex(names.get(route_id, route_id))} ({number(share, 0)}\\,\\% de retards nuls)"
         for route_id, share in sorted(current.lignes_ecartees.items())
     ) or "aucune"
+    observed = current.passages + current.sans_temps_reel
+    without_rt = (
+        f"{number(current.sans_temps_reel)} passages ({_pct_fr(100 * current.sans_temps_reel / observed)} des passages "
+        "observés), écartés de la ponctualité et des retards, comptés dans le service assuré"
+        if current.sans_temps_reel and observed else "aucun"
+    )
 
     return rf"""\newpage
 \section*{{Détail du score de fiabilité}}
@@ -667,6 +682,7 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 \item \textbf{{Jours exclus}} (collecte incomplète), de tous les indicateurs du rapport : {excluded}.
 \item \textbf{{Jours à collecte dégradée}} (conservés) : {degraded}.
 \item \textbf{{Lignes écartées}} (temps réel douteux), de tous les indicateurs du rapport : {discarded}.
+\item \textbf{{Trajets sans temps réel}} : {without_rt}.
 \end{{itemize}}
 
 \subsection*{{Définitions}}
@@ -678,6 +694,7 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 \item \textbf{{Marge ($\pm$)}} : intervalle de confiance à 95\,\% (loi de Student), les jours étant traités comme unités d'échantillonnage. La marge reflète la variabilité d'un jour à l'autre et non la précision de la mesure d'un passage ; elle s'élargit quand peu de jours sont disponibles.
 \item \textbf{{Jour incomplet}} : au moins {QUALITY_INCOMPLETE_HOURS} heures entre 5~h et 23~h avec moins de la moitié du volume habituel (médiane des trois mêmes jours de la semaine précédents). Un jour incomplet est exclu ; un jour avec une ou deux heures lacunaires est conservé et signalé.
 \item \textbf{{Temps réel douteux}} : ligne dont au moins {int(ind.DOUBTFUL_ZERO_SHARE * 100)}\,\% des retards valent exactement zéro (horaire théorique republié à la place du temps réel).
+\item \textbf{{Trajet sans temps réel}} : course d'un jour donné dont au moins {ind.SANS_TR_MIN_PASSAGES} départs ont été relevés et valent tous exactement zéro : le flux republie l'horaire théorique au lieu de la position réelle. Ses passages sont écartés de la ponctualité, du retard moyen et des retards de plus de 5~min ; ils restent comptés dans le service assuré, et le score leur applique la ponctualité mesurée de la ligne ce jour-là. Un retard nul isolé, dans une course dont les autres départs varient, reste une mesure.
 \item \textbf{{Attente moyenne}} = $\sum h^2 / (2 \sum h)$, où $h$ est l'intervalle entre deux passages successifs à un arrêt. Calculée sur les arrêts et heures comptant au moins 5 passages prévus.
 \item Les passages attendus et assurés sont rattachés au jour de la course, la ponctualité au jour du départ effectif ; les deux ne diffèrent que pour les départs après minuit.
 \end{{itemize}}

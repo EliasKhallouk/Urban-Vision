@@ -13,6 +13,8 @@ Z95 = 1.96
 T975 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042)
+SANS_TR_MIN_PASSAGES = 2
+TRIP_MARGIN_SECONDS = 3 * 3600
 DOUBTFUL_ZERO_SHARE = 0.25
 DOUBTFUL_MIN_PASSAGES = 200
 MIN_PASSAGES = 50
@@ -29,6 +31,7 @@ class Indicateurs:
     service: float | None = None
     avance: float | None = None
     passages: int = 0
+    sans_temps_reel: int = 0
     attendus: float = 0.0
     jours: int = 0
     jours_exclus: list = field(default_factory=list)
@@ -55,7 +58,11 @@ def ratio_estimate(ys, xs):
     return 100 * ratio, 100 * student_quantile(n) * math.sqrt(variance)
 
 
-def route_day_components(obs, on_time, eligible, skipped, cancelled=0, added=0, scheduled=0, early=0) -> dict:
+def route_day_components(obs, on_time, eligible, skipped, cancelled=0, added=0, scheduled=0, early=0,
+                         sans_tr=0) -> dict:
+    if obs <= 0 and sans_tr > 0:
+        return {**{k: 0.0 for k in ("obs", "on_time", "early", "expected", "assured", "assured_on_time")},
+                "sans_tr": sans_tr}
     lost = max(cancelled - added, 0)
     operated = scheduled + added
     cancelled_passages = lost * eligible / operated if operated > 0 else 0.0
@@ -67,6 +74,7 @@ def route_day_components(obs, on_time, eligible, skipped, cancelled=0, added=0, 
         "expected": eligible + cancelled_passages,
         "assured": assured,
         "assured_on_time": on_time / obs * assured if obs > 0 else 0.0,
+        "sans_tr": sans_tr,
     }
 
 
@@ -77,8 +85,9 @@ def add_components(df: pd.DataFrame) -> pd.DataFrame:
     """Composantes 2.0 de chaque ligne d'agrégat (une ligne de transport, un jour, éventuellement un arrêt).
 
     Colonnes lues : obs, cnt_le300, cnt_lt60, eligible, skipped et, si présentes, scheduled,
-    cancelled, added (agg_daily_trips). Colonnes ajoutées : on_time (départs de −60 à +300 s),
-    expected, assured, assured_on_time, comme `route_day_components`. Les composantes se somment
+    cancelled, added (agg_daily_trips) et cnt_sans_tr. Colonnes ajoutées : on_time (départs de −60
+    à +300 s), expected, assured, assured_on_time, comme `route_day_components` ; une ligne dont
+    tous les passages sont sans temps réel n'apporte aucune composante. Les composantes se somment
     sur n'importe quel regroupement ; le score se calcule ensuite avec `score_of`.
     """
     out = df.copy()
@@ -94,6 +103,9 @@ def add_components(df: pd.DataFrame) -> pd.DataFrame:
     out["expected"] = eligible + (lost * eligible / operated.where(operated > 0)).fillna(0.0)
     out["assured"] = (eligible - out["skipped"]).clip(lower=0).astype(float)
     out["assured_on_time"] = (out["on_time"] / obs.where(obs > 0) * out["assured"]).fillna(0.0)
+    if "cnt_sans_tr" in out:
+        unmeasured = (obs <= 0) & (out["cnt_sans_tr"].fillna(0) > 0)
+        out.loc[unmeasured, ["expected", "assured", "assured_on_time"]] = 0.0
     return out
 
 
@@ -143,6 +155,7 @@ def combine(days: dict, excluded=(), discarded=None) -> Indicateurs:
     observed = sum(v["obs"] for v in values)
     result.avance = 100 * sum(v["early"] for v in values) / observed if observed else None
     result.passages = int(sum(v["obs"] for v in values))
+    result.sans_temps_reel = int(sum(v.get("sans_tr", 0) for v in values))
     result.attendus = expected
     return result
 
@@ -187,16 +200,39 @@ def quality_flags(conn, since_day: str, end_day: str) -> dict:
         return {}
 
 
+def load_trips_without_realtime(conn, lo: int, hi: int) -> str:
+    """Trajets sans temps réel (au moins SANS_TR_MIN_PASSAGES départs, tous à 0 s) dont un départ tombe dans [lo, hi[.
+
+    Ils sont chargés une fois par connexion dans une table temporaire, dont le nom est renvoyé ; la lecture
+    déborde de TRIP_MARGIN_SECONDS pour juger chaque trajet sur tous ses départs, comme les agrégats.
+    """
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS trajets_sans_tr "
+                 "(trip_id TEXT NOT NULL, start_date TEXT NOT NULL, PRIMARY KEY (trip_id, start_date))")
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS trajets_sans_tr_bornes "
+                 "(lo INTEGER NOT NULL, hi INTEGER NOT NULL, PRIMARY KEY (lo, hi))")
+    if conn.execute("SELECT 1 FROM trajets_sans_tr_bornes WHERE lo = ? AND hi = ?", (lo, hi)).fetchone() is None:
+        conn.execute(
+            """INSERT OR IGNORE INTO trajets_sans_tr (trip_id, start_date)
+               SELECT o.trip_id, o.start_date FROM observations o
+               WHERE +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL
+                     AND o.departure_time >= ? AND o.departure_time < ?
+               GROUP BY o.trip_id, o.start_date
+               HAVING COUNT(*) >= ? AND MIN(o.departure_delay) = 0 AND MAX(o.departure_delay) = 0""",
+            (lo - TRIP_MARGIN_SECONDS, hi + TRIP_MARGIN_SECONDS, SANS_TR_MIN_PASSAGES))
+        conn.execute("INSERT INTO trajets_sans_tr_bornes (lo, hi) VALUES (?, ?)", (lo, hi))
+    return "temp.trajets_sans_tr"
+
+
 def doubtful_routes(conn, since_day: str, end_day: str) -> dict:
     zeros: dict = {}
     totals: dict = {}
-    for route_id, histogram in conn.execute(
-        "SELECT route_id, histogram FROM agg_daily WHERE date_service >= ? AND date_service < ?",
+    for route_id, histogram, sans_tr in conn.execute(
+        "SELECT route_id, histogram, cnt_sans_tr FROM agg_daily WHERE date_service >= ? AND date_service < ?",
         (since_day, end_day),
     ):
         counts = json.loads(histogram or "{}")
-        totals[route_id] = totals.get(route_id, 0) + sum(counts.values())
-        zeros[route_id] = zeros.get(route_id, 0) + counts.get("0", 0)
+        totals[route_id] = totals.get(route_id, 0) + sum(counts.values()) + sans_tr
+        zeros[route_id] = zeros.get(route_id, 0) + counts.get("0", 0) + sans_tr
     return {
         route_id: round(100 * zeros[route_id] / total, 1)
         for route_id, total in totals.items()
@@ -228,7 +264,7 @@ def route_day_rows(conn, since_day, end_day, routes=None, communes=None, stop_id
     sql = f"""
         SELECT a.date_service, a.route_id,
                SUM(a.obs) obs, SUM(a.cnt_le300 - a.cnt_lt60) on_time, SUM(a.cnt_lt60) early,
-               SUM(a.eligible) eligible, SUM(a.skipped) skipped,
+               SUM(a.eligible) eligible, SUM(a.skipped) skipped, SUM(a.cnt_sans_tr) sans_tr,
                COALESCE(t.cancelled, 0) cancelled, COALESCE(t.added, 0) added, COALESCE(t.scheduled, 0) scheduled
         FROM {table} a
         LEFT JOIN agg_daily_trips t ON t.date_service = a.date_service AND t.route_id = a.route_id
@@ -241,7 +277,8 @@ def route_day_rows(conn, since_day, end_day, routes=None, communes=None, stop_id
 def _by_day(rows: pd.DataFrame) -> dict:
     days: dict = {}
     for r in rows.itertuples(index=False):
-        comp = route_day_components(r.obs, r.on_time, r.eligible, r.skipped, r.cancelled, r.added, r.scheduled, r.early)
+        comp = route_day_components(r.obs, r.on_time, r.eligible, r.skipped, r.cancelled, r.added, r.scheduled,
+                                    r.early, r.sans_tr)
         acc = days.setdefault(r.date_service, {k: 0.0 for k in comp})
         for k, v in comp.items():
             acc[k] += v

@@ -64,6 +64,22 @@ def ensure_hourly_early(conn, today: str) -> int:
     return len(days)
 
 
+def ensure_sans_temps_reel(conn, today: str) -> int:
+    conn.executescript(dbio.AGG_DDL)
+    days = dbio.sans_tr_pending_days(conn, today)
+    if not days:
+        return 0
+    logger.info("Trajets sans temps réel : recalcul de %d jours…", len(days))
+    start = time.monotonic()
+    for day in days:
+        dbio.refresh_aggregates(conn, days=[day])
+        dbio.refresh_segments(conn, days=[day])
+        dbio.mark_sans_tr_done(conn, day)
+        time.sleep(BACKFILL_PAUSE_SECONDS)
+    logger.info("Trajets sans temps réel : recalcul terminé en %.0f s", time.monotonic() - start)
+    return len(days)
+
+
 def refresh_segments(conn, now: datetime) -> float:
     start = time.monotonic()
     dbio.refresh_segments(conn, days=days_to_refresh(now))
@@ -122,6 +138,11 @@ def main(argv=None) -> int:
             ensure_hourly_early(conn, now.strftime("%Y-%m-%d"))
         except Exception as e:
             logger.warning("Rattrapage des départs en avance par heure échoué : %s", e)
+            status = 1
+        try:
+            ensure_sans_temps_reel(conn, now.strftime("%Y-%m-%d"))
+        except Exception as e:
+            logger.warning("Trajets sans temps réel : recalcul échoué : %s", e)
             status = 1
         try:
             ensure_v2_history(conn, now.strftime("%Y-%m-%d"))

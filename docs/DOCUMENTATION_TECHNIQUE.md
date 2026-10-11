@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 28 fichiers, 557 tests pytest
+└── tests/                          # 29 fichiers, 573 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -445,7 +445,8 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
 | `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
 | `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés (tronçons, départs en avance par heure, historique du score), pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
-| `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:383` |
+| `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py` |
+| Trajet sans temps réel (`SANS_TR_MIN_PASSAGES`, `TRIP_MARGIN_SECONDS`) | au moins 2 départs relevés, tous à 0 s ; course lue 3 h au-delà des jours recalculés (section 7.4) | `db.py` et `indicateurs.py` (valeurs identiques, vérifiées par un test) |
 | Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
 | `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:62` |
 | `KEEP_DAILY` / `KEEP_MONTHLY` | 7 sauvegardes quotidiennes, 6 mensuelles | `sauvegarde.py:20-21` |
@@ -688,8 +689,8 @@ le dashboard et les rapports.
 
 | Table | Granularité | Colonnes clés |
 |---|---|---|
-| `agg_daily` | jour × ligne | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60`, `skipped`, `eligible`, `histogram` |
-| `agg_hourly` | jour × ligne × heure | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60` |
+| `agg_daily` | jour × ligne | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60`, `skipped`, `eligible`, `histogram`, `cnt_sans_tr` |
+| `agg_hourly` | jour × ligne × heure | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60`, `cnt_zero`, `cnt_sans_tr` |
 | `agg_daily_stop` | jour × ligne × arrêt | idem `agg_daily` + `skipped`/`eligible` |
 | `agg_hourly_stop` | jour × ligne × arrêt × heure | idem `agg_hourly` |
 | `agg_daily_trips` | jour de course × ligne | `scheduled`, `cancelled`, `added` : courses par statut, lues dans `trip_status` |
@@ -702,7 +703,14 @@ le dashboard et les rapports.
 | `troncons_lignes` | tronçon × ligne | `passages` sur la période |
 | `troncons_geo` | tronçon | `route_type`, `coords` (tracé JSON) |
 | `troncons_meta` | clé | `depuis`, `jusqu_a`, `calcule_le`, `jours_exclus`, `lignes` (qualité de chaque ligne), en JSON |
+| `troncons_tram` | jour type × heure de départ (−1 = journée) × ligne de tram × terminus | `direction_id`, `perte_s` (médiane du temps perdu de bout en bout), `prevu_s` (médiane de la durée prévue), `trajets`, `jours` ; section 10.5 |
+| `agg_meta` | clé | `sans_temps_reel_jusqu_au` : dernier jour recalculé avec la règle des trajets sans temps réel (section 10.2) |
 
+- `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60` et `histogram` ne
+  comptent pas les passages des trajets sans temps réel (section 7.4) ;
+  `cnt_sans_tr` compte ces passages écartés, `cnt_zero` (tables horaires) les
+  retards exactement nuls gardés (zéros isolés). Retards nuls au total :
+  `cnt_zero + cnt_sans_tr`.
 - `cnt_le300` : passages avec retard ≤ 300 s.
 - `cnt_gt300` : passages avec retard > 300 s.
 - `cnt_lt60` : passages en avance de plus de 60 s. Un passage est **à l'heure**
@@ -743,7 +751,8 @@ flux → `-1`.
 | `hist_gain` | JSON `{secondes_gagnées: effectif}` (médiane exacte du retard pris) |
 
 Un arrêt `SKIPPED` n'interrompt pas le calcul : le tronçon relie les deux arrêts
-observés qui l'encadrent.
+observés qui l'encadrent. Les passages des trajets sans temps réel (section 7.4)
+sont écartés de `obs` à `hist_gain`, pas de `eligible` / `skipped`.
 
 **Tables de référence**
 
@@ -806,6 +815,78 @@ de **tous** leurs indicateurs les mêmes jours et les mêmes lignes de la
 période (`indicateurs.exclusions`, section 10.3) : jours `incomplet` de
 `quality_days`, lignes au temps réel douteux et lignes Flex'.
 
+### 7.4 Trajets sans temps réel (retards exactement nuls)
+
+**Définition.** Un trajet sans temps réel est une course d'un jour donné
+(`trip_id` + `start_date`) dont au moins `SANS_TR_MIN_PASSAGES` = 2 départs
+observés (passages `SCHEDULED` à `departure_delay` connu) ont été relevés et
+valent **tous exactement 0 s** : le flux republie l'horaire théorique au lieu
+de la position du véhicule. La course est jugée sur tous ses départs, même à
+cheval sur minuit (lecture élargie de `TRIP_MARGIN_SECONDS` = 3 h autour des
+jours recalculés). Un retard nul isolé, dans une course dont d'autres départs
+varient, reste une mesure ; une course d'un seul départ relevé n'est pas jugée.
+
+**Effet.** Ses passages sortent des indicateurs de retard (ponctualité, retard
+moyen et médian, retards de plus de 5 min, départs en avance, retard pris par
+tronçon) et restent dans le service : arrêts attendus et non desservis,
+courses supprimées. Le score applique à ces passages la ponctualité mesurée
+de la ligne le même jour (`assured_on_time = à l'heure / observés × assurés`) ;
+une ligne (ou un arrêt) dont aucun passage du jour n'a de temps réel
+n'apporte alors aucune composante au score ni au service
+(`indicateurs.route_day_components` et `add_components`, colonne
+`cnt_sans_tr`).
+
+**Où la règle s'applique.**
+
+- `db.py` : `_DAILY_SQL`, `_HOURLY_SQL`, `_DAILY_STOP_SQL`, `_HOURLY_STOP_SQL`
+  (fenêtre `COUNT/MIN/MAX(departure_delay) OVER (PARTITION BY trip_id,
+  start_date)` dans `_PASSAGES_CTE`) et `_SEGMENT_SQL` ;
+- `generate_monthly_report.py` : `without_realtime_filter` écarte ces courses
+  des passages lus dans `observations` (`query_observations`,
+  `query_stop_stats`) ; la liste du mois est calculée une fois par connexion
+  dans la table temporaire `trajets_sans_tr`
+  (`indicateurs.load_trips_without_realtime`, ≈ 12 s pour un mois sur la copie
+  de production) ;
+- `indicateurs.doubtful_routes` rajoute `cnt_sans_tr` aux retards nuls : la
+  liste des lignes au temps réel douteux est inchangée ;
+- `db.py::refresh_quality_days` compte `obs + cnt_sans_tr` : la qualité d'un
+  jour mesure la collecte, pas le temps réel ;
+- export open data : `passages_sans_temps_reel` (et `retards_nuls` par heure) ;
+- dashboard : « Données & méthode » (bloc « Jours et lignes écartés », nombre
+  de passages écartés sous le score) et le lexique.
+
+Ne l'appliquent pas : la régularité des lignes fréquentes
+(`agg_hourly_regularity` : l'intervalle entre deux passages reste celui de
+l'horaire, faute de mieux), la carte des points de contention, qui écarte
+déjà chaque retard nul (section 10.5), et la chaîne legacy `analyze.py`.
+
+**Mesure.** Copie de la base de production du 11/10/2026, septembre 2026,
+toutes lignes : 7 % des courses du tram et 0,5 % de celles des bus sont sans
+temps réel ; 86 % de ces courses ont au moins 4 départs relevés, et seules 20
+courses du mois ont au moins 90 % de départs nuls sans l'être toutes (aucun
+cas intermédiaire à traiter). Impact, hors jours et lignes écartés, avant →
+après :
+
+| Périmètre | Passages écartés | Score | À l'heure | Retard moyen | Plus de 5 min |
+|---|---|---|---|---|---|
+| Réseau | 60 341 (1,0 %) | 75,13 → 74,93 | 78,37 → 78,16 % | 152 → 154 s | 13,50 → 13,63 % |
+| Bus | 5 881 (0,1 %) | 75,09 → 75,06 | 77,30 → 77,27 % | 149 → 150 s | 13,29 → 13,30 % |
+| Tram | 53 982 (4,2 %) | 75,42 → 74,60 | 82,48 → 81,72 % | 163 → 170 s | 14,30 → 14,92 % |
+| Tram A | 22 872 (8,3 %) | 64,68 → 63,28 | 81,28 → 79,59 % | 162 → 176 s | 15,22 → 16,59 % |
+| Ferry | 478 (5,3 %) | 60,89 → 59,80 | 79,18 → 78,00 % | 178 → 188 s | 16,44 → 17,37 % |
+
+Les autres trams perdent de 0,43 à 0,79 point à l'heure et de 0,50 à 0,88
+point de score. Sur la période scolaire (01/09 au 10/10/2026) : réseau −0,30
+point de score et −0,31 point à l'heure ; tram −1,20 et −1,07 ; ligne A −1,89
+et −2,11 (retard moyen +22 s) ; bus −0,05 et −0,05. Le service assuré ne bouge
+pas ; la part de départs en avance monte de 0,1 point. En septembre, 5 lignes
+sur 70 voient leur ponctualité bouger de plus de 0,5 point (trams A, E, F et
+deux ferries) ; 26 n'ont aucun passage écarté. Côté tram, les courses sans
+temps réel pèsent surtout l'après-midi et le soir (5 à 6 % des passages de
+14 h à 21 h, 1 à 2 % la nuit et le matin). Lignes × jours sans aucune mesure :
+45 sur 3 888 ; arrêts × lignes × jours : 1 394 sur 234 852 (0,05 % des
+passages attendus).
+
 ---
 
 ## 8. Pipeline de données
@@ -822,7 +903,7 @@ Vue temporelle d'une journée-type :
                                     ──► courses et qualité (refresh_v2, quality_days)
  5 min       veille_collecte.py ──► alertes email, signal de vie
  02:30       sauvegarde.py ──► data/sauvegardes/ (+ copie hors VM)
- 03:40       troncons.py ──► troncons_jour (jours manquants), troncons_carte, troncons_geo
+ 03:40       troncons.py ──► troncons_jour (jours manquants), troncons_carte, troncons_geo, troncons_tram
  06:15       archive_gtfs.py ──► data/gtfs_archive/ si le GTFS a changé
               │
  à chaq. réexéc.    dashboard/app.py ──► lit agg_* (cache 60 s)
@@ -1082,6 +1163,17 @@ pause, les jours dont `agg_daily` compte des départs en avance mais pas
 après coup, ≈ 2,5 s par jour sur le poste de développement) ; échec journalisé
 « Rattrapage des départs en avance par heure échoué » (code 1).
 
+Puis `ensure_sans_temps_reel` recalcule une fois, un jour à la fois et avec la
+même pause, les agrégats et les tronçons des jours passés calculés avant la
+règle des trajets sans temps réel (section 7.4) ; `agg_meta`
+(`sans_temps_reel_jusqu_au`) garde le dernier jour fait, si bien qu'un
+passage interrompu reprend où il s'est arrêté. Mesuré sur la copie de la base
+de production du 11/10/2026 : 76 jours en 16 min (13 s par jour, sans la
+pause). Échec journalisé « Trajets sans temps réel : recalcul échoué »
+(code 1). La règle allonge le recalcul de routine : 13 → 17 s pour les
+agrégats d'hier et d'aujourd'hui, 4,5 → 5,4 s pour les tronçons, sur le poste
+de développement.
+
 Puis `ensure_v2_history` calcule les courses et la qualité des jours de `agg_daily`
 antérieurs à aujourd'hui qui n'ont pas encore de ligne dans `quality_days`,
 un jour à la fois, avec la même pause d'une seconde entre deux jours pour que
@@ -1183,7 +1275,10 @@ section 10.3.
   est significatif s'il dépasse √(m₁² + m₂²) (`compare`).
 - **Exclusions** : jours `incomplet` de `quality_days` (`excluded_days`),
   lignes au temps réel douteux, dont au moins 25 % des retards valent
-  exactement zéro sur au moins 200 passages (`doubtful_routes`), lignes Flex'.
+  exactement zéro sur au moins 200 passages (`doubtful_routes`, passages des
+  trajets sans temps réel compris), lignes Flex'. Les trajets sans temps réel
+  des autres lignes sont écartés des retards seulement (section 7.4) ;
+  `Indicateurs.sans_temps_reel` en donne le nombre de passages.
 - **Régularité des lignes fréquentes** : attente moyenne = Σh² / (2 Σh) sur
   les intervalles h réels et prévus (`regularity`) ; l'attente excédentaire
   est leur différence (`route_regularity`, jours incomplets exclus, nombre
@@ -1277,6 +1372,23 @@ valeurs) pour 39 jours. Sur la VM, à `Nice=19` et E/S `idle`, la collecte
 (toutes les 60 s, attente du verrou jusqu'à 120 s) passe devant : impact
 attendu nul hors ces écritures d'au plus quelques secondes. Échec journalisé « Tronçons : calcul
 échoué » dans `data/collect.log` (code 1, signalé par la veille).
+
+**Tram de bout en bout** (`build_tram`, table `troncons_tram`, même nuit,
+même période et mêmes jours exclus). Pour chaque course de tram : temps
+perdu = retard à l'arrivée au dernier arrêt observé (départ à défaut) − retard
+au départ du premier, et durée prévue entre les deux (`tram_trips`, deux
+requêtes groupées par course : `TRAM_FIRST_SQL`, `TRAM_LAST_SQL`). Sont
+écartées les courses sans temps réel (section 7.4), celles observées sur
+moins de 80 % de leurs arrêts (`TRAM_MIN_COVERAGE`) et les valeurs au-delà
+de ±30 min (`TRAM_OUTLIER_SECONDS`). Médianes par jour type, ligne, terminus
+et heure de départ (`summarize_tram`), au moins 20 courses sur 3 jours ;
+seuls les terminus principaux de chaque sens sont gardés (au moins 15 % des
+courses du sens et 60 % de la plus longue durée prévue : `TRAM_MAIN_SHARE`,
+`TRAM_MAIN_DURATION`), ce qui écarte services partiels et trajets de dépôt.
+Sur la copie de production (01/09 au 10/10/2026, 26 s, 625 cases) : en
+semaine type, de 8 s (D vers Hippodrome) à 3 min 58 s (A vers Le Haillan
+Rostand) pour des trajets prévus de 35 à 69 min ; A vers Le Haillan 4 min
+08 s entre 8 h et 9 h. Le détail par tronçon reste non mesurable.
 
 **Couverture** (semaine type, tronçons de bus colorés) : 77 % sur la
 journée, 68 % à 8 h, 67 % à 17 h, 49 % à 21 h. Les communes les moins couvertes
@@ -1489,6 +1601,18 @@ lecteur qui n'est pas analyste :
      indisponible pour le tram ») ; sur tout le réseau, le vert est fin et clair,
      les tronçons qui perdent du temps sont épais, liserés de blanc et dessinés
      par-dessus ;
+   - **tram de bout en bout** (`tram_lines_payload`, table `troncons_tram`,
+     section 10.5) : survoler un tracé de tram donne sa ligne, le toucher ou
+     le cliquer ouvre le panneau « Tram A » (temps perdu de bout en bout vers
+     chaque terminus principal à l'heure choisie, durée prévue et écart en
+     pourcentage, heure où le tram perd le plus, nombre de trajets, et « Le
+     détail par portion entre deux arrêts n'est pas mesurable pour le tram :
+     son temps réel est publié par paliers. ») ; quand une ligne de tram est
+     choisie dans la barre, son tracé est foncé et épaissi, la carte se cadre
+     dessus, s'ouvre sur « Toute la journée » et le verdict devient « À 8 h,
+     le tram A perd habituellement 4 min 08 s vers Le Haillan Rostand et
+     3 min 44 s vers La Gardette - Bassens - Carbon-Blanc sur l'ensemble du
+     trajet. », avec la même mention ;
    - **fil d'Ariane** (`contention_scope`, `in_scope`) : la commune, la ligne et
      l'arrêt de la barre de contexte définissent le périmètre (tronçons dont
      l'un des arrêts est dans la commune, qu'emprunte la ligne, qui touchent
@@ -1726,10 +1850,10 @@ Quatre datasets :
 
 | Dataset | Fichier | Contenu |
 |---|---|---|
-| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), à l'heure (−1 à +5 min), retards > 5 min, en avance, arrêts non desservis, score de fiabilité, histogramme JSON |
+| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, passages sans temps réel (écartés des observations, section 7.4), retards moyen/médian (médiane exacte via histogramme), à l'heure (−1 à +5 min), retards > 5 min, en avance, arrêts non desservis, score de fiabilité, histogramme JSON |
 | `arrets_journalier` | `arrets-journalier.csv` | Par (date, ligne, arrêt) : + nom, commune, direction, coordonnées |
-| `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retard moyen, à l'heure, retards > 5 min |
-| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts non desservis, score de fiabilité, nombre de lignes |
+| `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retards nuls gardés, passages sans temps réel, retard moyen, à l'heure, retards > 5 min |
+| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, passages sans temps réel, retards, arrêts non desservis, score de fiabilité, nombre de lignes |
 
 Mêmes règles que le dashboard (section 10.3) : jours et lignes écartés de la
 période exportée, lignes Flex' exclues ; `METADATA.json` en donne la liste
@@ -1960,7 +2084,11 @@ intermédiaires sont conservés pour le diagnostic.
   d'incertitude »), la régularité des 8 lignes fréquentes (au moins un jour
   sur deux) à l'attente excédentaire la plus forte, les 8 lignes les moins
   fiables avec marge et décomposition (lignes au temps réel douteux exclues), la qualité des données
-  (jours exclus, jours dégradés, lignes écartées) et les définitions.
+  (jours exclus, jours dégradés, lignes écartées, passages des trajets sans
+  temps réel du mois, `Indicateurs.sans_temps_reel`) et les définitions, dont
+  celle du trajet sans temps réel (section 7.4). Les passages lus directement
+  dans `observations` (`query_observations`, `query_stop_stats`) excluent ces
+  courses (`without_realtime_filter`).
   `method_v2_summary` ajoute la marge du score à la synthèse exécutive,
   avec le renvoi à cette page. Le moteur importe `indicateurs` et `db` par
   `sys.path` (`src/scripts/`) ; l'import de `db` applique `init_db` à
@@ -2709,6 +2837,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | **Vue rapide / vue détaillée** | deux niveaux de lecture du dashboard ; la vue rapide garde les phrases et le graphique principal (section 11.3). |
 | **Service assuré** | part des passages attendus effectivement desservis (ni course supprimée, ni arrêt non desservi). |
 | **Attente excédentaire** | temps d'attente moyen ajouté par l'irrégularité des passages d'une ligne fréquente, par rapport à la grille prévue. |
+| **Trajet sans temps réel** | course d'un jour donné dont tous les départs relevés (au moins 2) valent exactement 0 s ; écartée des retards, gardée dans le service (section 7.4). |
 | **Jour incomplet** | jour dont au moins 3 heures comptent moins de la moitié du volume habituel (`quality_days`) ; exclu de tous les indicateurs. |
 | **WAL** | Write-Ahead Log (mode journal SQLite, base lisible + écrivain concurrent). |
 | **Upsert** | `INSERT ... ON CONFLICT ... DO UPDATE` (dernière valeur gagne). |
@@ -2739,7 +2868,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 557, isolés (suite `pytest` complète : 557 passed), flux synthétiques
+- Tests : 573, isolés (suite `pytest` complète : 573 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2838,20 +2967,19 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 
 ### 26.5 Recommandations
 
-1. **Retards exactement nuls** (audit du 11/10/2026, copie de production,
-   septembre 2026, à décider) : ils sont comptés comme des mesures dans la
-   ponctualité, le retard moyen, les retards > 5 min, la carte des arrêts, les
-   profils horaires et les rapports. Tram : 3,6 à 9,2 % de départs nuls
-   (82 % viennent de trajets entiers sans temps réel) ;
-   ponctualité surestimée de 0,6 à 1,9 point (ligne A : 81,3 % au lieu de
-   79,4 %), retard moyen sous-estimé de 6 à 16 s ; réseau : 0,4 point de
-   ponctualité, 0,3 point de score. La base de développement en compte bien
-   plus (25 à 33 % pour le tram) : ne pas en tirer de conclusion. Deux règles
-   comparées sur la ponctualité de septembre : (a) retirer chaque retard nul :
-   réseau −0,37 point, tram −0,95, ligne A −1,90 ; (b) retirer seulement les
-   trajets entièrement à zéro (sans temps réel) et garder les zéros isolés :
-   réseau −0,21, bus −0,03, tram −0,77, ligne A −1,70. 82 % des zéros du tram
-   sont dans des trajets entiers, 16 % de ceux des bus.
+1. **Retards exactement nuls** (audit du 11/10/2026, copie de production) :
+   la règle des trajets sans temps réel (section 7.4) est dans le code et
+   n'est pas encore déployée ; en production, chaque retard nul compte encore
+   comme une mesure. Au premier passage du recalcul après déploiement,
+   `ensure_sans_temps_reel` recalcule tous les jours passés (76 jours en
+   16 min sur la copie de production, pause d'une seconde en plus entre deux
+   jours) ; `urban-vision-troncons` remplit `troncons_tram` la nuit suivante.
+   Effet attendu sur septembre : score réseau 75,13 → 74,93, à l'heure
+   78,37 → 78,16 % ; tram 82,48 → 81,72 % ; ligne A 81,28 → 79,59 %. La
+   règle (a), écartée, retirait chaque retard nul, zéros isolés des courses
+   mesurées compris (réseau −0,37 point à l'heure au lieu de −0,21) ; 82 % des zéros du tram et 16 % de ceux des bus sont dans des
+   courses entières sans temps réel. La base de développement compte bien
+   plus de zéros (25 à 33 % pour le tram) : ne pas en tirer de conclusion.
 2. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
    et analyse (définition unique, désormais mesurable par `collection_runs`) ou
    documenter explicitement la divergence (déjà décrite en 7.3/23.2).
