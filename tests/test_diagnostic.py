@@ -339,6 +339,10 @@ class TestPriorites:
         assert items["arret_baisse"]["unit"] == "de score par rapport à août 2026"
         assert items["ligne_baisse"]["id"] == "A"
         assert items["ligne_baisse"]["reason"] == "80,0 → 68,0 / 100"
+        assert (items["ligne_baisse"]["name"], items["ligne_baisse"]["score"], items["ligne_baisse"]["previous"]) == (
+            "1", 68.0, 80.0)
+        assert (items["arret_retard"]["name"], items["arret_retard"]["detail"]) == ("Gare", "vers Parc")
+        assert items["arret_retard"]["previous"] is None
 
     def test_arret_regroupe_sur_deux_sens(self):
         stops = pd.DataFrame({"stop_id": ["s1"], "stop_name": ["Blancherie"], "direction": ["vers Blancherie"],
@@ -347,6 +351,7 @@ class TestPriorites:
         item = dg.priorities(stops, None, None, None, None, 50)["arret_retard"]
         assert item["title"] == "Blancherie (2 sens)"
         assert item["figure"] == "496"
+        assert (item["name"], item["detail"]) == ("Blancherie", "2 sens")
 
     def test_petit_echantillon_exclu_et_aucune_hausse_retenue(self):
         items = dg.priorities(None, self._lines().iloc[[2]], self._stops(), self._stops(),

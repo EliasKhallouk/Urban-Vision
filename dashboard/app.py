@@ -529,20 +529,40 @@ def inject_style() -> None:
         .insight.brief li {{ margin-bottom: .3rem; line-height: var(--lh-body); }}
         .hints {{ border: 1px dashed rgba(221, 161, 94, .7); border-radius: 8px; padding: .7rem 1rem; color: #283618; margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
-        .st-key-prio_row [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {{ height: 100%; }}
-        .st-key-prio_row [data-testid="stElementContainer"]:has(.prio-card) {{ flex: 1 1 auto; }}
-        .st-key-prio_row [data-testid="stElementContainer"]:has(.prio-card) div:has(.prio-card) {{ height: 100%; }}
-        .prio-card {{ height: 100%; border: 1px solid rgba(40, 54, 24, .25); border-radius: 12px; overflow: hidden; background: #FFFFFF; }}
-        .prio-head {{ display: flex; align-items: center; gap: .55rem; padding: .6rem .8rem; background: #283618; color: #FEFAE0; font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
-        .prio-baisse .prio-head {{ background: #bc6c25; color: #FFFFFF; }}
-        .prio-icons {{ display: inline-flex; gap: .1rem; flex: none; }}
-        .prio-body {{ padding: .7rem .85rem .85rem; }}
-        .prio-figure {{ color: var(--ink); font-size: var(--fs-figure); font-weight: 700; line-height: var(--lh-title); }}
-        .prio-unit {{ color: var(--ink-2); font-size: var(--fs-label); }}
-        .prio-title {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; margin-top: .5rem; line-height: var(--lh-title); }}
-        .prio-reason {{ color: var(--ink-2); font-size: var(--fs-small); margin-top: .15rem; }}
-        .prio-empty .prio-head {{ background: rgba(40, 54, 24, .55); }}
-        .prio-empty p {{ color: var(--ink-2); font-size: var(--fs-small) !important; margin: 0; }}
+        .st-key-prio_grid {{ margin: .2rem 0 .4rem; }}
+        .st-key-prio_grid [data-testid="stHorizontalBlock"] {{ gap: 0; }}
+        .st-key-prio_grid [data-testid="stMarkdownContainer"] {{ margin-bottom: 0; }}
+        .st-key-prio_grid [data-testid="stColumn"] {{ padding: .85rem 1.1rem .75rem; }}
+        .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: 1px solid rgba(40, 54, 24, .16); }}
+        .st-key-prio_heads [data-testid="stColumn"] {{ padding-top: 0; padding-bottom: .55rem; border-bottom: 2px solid #283618; }}
+        .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-top: 1px solid rgba(40, 54, 24, .16); border-bottom: 2px solid #283618; }}
+        .pg-head {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
+        .pg-head small {{ display: block; color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; margin-top: .15rem; }}
+        .pg-row {{ display: flex; align-items: center; gap: .5rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; padding-top: .2rem; }}
+        .pg-row svg {{ color: #606c38; flex: none; }}
+        .pc-top {{ display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }}
+        .pc-figure {{ color: var(--ink); font-size: var(--fs-page); font-weight: 700; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }}
+        .pc-drop .pc-figure {{ color: #bc6c25; }}
+        .pc-unit {{ color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); margin-top: .3rem; max-width: 16rem; }}
+        .pc-name {{ display: flex; align-items: center; gap: .5rem; margin-top: .8rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
+        .pc-detail {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin-top: .15rem; }}
+        .pc-badge {{ display: inline-flex; align-items: center; justify-content: center; min-width: 2.1rem; padding: .18rem .55rem; border-radius: 6px; font-size: var(--fs-block); font-weight: 700; line-height: 1.15; }}
+        .pc-glyph {{ font-size: var(--fs-section); line-height: 1; }}
+        .pc-slope {{ flex: none; margin-top: -.15rem; }}
+        .pc-slope text {{ fill: #606c38; font-size: var(--fs-micro); font-weight: 600; }}
+        .pc-col {{ display: none; color: var(--ink-2); font-size: var(--fs-label); font-weight: 700; margin-bottom: .35rem; }}
+        @media (max-width: 640px) {{
+            .st-key-prio_heads {{ display: none; }}
+            .pc-col {{ display: block; }}
+            .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: none; border-top: 1px solid rgba(40, 54, 24, .16); }}
+            .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-bottom: none; }}
+            .st-key-prio_line_arret {{ border-top: 2px solid #283618; }}
+        }}
+        .pc-empty {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); padding: .35rem 0 .2rem; }}
+        .st-key-prio_grid [data-testid="stButton"] button {{ background: transparent; border: none; box-shadow: none; padding: .1rem 0; min-height: 0; margin-top: -.25rem; }}
+        .st-key-prio_grid [data-testid="stButton"] button p {{ color: var(--ink); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-decoration-color: #DDA15E; text-decoration-thickness: 2px; text-underline-offset: 3px; }}
+        .st-key-prio_grid [data-testid="stButton"] button:hover p {{ text-decoration-color: #283618; }}
+        .st-key-prio_grid [data-testid="stButton"] button:focus-visible {{ outline: 2px solid #DDA15E; outline-offset: 2px; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
         .lg-item {{ display: inline-flex; align-items: center; gap: .35rem; }}
@@ -2802,53 +2822,106 @@ PRIORITY_RULE = ("Arrêt et ligne les plus en retard : le plus de passages parti
                  "sur la période (les quais d'un même arrêt sont comptés ensemble). Arrêt et ligne en plus forte "
                  "baisse : la plus forte baisse du score de fiabilité par rapport à la période précédente. Seuls "
                  f"comptent les arrêts et lignes d'au moins {MIN_OBSERVATIONS} passages.")
-ICON_PATHS = {
-    "arrêt": '<path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+ROW_ICONS = {
+    "arret": '<path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
     "ligne": '<rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 11h14M8 18v3M16 18v3"/>',
-    "retard": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    "baisse": '<path d="M3 7l6 6 4-4 8 8"/><path d="M21 11v6h-6"/>',
 }
-PRIORITY_HEADERS = {
-    "arret_retard": ("arrêt", "retard", "Arrêt le plus en retard"),
-    "ligne_retard": ("ligne", "retard", "Ligne la plus en retard"),
-    "arret_baisse": ("arrêt", "baisse", "Arrêt en plus forte baisse"),
-    "ligne_baisse": ("ligne", "baisse", "Ligne en plus forte baisse"),
-}
+PRIORITY_GRID = (("arret", "Arrêt", "arret_retard", "arret_baisse"), ("ligne", "Ligne", "ligne_retard", "ligne_baisse"))
+SLOPE_WIDTH, SLOPE_HEIGHT, SLOPE_PAD, SLOPE_LABEL = 150, 64, 7, 22
+PRIORITY_COLUMNS = {"retard": "Le plus de retards", "baisse": "La plus forte baisse"}
 
 
-def _icon(name: str) -> str:
-    return (f'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" '
-            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICON_PATHS[name]}</svg>')
+def _row_icon(kind: str) -> str:
+    return (f'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" '
+            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ROW_ICONS[kind]}</svg>')
 
 
-def priority_card_html(kind: str, item: dict | None, prev_label: str | None) -> str:
-    """Carte d'une priorité : bandeau (icônes et titre), chiffre clé, nom, détail."""
-    obj, measure, label = PRIORITY_HEADERS[kind]
-    head = (f'<div class="prio-head"><span class="prio-icons">{_icon(obj)}{_icon(measure)}</span>'
-            f'<span>{html.escape(label)}</span></div>')
+def _tier_colors(score: float) -> tuple[str, str]:
+    color = palette_hex(score, "score")
+    return color, (CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST)
+
+
+def line_badge_html(name: str, score: float) -> str:
+    """Pastille d'une ligne, à la façon des pictogrammes du réseau : fond à la couleur de son état."""
+    bg, fg = _tier_colors(score)
+    return (f'<span class="pc-badge" style="background:{bg};color:{fg}" '
+            f'title="{html.escape(tier_label(score).capitalize())}">{html.escape(name)}</span>')
+
+
+def stop_mark_html(route_type, score: float) -> str:
+    """Glyphe du mode de l'arrêt (● ■ ▲) à la couleur de son état, comme sur la carte."""
+    color, _ = _tier_colors(score)
+    return (f'<span class="pc-glyph" style="color:{color}" aria-hidden="true">'
+            f'{mode_glyph(route_type if route_type is not None else 3)}</span>')
+
+
+def slope_svg(previous: float, score: float) -> str:
+    """Pente du score entre les deux périodes, sur l'échelle 0–100, avec les seuils 80 et 50 en pointillés."""
+    def y(v: float) -> float:
+        return round(SLOPE_PAD + (100 - max(0.0, min(100.0, v))) / 100 * (SLOPE_HEIGHT - 2 * SLOPE_PAD), 1)
+
+    x0, x1 = SLOPE_LABEL + 8, SLOPE_WIDTH - 8
+    guides = "".join(f'<text x="0" y="{y(v) + 4}">{v}</text><line x1="{SLOPE_LABEL}" x2="{SLOPE_WIDTH}" y1="{y(v)}" '
+                     f'y2="{y(v)}" stroke="#DDA15E" stroke-width="1" stroke-dasharray="2 3"/>' for v in (80, 50))
+    return (f'<svg class="pc-slope" width="{SLOPE_WIDTH}" height="{SLOPE_HEIGHT}" viewBox="0 0 {SLOPE_WIDTH} '
+            f'{SLOPE_HEIGHT}" role="img" aria-label="Score passé de {format_number(previous, 1)} à '
+            f'{format_number(score, 1)} sur 100">{guides}'
+            f'<line x1="{x0}" y1="{y(previous)}" x2="{x1}" y2="{y(score)}" stroke="#bc6c25" stroke-width="3" '
+            f'stroke-linecap="round"/><circle cx="{x0}" cy="{y(previous)}" r="5" fill="{palette_hex(previous, "score")}" '
+            f'stroke="#FFFFFF" stroke-width="2"/><circle cx="{x1}" cy="{y(score)}" r="6.5" '
+            f'fill="{palette_hex(score, "score")}" stroke="#FFFFFF" stroke-width="2"/></svg>')
+
+
+def priority_cell_html(kind: str, item: dict | None, prev_label: str | None) -> str:
+    """Case du tableau des priorités : chiffre, puis l'arrêt ou la ligne concerné(e)."""
+    drop = kind.endswith("baisse")
+    column = f'<div class="pc-col">{PRIORITY_COLUMNS["baisse" if drop else "retard"]}</div>'
     if item is None:
-        empty = ("Aucune donnée sur la période précédente pour comparer." if measure == "baisse" and not prev_label
-                 else "Aucune baisse sur la période." if measure == "baisse"
-                 else "Pas assez de passages sur la période.")
-        return f'<div class="prio-card prio-empty">{head}<div class="prio-body"><p>{empty}</p></div></div>'
-    return (f'<div class="prio-card prio-{measure}">{head}<div class="prio-body">'
-            f'<div class="prio-figure">{html.escape(item["figure"])}</div>'
-            f'<div class="prio-unit">{html.escape(item["unit"])}</div>'
-            f'<div class="prio-title">{html.escape(str(item["title"]))}</div>'
-            f'<div class="prio-reason">{html.escape(item["reason"])}</div></div></div>')
+        text = ("Pas de période de comparaison." if drop and not prev_label
+                else "Aucune baisse sur la période." if drop else "Pas assez de passages sur la période.")
+        return f'<div class="pc">{column}<div class="pc-empty">{text}</div></div>'
+    if item["kind"] == "ligne":
+        name = f'{line_badge_html(item["name"], item["score"])}<span>Ligne {html.escape(item["name"])}</span>'
+    else:
+        name = f'{stop_mark_html(item.get("route_type"), item["score"])}<span>{html.escape(item["name"])}</span>'
+    if drop:
+        figure = format_number(item["score"] - item["previous"], 1, signed=True)
+        unit = f"points de score depuis {prev_label}" if prev_label else "points de score"
+        detail = f'{format_number(item["previous"], 1)} puis {format_number(item["score"], 1)} sur 100'
+        slope = slope_svg(item["previous"], item["score"])
+    else:
+        figure, unit, slope = item["figure"], "passages partis avec plus de 5 min de retard", ""
+        detail = f'score {format_number(item["score"], 1)} sur 100'
+    if item.get("detail"):
+        detail = f'{html.escape(item["detail"])}, {detail}'
+    return (f'<div class="pc{" pc-drop" if drop else ""}">{column}<div class="pc-top"><div>'
+            f'<div class="pc-figure">{figure}</div><div class="pc-unit">{html.escape(unit)}</div></div>{slope}</div>'
+            f'<div class="pc-name">{name}</div><div class="pc-detail">{detail}</div></div>')
 
 
 def _render_priorities(items: dict, prev_label: str | None) -> None:
     st.markdown("#### Priorités du moment")
-    cols = st.container(key="prio_row").columns(len(PRIORITY_HEADERS), gap="small")
-    for col, kind in zip(cols, PRIORITY_HEADERS):
-        item = items.get(kind)
-        with col:
-            st.markdown(priority_card_html(kind, item, prev_label), unsafe_allow_html=True)
-            if item is not None:
-                opener = open_line if item["kind"] == "ligne" else show_stop
-                st.button("Ouvrir la fiche", key=f"prio_{kind}", on_click=opener, args=(item["id"],),
-                          width="stretch")
+    widths = [0.42, 1, 1]
+    with st.container(key="prio_grid"):
+        with st.container(key="prio_heads"):
+            _, h1, h2 = st.columns(widths, gap="small")
+            h1.markdown('<div class="pg-head">Le plus de retards<small>passages partis avec plus de 5 min de '
+                        'retard sur la période</small></div>', unsafe_allow_html=True)
+            since = f"par rapport à {html.escape(prev_label)}" if prev_label else "par rapport à la période précédente"
+            h2.markdown(f'<div class="pg-head">La plus forte baisse<small>du score de fiabilité, {since}</small></div>',
+                        unsafe_allow_html=True)
+        for row_kind, row_label, *kinds in PRIORITY_GRID:
+            with st.container(key=f"prio_line_{row_kind}"):
+                cols = st.columns(widths, gap="small")
+                cols[0].markdown(f'<div class="pg-row">{_row_icon(row_kind)}{row_label}</div>', unsafe_allow_html=True)
+                for col, kind in zip(cols[1:], kinds):
+                    item = items.get(kind)
+                    with col:
+                        st.markdown(priority_cell_html(kind, item, prev_label), unsafe_allow_html=True)
+                        if item is not None:
+                            opener = open_line if item["kind"] == "ligne" else show_stop
+                            st.button(f"Ouvrir la fiche {'de la ligne' if item['kind'] == 'ligne' else 'de l’arrêt'}",
+                                      key=f"prio_{kind}", on_click=opener, args=(item["id"],))
 
 
 def map_legend_html() -> str:

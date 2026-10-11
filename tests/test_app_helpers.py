@@ -736,19 +736,39 @@ class TestIndicateursParGroupe:
 
 
 class TestTerritoireEtFiches:
-    def test_carte_de_priorite_avec_chiffre(self):
-        item = {"kind": "ligne", "id": "A", "title": "Ligne <1>", "figure": "500",
-                "unit": "passages à plus de 5 min", "reason": "score 60,0 / 100"}
-        card = app_mod.priority_card_html("ligne_retard", item, "août 2026")
-        assert "Ligne la plus en retard" in card
-        assert '<div class="prio-figure">500</div>' in card
-        assert "Ligne &lt;1&gt;" in card
-        assert card.count("<svg") == 2
+    def test_case_retard_d_une_ligne_avec_sa_pastille(self):
+        item = {"kind": "ligne", "id": "A", "figure": "6 534", "name": "<5>", "detail": "", "score": 74.5,
+                "previous": None, "route_type": 3}
+        cell = app_mod.priority_cell_html("ligne_retard", item, "août 2026")
+        assert '<div class="pc-figure">6 534</div>' in cell
+        assert "passages partis avec plus de 5 min de retard" in cell
+        assert "Ligne &lt;5&gt;" in cell
+        assert "background:#DDA15E;color:#283618" in cell
+        assert "score 74,5 sur 100" in cell
+        assert '<div class="pc-col">Le plus de retards</div>' in cell
+        assert "<svg" not in cell
 
-    def test_carte_de_priorite_vide(self):
-        assert "Aucune donnée sur la période précédente" in app_mod.priority_card_html("arret_baisse", None, None)
-        assert "Aucune baisse sur la période." in app_mod.priority_card_html("arret_baisse", None, "août 2026")
-        assert "Pas assez de passages" in app_mod.priority_card_html("arret_retard", None, None)
+    def test_case_baisse_d_un_arret_avec_sa_pente(self):
+        item = {"kind": "arrêt", "id": "s1", "figure": "", "name": "Emaillerie", "detail": "vers Cracovie",
+                "score": 45.5, "previous": 71.8, "route_type": 3}
+        cell = app_mod.priority_cell_html("arret_baisse", item, "août 2026")
+        assert '<div class="pc-figure">−26,3</div>' in cell
+        assert "points de score depuis août 2026" in cell
+        assert "vers Cracovie, 71,8 puis 45,5 sur 100" in cell
+        assert "■" in cell
+        assert 'aria-label="Score passé de 71,8 à 45,5 sur 100"' in cell
+
+    def test_pente_a_l_echelle_avec_les_seuils(self):
+        svg = app_mod.slope_svg(90.0, 40.0)
+        assert svg.count("<text") == 2 and ">80</text>" in svg and ">50</text>" in svg
+        ys = [float(v) for v in __import__("re").findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)]
+        assert ys[0] < ys[1]
+        assert f'fill="{app_mod.palette_hex(40.0, "score")}"' in svg
+
+    def test_case_vide(self):
+        assert "Pas de période de comparaison." in app_mod.priority_cell_html("arret_baisse", None, None)
+        assert "Aucune baisse sur la période." in app_mod.priority_cell_html("arret_baisse", None, "août 2026")
+        assert "Pas assez de passages" in app_mod.priority_cell_html("arret_retard", None, None)
 
     def test_legende_de_la_carte(self):
         legend = app_mod.map_legend_html()

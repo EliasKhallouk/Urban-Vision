@@ -623,6 +623,26 @@ def _stop_title(row) -> str:
     return f"{row['stop_name']} — {direction}" if direction else str(row["stop_name"])
 
 
+def _stop_parts(row) -> tuple[str, str]:
+    """Nom d'un arrêt et précision : nombre de sens ou de quais regroupés, sinon direction."""
+    n_dirs = int(row["n_sens"]) if "n_sens" in row and pd.notna(row["n_sens"]) else 1
+    if n_dirs > 1:
+        return str(row["stop_name"]), f"{n_dirs} {'sens' if n_dirs == 2 else 'quais'}"
+    return str(row["stop_name"]), str(row.get("direction") or "")
+
+
+def _identity(row, kind: str, score: float, previous: float | None = None) -> dict:
+    """Champs d'affichage communs : nom, précision, mode, score et score précédent."""
+    route_type = row.get("route_type")
+    out = {"score": float(score), "previous": None if previous is None else float(previous),
+           "route_type": None if route_type is None or pd.isna(route_type) else int(route_type)}
+    if kind == "arrêt":
+        out["name"], out["detail"] = _stop_parts(row)
+    else:
+        out["name"], out["detail"] = str(row["ligne"]), ""
+    return out
+
+
 def _late(df: pd.DataFrame) -> pd.Series:
     return df["observations"] * df["pct_retard_5min"] / 100
 
@@ -647,7 +667,8 @@ def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now
             out["arret_retard"] = {
                 "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
                 "figure": f"{_late(s).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
-                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100"}
+                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100",
+                **_identity(top, "arrêt", top["score_fiabilite"])}
     if lines is not None and not lines.empty:
         l = lines[lines["observations"] >= min_obs]
         if not l.empty:
@@ -655,7 +676,8 @@ def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now
             out["ligne_retard"] = {
                 "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
                 "figure": f"{_late(l).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
-                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100"}
+                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100",
+                **_identity(top, "ligne", top["score_fiabilite"])}
     if stops_now is not None and stops_before is not None and not stops_now.empty and not stops_before.empty:
         before = stops_before[stops_before["observations"] >= min_obs][["stop_id", "score_fiabilite"]]
         now = stops_now[stops_now["observations"] >= min_obs]
@@ -667,7 +689,8 @@ def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now
                 out["arret_baisse"] = {
                     "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
                     "figure": f"{format_number(float(top['delta']), 1, signed=True)} pts", "unit": f"de score{since}",
-                    "reason": f"{format_number(float(top['score_prev']), 1)} → {format_number(float(top['score_fiabilite']), 1)} / 100"}
+                    "reason": f"{format_number(float(top['score_prev']), 1)} → {format_number(float(top['score_fiabilite']), 1)} / 100",
+                    **_identity(top, "arrêt", top["score_fiabilite"], top["score_prev"])}
     if progression is not None and not progression.empty:
         top = progression.loc[progression["delta_score"].idxmin()]
         if top["delta_score"] < 0:
@@ -675,7 +698,8 @@ def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now
                 "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
                 "figure": f"{format_number(float(top['delta_score']), 1, signed=True)} pts", "unit": f"de score{since}",
                 "reason": (f"{format_number(float(top['score_fiabilite_prev']), 1)} → "
-                           f"{format_number(float(top['score_fiabilite']), 1)} / 100")}
+                           f"{format_number(float(top['score_fiabilite']), 1)} / 100"),
+                **_identity(top, "ligne", top["score_fiabilite"], top["score_fiabilite_prev"])}
     return out
 
 

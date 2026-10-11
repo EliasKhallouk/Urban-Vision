@@ -241,7 +241,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 538 tests pytest
+└── tests/                          # 27 fichiers, 540 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1278,19 +1278,25 @@ lecteur qui n'est pas analyste :
 
 1. **Mon territoire** — pour une commune, verdict (score de la commune
    comparé au réseau, tous deux calculés par `network_score` sur les totaux,
-   comme le bandeau) ; bloc **Priorités du moment** : quatre cartes
-   (`diagnostic.priorities`, `priority_card_html`), chacune avec un bandeau
-   à icônes (arrêt ou ligne, horloge pour le retard, courbe descendante pour
-   la baisse ; Black Forest pour le retard, Copperwood pour la baisse), un
-   chiffre en grand, le nom et un détail, et un bouton « Ouvrir la fiche » :
-   - **arrêt le plus en retard** : le plus de passages > 5 min, les quais d'un
-     même arrêt étant comptés ensemble ;
-   - **ligne la plus en retard** : le plus de passages > 5 min sur le
-     périmètre ;
-   - **arrêt en plus forte baisse** : plus forte baisse du score d'un quai par
-     rapport à la période de comparaison ;
-   - **ligne en plus forte baisse** : plus forte baisse du score d'une ligne
-     (`load_engagement_progression`).
+   comme le bandeau) ; bloc **Priorités du moment** : un tableau 2 × 2
+   (`_render_priorities`, conteneur `prio_grid`) qui croise *quoi* (lignes du
+   tableau : arrêt, ligne) et *quel signal* (colonnes : « Le plus de retards »,
+   « La plus forte baisse » du score par rapport à la période de comparaison),
+   chaque libellé n'étant écrit qu'une fois (`diagnostic.priorities`,
+   `PRIORITY_GRID`). Chaque case (`priority_cell_html`) donne le chiffre en
+   grand (passages partis avec plus de 5 min de retard, ou points de score
+   perdus en Copperwood), puis l'arrêt ou la ligne :
+   - une ligne est une pastille à son nom, au fond de la couleur de son état,
+     comme un pictogramme de réseau (`line_badge_html`) ;
+   - un arrêt porte le glyphe de son mode (● ■ ▲) à la couleur de son état,
+     comme sur la carte (`stop_mark_html`) ;
+   - la colonne « baisse » dessine la pente du score d'une période à l'autre
+     sur l'échelle 0–100, avec les seuils 80 et 50 en pointillés (`slope_svg`,
+     décrite pour les lecteurs d'écran par son `aria-label`) ;
+   - un lien « Ouvrir la fiche de l'arrêt / de la ligne » (bouton Streamlit
+     présenté en lien souligné).
+   Sous 640 px, les colonnes s'empilent : la ligne d'en-têtes est masquée et
+   chaque case affiche le nom de sa colonne (`.pc-col`).
    Seuls comptent les arrêts et lignes d'au moins `MIN_OBSERVATIONS`
    passages (sur les deux périodes pour une baisse) ; une carte sans
    candidat le dit (pas de période de comparaison, aucune baisse, pas assez
@@ -2591,7 +2597,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 538, isolés (suite `pytest` complète : 538 passed), flux synthétiques
+- Tests : 540, isolés (suite `pytest` complète : 540 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
