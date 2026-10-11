@@ -216,3 +216,30 @@ class TestLignesSansMesure:
         assert [(p["r"], p["s"], p["e"]) for p in paths] == [
             ("Z", None, "sans temps réel, non mesurable"), ("A", 82, "fiable")]
         assert "ni classée ni notée" in app_mod.unmeasured_line_message("123")
+
+
+class TestRattrapageParPassage:
+    def test_dix_jours_au_plus_puis_reprise(self, conn, monkeypatch):
+        import db as dbio
+
+        _seed(conn)
+        dbio.refresh_aggregates(conn, days=["2026-09-11"])
+        for day in ("2026-09-12", "2026-09-13", "2026-09-14"):
+            conn.execute("INSERT INTO agg_daily (date_service, route_id, obs, sum_delay, cnt_le300, cnt_gt300, "
+                         "cnt_lt60, skipped, eligible, histogram) VALUES (?, 'A', 0, 0, 0, 0, 0, 0, 0, '{}')", (day,))
+        conn.commit()
+        monkeypatch.setattr(ra.time, "sleep", lambda s: None)
+        assert ra.ensure_sans_temps_reel(conn, "2026-09-20", max_days=3) == 3
+        assert dbio.sans_tr_pending_days(conn, "2026-09-20") == ["2026-09-14"]
+        assert ra.ensure_sans_temps_reel(conn, "2026-09-20", max_days=3) == 1
+        assert ra.ensure_sans_temps_reel(conn, "2026-09-20", max_days=0) == 0
+
+    def test_option_de_la_commande(self, monkeypatch, tmp_path):
+        seen = {}
+        monkeypatch.setattr(ra, "ensure_sans_temps_reel", lambda conn, today, n: seen.setdefault("n", n))
+        for name in ("refresh", "refresh_segments"):
+            monkeypatch.setattr(ra, name, lambda conn, now: 0.0)
+        for name in ("ensure_segments", "ensure_hourly_early", "ensure_v2_history"):
+            monkeypatch.setattr(ra, name, lambda *a: 0)
+        ra.main(["--db", str(tmp_path / "x.db"), "--log", str(tmp_path / "x.log"), "--rattrapage-jours", "0"])
+        assert seen["n"] == 0

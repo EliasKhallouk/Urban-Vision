@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 580 tests pytest
+└── tests/                          # 29 fichiers, 582 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -398,7 +398,7 @@ par git) :
 ```bash
 zstd -df data/sauvegardes/urban_vision_AAAA-MM-JJ.db.zst -o data/urban_vision_prod.db
 chmod 644 data/urban_vision_prod.db && rm -f data/urban_vision_prod.db-wal data/urban_vision_prod.db-shm
-.venv/bin/python src/scripts/rafraichir_agregats.py --db data/urban_vision_prod.db --log data/calcul_prod.log
+.venv/bin/python src/scripts/rafraichir_agregats.py --db data/urban_vision_prod.db --log data/calcul_prod.log --rattrapage-jours 0
 .venv/bin/python src/scripts/troncons.py --db data/urban_vision_prod.db --log data/calcul_prod.log
 ```
 
@@ -483,6 +483,7 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
 | Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
 | `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
+| `SANS_TR_DAYS_PER_RUN` | 10 jours rattrapés au plus par passage pour la règle des trajets sans temps réel (`--rattrapage-jours`, 0 = tous) | `rafraichir_agregats.py` |
 | `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés (tronçons, départs en avance par heure, historique du score), pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
 | `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py` |
 | Trajet sans temps réel (`SANS_TR_MIN_PASSAGES`, `TRIP_MARGIN_SECONDS`) | au moins 2 départs relevés, tous à 0 s ; course lue 3 h au-delà des jours recalculés (section 7.4) | `db.py` et `indicateurs.py` (valeurs identiques, vérifiées par un test) |
@@ -1204,11 +1205,17 @@ après coup, ≈ 2,5 s par jour sur le poste de développement) ; échec journal
 
 Puis `ensure_sans_temps_reel` recalcule une fois, un jour à la fois et avec la
 même pause, les agrégats et les tronçons des jours passés calculés avant la
-règle des trajets sans temps réel (section 7.4) ; `agg_meta`
-(`sans_temps_reel_jusqu_au`) garde le dernier jour fait, si bien qu'un
-passage interrompu reprend où il s'est arrêté. Mesuré sur la copie de la base
-de production du 11/10/2026 : 76 jours en 16 min (13 s par jour, sans la
-pause). Échec journalisé « Trajets sans temps réel : recalcul échoué »
+règle des trajets sans temps réel (section 7.4), au plus
+`SANS_TR_DAYS_PER_RUN` = 10 jours par passage (option `--rattrapage-jours`,
+0 = tous) ; `agg_meta` (`sans_temps_reel_jusqu_au`) garde le dernier jour
+fait, si bien que le passage suivant (5 min plus tard) ou un passage
+interrompu reprend où il s'est arrêté. Mesuré sur la copie de la base de
+production du 11/10/2026 : 76 jours en 16 min d'un seul tenant (13 s par
+jour, sans la pause) ; par tranches de 10, environ 2 min 30 par passage, sous
+l'intervalle de 5 min et loin de la limite de 30 min de l'unité
+(`TimeoutStartSec`), soit 8 passages et environ 40 min en tout. Journal :
+« Trajets sans temps réel : 10 jours recalculés en … s, 66 au prochain
+passage », puis « recalcul terminé ». Échec journalisé « Trajets sans temps réel : recalcul échoué »
 (code 1). La règle allonge le recalcul de routine : 13 → 17 s pour les
 agrégats d'hier et d'aujourd'hui, 4,5 → 5,4 s pour les tronçons, sur le poste
 de développement.
@@ -2248,7 +2255,7 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/db.py` | Schéma + agrégats (auto-porteur) | *aucun* (l'import suffit) |
 | `src/scripts/export_open_data.py` | Export CSV open data (30 derniers jours) | `--db`, `--out`, `--since`, `--until`, `--print-datasets` |
 | `src/scripts/veille_collecte.py` | Veille de la collecte, alertes email (timer 5 min) | `--dry-run`, `--test-email`, `--db`, `--log-dir`, `--state` |
-| `src/scripts/rafraichir_agregats.py` | Recalcul des agrégats d'hier et d'aujourd'hui (timer 5 min) | `--db`, `--log` |
+| `src/scripts/rafraichir_agregats.py` | Recalcul des agrégats d'hier et d'aujourd'hui (timer 5 min) | `--db`, `--log`, `--rattrapage-jours` |
 | `src/scripts/sauvegarde.py` | Sauvegarde quotidienne, contrôle, rotation, copie hors VM | `--db`, `--dest`, `--verifier [archive]`, `--sans-envoi` |
 | `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien), puis recharge les tracés | `--dest`, `--db` |
 | `src/scripts/route_shapes.py` | Tracés des lignes depuis un GTFS archivé (`route_shapes`) | `--zip`, `--db` |
@@ -2735,6 +2742,102 @@ Génération automatique : le 1er de chaque mois à 3 h par
 `urban-vision-rapports.timer` (section 14), PDF seuls (`--pdf-only`). Durée
 d'un lot complet sur la VM : voir 26.2 U11.
 
+### 20.4 Déployer la carte des points de contention et la règle des trajets sans temps réel
+
+Concerne les commits postérieurs à `f673240` (dernier déploiement, 26.2 U14).
+Aucune dépendance ni variable d'environnement nouvelle ; une seule unité
+nouvelle, `urban-vision-troncons` (service et timer de 3 h 40), installée et
+activée par `deploy/deployer.sh`. Le schéma migre seul au redémarrage des
+services (`init_db` : colonnes `cnt_sans_tr`, `cnt_zero`, tables `agg_meta`,
+`troncons_*` ; ajout de colonnes instantané).
+
+1. **Avant** (sur la VM) : noter la version en place pour la marche arrière,
+   vérifier l'espace (prévoir au moins 1 Go : `troncons_jour` ajoute environ
+   0,3 Go pour 40 jours, puis 7 Mo par jour) et faire une sauvegarde fraîche :
+
+   ```bash
+   cd ~/Urban-Vision && git log --oneline -1 && df -h /home && free -h
+   sudo systemctl start urban-vision-sauvegarde.service && ls -lh data/sauvegardes | tail -n 3
+   ```
+
+2. **Déployer** : `deploy/deployer.sh` (pull, unités, redémarrage des trois
+   services, contrôles). Le timer `urban-vision-troncons` attend 3 h 40 ; la
+   page « Où les bus perdent du temps » affiche d'ici là « La carte n'est pas
+   encore calculée : elle l'est chaque nuit à 3 h 40. » (le timer étant
+   installé, sans la commande locale).
+3. **Rattrapage** (automatique) : les passages suivants de
+   `urban-vision-rafraichir` (toutes les 5 min) recalculent les jours passés,
+   10 par passage (section 10.2) : environ 2 min 30 par passage, 8 passages,
+   40 min. Pendant ce temps les indicateurs des jours passés basculent par
+   tranches. Pour que tout se passe hors journée, déployer le soir. Suivre :
+
+   ```bash
+   tail -f data/collect.log | grep --line-buffered -E "Agrégats|Trajets sans temps réel|lent|échoué"
+   ```
+
+   Deux passages ne se chevauchent pas : le service est `Type=oneshot` et
+   systemd ne relance pas une unité encore active ; le déclenchement suivant
+   attend l'échéance d'après. Les écritures du collecteur, du recalcul et de
+   `troncons.py` passent l'une après l'autre (verrou SQLite, attente jusqu'à
+   120 s ; une journée recalculée tient le verrou 10 à 15 s).
+4. **Le lendemain matin** :
+
+   ```bash
+   cd ~/Urban-Vision
+   systemctl list-timers 'urban-vision-*' --no-pager
+   systemctl show -p Result -p ExecMainStartTimestamp urban-vision-troncons.service urban-vision-rafraichir.service
+   grep -E "Tronçons|Trajets sans temps réel|lent|échoué" data/collect.log | tail -n 20
+   journalctl -u urban-vision-collect --since "-24h" -p warning --no-pager | tail -n 20
+   ls -lh data/urban_vision.db* && df -h /home
+   .venv/bin/python - <<'EOF'
+   import sqlite3, time
+   c = sqlite3.connect("file:data/urban_vision.db?mode=ro", uri=True)
+   day = time.time() - 86400
+   print("relevés 24 h, en erreur :", c.execute("SELECT COUNT(*), SUM(error IS NOT NULL) FROM collection_runs WHERE started_at > ?", (day,)).fetchone())
+   print("trous 24 h, plus long (s) :", c.execute("SELECT COUNT(*), COALESCE(MAX(gap_end - gap_start), 0) FROM collection_gaps WHERE gap_start > ?", (day,)).fetchone())
+   print("règle (b) faite jusqu'au :", c.execute("SELECT valeur FROM agg_meta WHERE cle = 'sans_temps_reel_jusqu_au'").fetchone())
+   print("carte :", dict(c.execute("SELECT cle, valeur FROM troncons_meta WHERE cle IN ('depuis', 'jusqu_a', 'calcule_le')")))
+   for t in ("troncons_carte", "troncons_geo", "troncons_tram"):
+       print(t, c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
+   EOF
+   .venv/bin/python src/scripts/veille_collecte.py --dry-run
+   ```
+
+   Attendu : environ 1 440 relevés sans erreur et pas de nouveau trou ;
+   `Result=success` pour les deux unités ; « Tronçons : carte recalculée en
+   … s » vers 3 h 45 ; `agg_meta` à la veille ; `troncons_carte` de l'ordre de
+   190 000 lignes, `troncons_geo` 4 900, `troncons_tram` 600 (copie de
+   production du 11/10/2026) ; puis la page dans un navigateur (Mérignac à
+   17 h, un clic sur un tronçon, le tram A).
+
+5. **Marche arrière**, selon le problème :
+   - carte seule : `sudo systemctl disable --now urban-vision-troncons.timer`
+     (le reste continue ; la page garde le message vide ou la dernière carte) ;
+   - tout le code : revenir à la version notée à l'étape 1 et redéployer sans
+     pull, désactiver le timer de la carte, puis recalculer les jours passés
+     avec l'ancien code (les colonnes et tables nouvelles restent, ignorées) et
+     effacer le repère de la règle pour un futur redéploiement :
+
+     ```bash
+     cd ~/Urban-Vision && git checkout <version_notée> && deploy/deployer.sh --sans-pull
+     sudo systemctl disable --now urban-vision-troncons.timer
+     .venv/bin/python - <<'EOF'
+     import sqlite3, sys, time
+     sys.path.insert(0, "src/scripts")
+     import db
+     c = sqlite3.connect("data/urban_vision.db", timeout=120)
+     c.execute("PRAGMA busy_timeout = 120000")
+     for (d,) in c.execute("SELECT DISTINCT date_service FROM agg_daily ORDER BY 1").fetchall():
+         db.refresh_aggregates(c, days=[d]); db.refresh_segments(c, days=[d]); time.sleep(1)
+     c.execute("DELETE FROM agg_meta WHERE cle = 'sans_temps_reel_jusqu_au'"); c.commit()
+     EOF
+     ```
+
+     (environ 20 min ; revenir ensuite sur `main` par `git checkout main` au
+     prochain déploiement) ;
+   - base abîmée : restauration de la sauvegarde de l'étape 1 (section 19),
+     en sachant que les relevés faits depuis sont perdus.
+
 ---
 
 ## 21. Dépannage (troubleshooting)
@@ -2971,7 +3074,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 580, isolés (suite `pytest` complète : 580 passed), flux synthétiques
+- Tests : 582, isolés (suite `pytest` complète : 582 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3073,10 +3176,10 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 1. **Retards exactement nuls** (audit du 11/10/2026, copie de production) :
    la règle des trajets sans temps réel (section 7.4) est dans le code et
    n'est pas encore déployée ; en production, chaque retard nul compte encore
-   comme une mesure. Au premier passage du recalcul après déploiement,
-   `ensure_sans_temps_reel` recalcule tous les jours passés (76 jours en
-   16 min sur la copie de production, pause d'une seconde en plus entre deux
-   jours) ; `urban-vision-troncons` remplit `troncons_tram` la nuit suivante.
+   comme une mesure. Après déploiement (procédure en 20.4),
+   `ensure_sans_temps_reel` recalcule les jours passés par tranches de 10 à
+   chaque passage du recalcul (76 jours en 8 passages, environ 40 min) ;
+   `urban-vision-troncons` calcule la carte et `troncons_tram` à 3 h 40.
    Effet attendu sur septembre : score réseau 75,13 → 74,93, à l'heure
    78,37 → 78,16 % ; tram 82,48 → 81,72 % ; ligne A 81,28 → 79,59 %. La
    règle (a), écartée, retirait chaque retard nul, zéros isolés des courses

@@ -14,6 +14,7 @@ LOG_PATH = PROJECT_ROOT / "data" / "collect.log"
 DB_BUSY_TIMEOUT_MS = 120_000
 REFRESH_WARN_SECONDS = 60
 BACKFILL_PAUSE_SECONDS = 1.0
+SANS_TR_DAYS_PER_RUN = 10
 
 logger = logging.getLogger("rafraichir_agregats")
 
@@ -64,19 +65,26 @@ def ensure_hourly_early(conn, today: str) -> int:
     return len(days)
 
 
-def ensure_sans_temps_reel(conn, today: str) -> int:
+def ensure_sans_temps_reel(conn, today: str, max_days: int = SANS_TR_DAYS_PER_RUN) -> int:
+    """Recalcule les jours passés antérieurs à la règle des trajets sans temps réel, au plus `max_days`
+    par passage (0 = tous) ; la progression est gardée dans agg_meta, le passage suivant reprend."""
     conn.executescript(dbio.AGG_DDL)
-    days = dbio.sans_tr_pending_days(conn, today)
-    if not days:
+    pending = dbio.sans_tr_pending_days(conn, today)
+    if not pending:
         return 0
-    logger.info("Trajets sans temps réel : recalcul de %d jours…", len(days))
+    days = pending[:max_days] if max_days > 0 else pending
+    logger.info("Trajets sans temps réel : recalcul de %d jours (%d restants)…", len(days), len(pending))
     start = time.monotonic()
     for day in days:
         dbio.refresh_aggregates(conn, days=[day])
         dbio.refresh_segments(conn, days=[day])
         dbio.mark_sans_tr_done(conn, day)
         time.sleep(BACKFILL_PAUSE_SECONDS)
-    logger.info("Trajets sans temps réel : recalcul terminé en %.0f s", time.monotonic() - start)
+    if len(days) == len(pending):
+        logger.info("Trajets sans temps réel : recalcul terminé en %.0f s", time.monotonic() - start)
+    else:
+        logger.info("Trajets sans temps réel : %d jours recalculés en %.0f s, %d au prochain passage",
+                    len(days), time.monotonic() - start, len(pending) - len(days))
     return len(days)
 
 
@@ -116,6 +124,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Recalcule les agrégats et les tronçons d'hier et d'aujourd'hui.")
     ap.add_argument("--db", default=str(DB_PATH))
     ap.add_argument("--log", default=str(LOG_PATH))
+    ap.add_argument("--rattrapage-jours", type=int, default=SANS_TR_DAYS_PER_RUN,
+                    help="jours rattrapés au plus par passage pour la règle des trajets sans temps réel (0 = tous)")
     args = ap.parse_args(argv)
     configure_logging(Path(args.log))
     conn = sqlite3.connect(args.db, timeout=DB_BUSY_TIMEOUT_MS / 1000)
@@ -140,7 +150,7 @@ def main(argv=None) -> int:
             logger.warning("Rattrapage des départs en avance par heure échoué : %s", e)
             status = 1
         try:
-            ensure_sans_temps_reel(conn, now.strftime("%Y-%m-%d"))
+            ensure_sans_temps_reel(conn, now.strftime("%Y-%m-%d"), args.rattrapage_jours)
         except Exception as e:
             logger.warning("Trajets sans temps réel : recalcul échoué : %s", e)
             status = 1
