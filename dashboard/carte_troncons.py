@@ -216,7 +216,8 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
     noms des lignes ; `route_ids` : (de, vers) -> identifiants des lignes, dans le même ordre ;
     `measurable` : lignes dont le temps réel est fiable (les autres ne sont pas citées, `u` les
     signale) ; `communes` : stop_id -> commune ; `scope` : commune, route_id, stop_id, place
-    (« à Mérignac »), label (nom affiché sur la carte).
+    (« à Mérignac »), label (nom affiché sur la carte), unmeasured (ligne choisie sans temps réel ou au
+    temps réel non fiable : son tracé est gris).
     """
     scope = scope or {}
     route_ids = route_ids or {}
@@ -282,6 +283,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
+            "unmeasured": bool(scope.get("unmeasured")),
             "colors": COLORS, "height": MAP_HEIGHT}
 
 

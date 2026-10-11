@@ -181,3 +181,38 @@ class TestScore:
         comp = ind.route_day_components(8, 6, 12, 0, sans_tr=4)
         assert comp["expected"] == 12
         assert comp["assured_on_time"] == 9.0
+
+
+class TestLignesSansMesure:
+    def test_ligne_desservie_sans_mesure(self, conn):
+        import db as dbio
+        import app as app_mod
+
+        gtfs_static.create_static_tables(conn)
+        conn.execute("INSERT INTO routes VALUES ('Z', '123', 'Ligne 123', 3)")
+        conn.execute("INSERT INTO routes VALUES ('A', '1', 'Ligne 1', 3)")
+        t = lambda m: _epoch_local(2026, 9, 11, 9, m)  # noqa: E731
+        _insert(conn, [("z1", "20260911", "Z", 1, "s1", "SCHEDULED", 0, t(0)),
+                       ("z1", "20260911", "Z", 2, "s2", "SCHEDULED", 0, t(5))])
+        _seed(conn)
+        dbio.refresh_aggregates(conn, days=["2026-09-11"])
+        since, end = _epoch_local(2026, 9, 11, 0), _epoch_local(2026, 9, 12, 0)
+        out = app_mod.load_unmeasured_lines.__wrapped__(conn, end, since, end)
+        assert list(out["route_id"]) == ["Z"] and list(out["ligne"]) == ["123"]
+        at_stop = app_mod.load_unmeasured_lines.__wrapped__(conn, end, since, end, stop_id="s2")
+        assert list(at_stop["route_id"]) == ["Z"]
+
+    def test_barre_trace_et_fiche(self):
+        import pandas as pd
+        import app as app_mod
+
+        ranking = pd.DataFrame({"route_id": ["A"], "ligne": ["1"], "route_type": [3], "score_fiabilite": [82.0]})
+        unmeasured = pd.DataFrame({"route_id": ["Z", "A"], "ligne": ["123", "1"], "route_type": [3, 3]})
+        options = app_mod.line_options(ranking, None, unmeasured)
+        assert options["Z"].endswith("123 · sans temps réel, non mesurable")
+        assert options["A"].endswith("1 · fiable")
+        paths = app_mod.stop_route_paths(ranking, {"Z": {0: [[0, 0], [1, 1]]}, "A": {0: [[0, 0], [2, 2]]}},
+                                         {}, unmeasured)
+        assert [(p["r"], p["s"], p["e"]) for p in paths] == [
+            ("Z", None, "sans temps réel, non mesurable"), ("A", 82, "fiable")]
+        assert "ni classée ni notée" in app_mod.unmeasured_line_message("123")

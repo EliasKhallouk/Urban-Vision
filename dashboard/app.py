@@ -90,6 +90,7 @@ from generate_all_reports import slug as report_slug  # noqa: E402
 from palette import (  # noqa: E402
     BLACK_FOREST,
     COPPERWOOD,
+    NO_DATA,
     OLIVE_LEAF,
     SUNLIT_CLAY,
     CORNSILK,
@@ -633,6 +634,42 @@ def inject_style() -> None:
 def load_exclusions(_conn, since_day: str, end_day: str) -> ind.Exclusions:
     """Jours incomplets et lignes au temps réel douteux de la période, écartés de toute analyse."""
     return ind.exclusions(_conn, since_day, end_day)
+
+
+UNMEASURED_LABEL = "sans temps réel, non mesurable"
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_unmeasured_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                          commune: str | None = None, stop_id: str | None = None) -> pd.DataFrame:
+    """Lignes desservies sur la période (arrêts attendus) sans aucun passage mesuré : tous leurs trajets sont
+    sans temps réel (section 7.4 de la documentation). Ni classées ni notées ; Flex' exclues."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    table, where, params = "agg_daily", "", []
+    if commune or stop_id:
+        table = "agg_daily_stop"
+        if commune:
+            where += " AND d.stop_id IN (SELECT stop_id FROM stop_municipalities WHERE commune_name = ?)"
+            params.append(commune)
+        if stop_id:
+            where += " AND d.stop_id = ?"
+            params.append(stop_id)
+    try:
+        return pd.read_sql_query(
+            f"""SELECT d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type
+                FROM {table} d JOIN routes r ON r.route_id = d.route_id
+                WHERE d.date_service >= ? AND d.date_service < ? AND d.{ind.FLEX_FILTER} {where}
+                GROUP BY d.route_id HAVING SUM(d.eligible) > 0 AND SUM(d.obs) = 0
+                ORDER BY r.route_type, LENGTH(ligne), ligne""",
+            _conn, params=[since_day, end_day, *params])
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        return pd.DataFrame(columns=["route_id", "ligne", "route_type"])
+
+
+def unmeasured_line_message(ligne: str) -> str:
+    return (f"Ligne {ligne} : desservie sur la période, mais {UNMEASURED_LABEL}. Ses trajets n'ont pas de temps "
+            "réel (tous leurs départs relevés valent exactement zéro) : elle n'est ni classée ni notée. "
+            "Voir « Données & méthode ».")
 
 
 def _excluded(conn, alias: str, since_day: str, end_day: str) -> tuple[str, list]:
@@ -1816,14 +1853,25 @@ def _hex_rgb(color: str) -> list[int]:
     return [int(color[i:i + 2], 16) for i in (0, 2, 4)]
 
 
-def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict) -> list[dict]:
+def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict,
+                     unmeasured: pd.DataFrame | None = None) -> list[dict]:
     """Tracés des lignes qui desservent un arrêt, colorés selon l'état de chaque ligne.
 
     `lines` : une ligne par ligne de transport (route_id, ligne, route_type, score_fiabilite) ;
     `directions` : sens de chaque ligne à cet arrêt (route_id → direction_id). Sans sens connu, les deux
-    sens sont tracés. Les lignes les plus fiables sont tracées d'abord : les moins fiables passent dessus.
+    sens sont tracés. Les lignes sans mesure (`unmeasured` : route_id, ligne, route_type) sont tracées en
+    gris, sans score, sous les autres ; puis les plus fiables d'abord : les moins fiables passent dessus.
     """
     out = []
+    grey = _hex_rgb(NO_DATA)
+    for r in (unmeasured if unmeasured is not None else pd.DataFrame(columns=["route_id"])).itertuples():
+        if r.route_id in set(lines.get("route_id", [])):
+            continue
+        by_dir = shapes.get(r.route_id) or {}
+        direction = directions.get(r.route_id)
+        for coords in ([by_dir[direction]] if direction in by_dir else list(by_dir.values())):
+            out.append({"r": r.route_id, "l": str(r.ligne), "s": None, "e": UNMEASURED_LABEL,
+                        "g": mode_glyph(r.route_type), "c": grey, "t": _hex_rgb(BLACK_FOREST), "p": coords})
     for r in lines.sort_values("score_fiabilite", ascending=False).itertuples():
         by_dir = shapes.get(r.route_id) or {}
         direction = directions.get(r.route_id)
@@ -1844,14 +1892,15 @@ def selected_stop_paths(conn, cutoff: int, since_ts: int | None, end_ts: int | N
     if not shapes:
         return []
     daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
-    if daily.empty:
+    unmeasured = load_unmeasured_lines(conn, cutoff, since_ts, end_ts, stop_id=stop_id)
+    if daily.empty and unmeasured.empty:
         return []
     try:
         directions = dict(conn.execute("SELECT route_id, direction_id FROM stop_direction WHERE stop_id = ?",
                                        (stop_id,)).fetchall())
     except sqlite3.Error:
         directions = {}
-    return stop_route_paths(stop_lines_table(daily), shapes, directions)
+    return stop_route_paths(stop_lines_table(daily), shapes, directions, unmeasured)
 
 
 def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | None,
@@ -2649,7 +2698,10 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
     row = ranking_net[ranking_net["route_id"] == route_id]
     if row.empty:
+        unmeasured = load_unmeasured_lines(conn, cutoff, since_ts, end_ts)
+        match = unmeasured[unmeasured["route_id"] == route_id]
         st.info(excluded_line_message(conn, cutoff, since_ts, end_ts, route_id)
+                or (unmeasured_line_message(str(match["ligne"].iloc[0])) if not match.empty else None)
                 or "Aucun passage analysé pour cette ligne sur la période.")
         return
     line = row.iloc[0]
@@ -3672,6 +3724,8 @@ def render_page_contention(c: PageContext) -> None:
         line_name = row[0] if row else route_id
     scope = contention_scope(c.commune, route_id, line_name, stop_id, data["names"].get(stop_id) if stop_id else None)
     measurable = {r for r, q in meta.get("lignes", {}).items() if q.get("ok")}
+    if route_id and route_id not in measurable and route_id not in data["tram_lines"]:
+        scope["unmeasured"] = True
     payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
                                data["tram"], scope, data["route_ids"], measurable, data["tram_lines"])
     carte_troncons(payload, key="carte_troncons")
@@ -3778,11 +3832,15 @@ PAGES = {
 }
 
 
-def line_options(ranking: pd.DataFrame, current: str | None) -> dict:
-    """Lignes proposées dans la barre : « Toutes les lignes », puis les lignes du périmètre, la moins fiable d'abord."""
+def line_options(ranking: pd.DataFrame, current: str | None, unmeasured: pd.DataFrame | None = None) -> dict:
+    """Lignes proposées dans la barre : « Toutes les lignes », puis les lignes du périmètre, la moins fiable d'abord,
+    puis les lignes desservies sans mesure (`load_unmeasured_lines`), signalées comme non mesurables."""
     out = {ALL: "Toutes les lignes"}
     for r in ranking.sort_values("score_fiabilite").itertuples():
         out[r.route_id] = f"{mode_glyph(r.route_type)} {r.ligne} · {tier_label(r.score_fiabilite)}"
+    if unmeasured is not None:
+        for r in unmeasured.itertuples():
+            out.setdefault(r.route_id, f"{mode_glyph(r.route_type)} {r.ligne} · {UNMEASURED_LABEL}")
     if current and current not in out:
         out[current] = f"Ligne {current}"
     return out
@@ -3804,7 +3862,7 @@ def render_context_bar(conn, cutoff: int, since_ts, end_ts, commune: str | None,
     """Fil d'Ariane persistant : Revenir, commune, ligne, arrêt ; présent sur toutes les pages."""
     line_id = st.session_state.get("line_id")
     stop_id = st.session_state.get("stop_id")
-    lines = line_options(ranking, line_id)
+    lines = line_options(ranking, line_id, load_unmeasured_lines(conn, cutoff, since_ts, end_ts, commune=commune))
     if line_id:
         stops_df = load_line_stops(conn, cutoff, since_ts, end_ts, line_id)
         if commune and not stops_df.empty:

@@ -66,6 +66,12 @@ function tramVerdict(line, slot) {
 }
 
 function verdict(data, slot) {
+  if (data.unmeasured) {
+    return {
+      text: `La ${data.label.charAt(0).toLowerCase()}${data.label.slice(1)} n'est pas mesurable : son temps réel est absent ou non fiable.`,
+      sub: "Son tracé est en gris.",
+    };
+  }
   if (data.tram_line && data.tram_lines[data.tram_line]) return tramVerdict(data.tram_lines[data.tram_line], slot);
   const scope = data.segments.filter((s) => s.c);
   const count = (code) => scope.filter((s) => s.t[slot] === code).length;
@@ -214,12 +220,14 @@ function buildLayers(deck, state) {
   const colorOf = (seg) => {
     const code = seg.t[slot];
     if (!seg.c) return measuredAt(seg, slot) ? rgb(colors[code], focused ? 40 : 55) : rgb(colors.grey, focused ? 35 : 50);
+    if (data.unmeasured) return rgb(colors.grey, 245);
     if (code === "v") return rgb(colors.v, focused ? 235 : 120);
     if ("oc".includes(code)) return rgb(colors[code], 255);
     return rgb(colors.grey, focused ? 240 : 210);
   };
   const widthOf = (seg) => {
     if (focused && !seg.c) return 1.2;
+    if (data.unmeasured) return 5;
     if (focused) return { c: 6, o: 5.5, v: 4 }[seg.t[slot]] || 3.5;
     return { c: 5.5, o: 4.5, v: 1.6 }[seg.t[slot]] || 2.2;
   };

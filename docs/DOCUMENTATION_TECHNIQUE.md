@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 574 tests pytest
+└── tests/                          # 29 fichiers, 576 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1343,6 +1343,11 @@ TBNight et S22. Les lignes scolaires (S35, S49…) reculent le plus : 60 à
 
 ### 10.5 Carte des points de contention (`troncons.py`)
 
+Tables écrites (section 7.1) : `troncons_jour`, `troncons_jours_faits`,
+`troncons_carte`, `troncons_lignes`, `troncons_geo`, `troncons_meta` et
+`troncons_tram`. Les noms `agg_segment_hourly` et `contention_map` du plan
+initial n'existent pas dans le code.
+
 Elle colorie chaque tronçon entre deux arrêts consécutifs selon le temps que
 les bus y perdent (circulation, feux ou montée des voyageurs ; jamais « la rue »
 ni « l'exploitant » comme responsables). Faisabilité et calibrage :
@@ -1578,7 +1583,10 @@ lecteur qui n'est pas analyste :
      étiquette au nom de la ligne, placée vers une extrémité du tracé (alternance
      85 %, 15 %, 70 %, 30 % de sa longueur) et masquée quand elle en chevauche
      une autre (`CollisionFilterExtension` de deck.gl : elle réapparaît en
-     zoomant), infobulle (état et score) ; les autres arrêts
+     zoomant), infobulle (état et score) ; une ligne qui dessert l'arrêt sans
+     aucun passage mesuré sur la période (`load_unmeasured_lines`, section 7.4)
+     est tracée en gris (`NO_DATA`) sous les autres, avec l'état « sans temps
+     réel, non mesurable » et sans score ; les autres arrêts
      passent en transparence. Le bandeau ajoute « Voir les lignes entières »,
      qui cadre la carte sur tous les tracés ; une phrase sous la carte les
      énumère avec leur état ;
@@ -1663,8 +1671,12 @@ lecteur qui n'est pas analyste :
      reste du réseau qui s'estompe (trait de 1,2 px, transparent) ; le verdict
      dit « à Mérignac », « sur la ligne 23 », « autour de l'arrêt … » ; la carte
      se cadre sur les arrêts du périmètre entre le verdict et le bandeau du bas
-     (`fitPadding` mesure leur hauteur). Sur cette page, choisir une ligne
-     ou un arrêt dans la barre ne change pas de page.
+     (`fitPadding` mesure leur hauteur). Une ligne de bus choisie dont le
+     temps réel est absent ou non fiable sur la période scolaire (hors des
+     lignes exploitables de `troncons_meta`) a son tracé en gris épais et le
+     verdict « La ligne 123 n'est pas mesurable : son temps réel est absent ou
+     non fiable. » (`unmeasured` dans les données du composant). Sur cette
+     page, choisir une ligne ou un arrêt dans la barre ne change pas de page.
 3. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour
    analyser cette ligne ↓ » et un clic sur une barre ouvre la fiche,
@@ -1764,8 +1776,15 @@ puis la période :
   `stop_municipalities`) : restreint toutes les pages ; en changer ferme
   l'arrêt ouvert (`_on_ctx_commune`).
 - **Ligne** (`ctx_line`, `line_options` : « Toutes les lignes », puis les lignes
-  du périmètre, la moins fiable d'abord, avec leur état) : ouvre la fiche ligne
-  sur la page « Lignes », quelle que soit la page en cours (`_on_ctx_line`).
+  du périmètre, la moins fiable d'abord, avec leur état, puis les lignes
+  desservies sur la période sans aucun passage mesuré, marquées « sans temps
+  réel, non mesurable » : `load_unmeasured_lines`, lignes dont les arrêts
+  attendus existent mais dont tous les trajets sont sans temps réel, section
+  7.4 ; 14 lignes sur la période scolaire 2026, dont la 123) : ouvre la fiche
+  ligne sur la page « Lignes », quelle que soit la page en cours
+  (`_on_ctx_line`). Une ligne sans mesure n'est ni classée ni notée : sa fiche
+  se limite à « Ligne 123 : desservie sur la période, mais sans temps réel,
+  non mesurable… » (`unmeasured_line_message`).
 - **Arrêt** (`ctx_stop`, `stop_options`) : les arrêts de la ligne choisie dans
   la commune (« Arrêt de la ligne »), sinon ceux de la commune ; libellés
   « nom — direction » identiques au titre de la fiche ; ouvre la fiche arrêt
@@ -2911,7 +2930,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 574, isolés (suite `pytest` complète : 574 passed), flux synthétiques
+- Tests : 576, isolés (suite `pytest` complète : 576 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

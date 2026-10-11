@@ -100,7 +100,7 @@ function pathTooltip(object) {
   return `<div class="uv-title">${esc(object.g)} Ligne ${esc(object.l)}</div>`
     + `<div class="uv-row"><span class="uv-chip" style="background:rgb(${object.c.join(",")})"></span>`
     + `<span style="font-weight:700">${esc(object.e.charAt(0).toUpperCase() + object.e.slice(1))}</span>`
-    + `<span class="uv-num">${object.s}/100</span></div>`
+    + (object.s === null || object.s === undefined ? "" : `<span class="uv-num">${object.s}/100</span>`) + "</div>"
     + '<div class="uv-foot">Ligne qui dessert l\'arrêt sélectionné</div>';
 }
 
