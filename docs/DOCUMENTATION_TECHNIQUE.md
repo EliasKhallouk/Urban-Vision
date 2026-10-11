@@ -191,6 +191,8 @@ Urban-Vision/
 │   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches, 3742 lignes)
 │   ├── carte.py                    # carte des arrêts : composant st.components.v2, données, icônes
 │   ├── carte_arrets.js             # JavaScript du composant (deck.gl + MapLibre)
+│   ├── carte_troncons.py           # carte des points de contention : composant, données
+│   ├── carte_troncons.js           # JavaScript de la carte des tronçons (deck.gl + MapLibre)
 │   ├── diagnostic.py               # logique pure des fiches arrêt / ligne (verdicts, phrases)
 │   ├── graphique.py                # graphique Highcharts cliquable (composant st.components.v2)
 │   └── highcharts.py               # configs Highcharts (charte partagée)
@@ -239,10 +241,11 @@ Urban-Vision/
 │   │   ├── indicateurs.py          # score de fiabilité : composantes, exclusions, marges
 │   │   ├── rafraichir_agregats.py  # recalcul des agrégats (timer 5 min)
 │   │   ├── route_shapes.py         # tracés des lignes extraits du GTFS (carte)
+│   │   ├── troncons.py             # carte des points de contention (calcul nocturne)
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 540 tests pytest
+└── tests/                          # 28 fichiers, 555 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -693,6 +696,12 @@ le dashboard et les rapports.
 | `agg_hourly_regularity` | jour × ligne × sens × arrêt × heure | `n_act`, `sum_h_act`, `sum_h2_act` (intervalles réels entre deux départs), `n_sch`, `sum_h_sch`, `sum_h2_sch` (intervalles prévus) |
 | `quality_days` | jour | `passages`, `lacunar_hours` (heures lacunaires, JSON), `flag` (`ok`, `degrade`, `incomplet`, `non_evalue`), `computed_at` |
 | `agg_daily_segment` | jour × ligne × direction × arrêt | voir ci-dessous (calculée par `db.py::refresh_segments`) |
+| `troncons_jour` | jour × tronçon (arrêt de départ, arrêt d'arrivée) × ligne × heure | `n` (passages gardés), `n_zero`, `n_terminus`, `n_plateau`, `gains` et `pcts` (valeurs gardées en texte : secondes perdues et % du temps prévu) ; section 10.5 |
+| `troncons_jours_faits` | jour | `passages`, `computed_at` : jours déjà traités par `troncons.py` |
+| `troncons_carte` | jour type × heure (−1 = journée) × tronçon | `statut` (`mesure`, `peu`, `terminus`, `douteux`), `palier`, `mediane_s`, `mediane_pct`, `passages`, `part_2min`, `jours` |
+| `troncons_lignes` | tronçon × ligne | `passages` sur la période |
+| `troncons_geo` | tronçon | `route_type`, `coords` (tracé JSON) |
+| `troncons_meta` | clé | `depuis`, `jusqu_a`, `calcule_le`, `jours_exclus`, `lignes` (qualité de chaque ligne), en JSON |
 
 - `cnt_le300` : passages avec retard ≤ 300 s.
 - `cnt_gt300` : passages avec retard > 300 s.
@@ -813,6 +822,7 @@ Vue temporelle d'une journée-type :
                                     ──► courses et qualité (refresh_v2, quality_days)
  5 min       veille_collecte.py ──► alertes email, signal de vie
  02:30       sauvegarde.py ──► data/sauvegardes/ (+ copie hors VM)
+ 03:40       troncons.py ──► troncons_jour (jours manquants), troncons_carte, troncons_geo
  06:15       archive_gtfs.py ──► data/gtfs_archive/ si le GTFS a changé
               │
  à chaq. réexéc.    dashboard/app.py ──► lit agg_* (cache 60 s)
@@ -986,7 +996,7 @@ conditions suivantes et envoie un email (identifiants SMTP : section 6.5).
 | Avertissements répétés dans les logs | au moins 3 lignes `WARNING`/`ERROR` dans la dernière heure, hors « Trou de collecte » | `collect.log`, `alerts.log` |
 | Base de données illisible | erreur SQLite à l'ouverture ou à la lecture | base |
 | Sauvegarde manquante | dernière sauvegarde de plus de 26 h, ou aucune | manifestes de `data/sauvegardes/` (condition ignorée si le dossier n'existe pas) |
-| Tâche planifiée en échec | résultat `exit-code`, `timeout`, `signal`… pour le recalcul des agrégats, la sauvegarde, l'archive GTFS ou les rapports | `systemctl show -p Result` (d'où `AF_UNIX` dans les familles autorisées de l'unité) |
+| Tâche planifiée en échec | résultat `exit-code`, `timeout`, `signal`… pour le recalcul des agrégats, la sauvegarde, l'archive GTFS, les rapports ou la carte des tronçons | `systemctl show -p Result` (d'où `AF_UNIX` dans les familles autorisées de l'unité) |
 
 - Un email part à l'apparition d'une alerte, puis un rappel toutes les 12 h
   tant qu'elle dure, et un email « Retour à la normale » à sa fin ; les
@@ -1197,6 +1207,77 @@ la marge. Jours exclus : 08/09 et 24/09 ; lignes écartées : 102, 306,
 TBNight et S22. Les lignes scolaires (S35, S49…) reculent le plus : 60 à
 80 % de leurs départs ont plus d'une minute d'avance.
 
+### 10.5 Carte des points de contention (`troncons.py`)
+
+Elle colorie chaque tronçon entre deux arrêts consécutifs selon le temps que
+les bus y perdent (circulation, feux ou montée des voyageurs ; jamais « la rue »
+ni « l'exploitant » comme responsables). Faisabilité et calibrage :
+`analyse_troncons.py` (section 13), sur la sauvegarde de production du
+11/10/2026, période scolaire du 01/09 au 10/10/2026.
+
+**Mesure** (`passages_frame`) : pour un même trajet, couple (arrêt i, arrêt
+i+1) de rangs consécutifs, tous deux `SCHEDULED` avec retard connu. Temps perdu
+= retard au départ de i+1 − retard au départ de i ; temps prévu = écart des
+horaires prévus (`departure_time − departure_delay`) ; part du temps prévu =
+temps perdu / temps prévu. L'heure et le jour sont ceux du départ de l'arrêt i.
+Sont écartés : paires non consécutives, première et dernière paire du trajet
+(départ du terminus, arrivée : « début ou fin de ligne »), passages dont un
+retard vaut exactement 0 s (horaire théorique republié), écarts au-delà de
+±15 min (`OUTLIER_SECONDS`), temps prévu nul ou au-delà de 30 min.
+
+**Qualité des lignes** (`line_quality`, sur la période) : une ligne est
+mesurée si moins de 25 % de ses retards valent exactement 0
+(`DOUBTFUL_ZERO_SHARE`, comme le score) et moins de 15 % de ses passages gardés
+perdent 0 s pile (« paliers » : retard recopié d'un arrêt à l'autre,
+`MAX_PLATEAU_SHARE`). En septembre-octobre 2026, 93 lignes de bus sur 129 (99 %
+des passages de bus) sont mesurées ; sont en gris les lignes sans temps réel
+(16 lignes à 100 % de zéros), les lignes scolaires à paliers et TBNight (29 %
+de zéros, 28,5 % de paliers : son temps réel est recopié par paliers, comme
+celui du tram, quel que soit le seuil). Le **tram** n'est pas mesuré : son
+retard est publié par paliers (30 % d'écarts de 0 s pile), la médiane par
+tronçon cache environ 90 % du temps perdu (ligne A : somme des médianes 20 s
+pour 237 s perdues de bout en bout) ; ses tracés sont dessinés en gris hachuré.
+Le **ferry** : seule la ligne 952 a des tronçons mesurables (deux tronçons du
+milieu, environ 1 600 passages) ; les traversées des lignes 951 et 953 n'ont
+que deux escales, leurs tronçons sont « début ou fin de ligne ».
+
+**Paliers** (`palette.troncon_tier`, règle validée le 11/10/2026) : médiane du
+temps perdu et médiane de la part du temps prévu. Beaucoup de temps perdu
+(Copperwood) : au moins 40 s **et** la moitié du temps prévu ; un peu (Sunlit
+Clay) : au moins 15 s **et** un quart ; sinon pas de temps perdu (Olive Leaf).
+Les deux conditions évitent de colorer à tort les tronçons longs (avec les
+secondes seules, 25 % des tronçons de plus de 5 min prévues étaient rouges,
+contre 0,7 % des courts) comme les très courts (pourcentage seul). Sur les
+cases tronçon × heure des bus mesurés : 90 % vert, 8 % ocre, 1,4 % cuivre ;
+95 % des cases gardent leur palier entre jours pairs et impairs. Bruit :
+écart d'un jour à l'autre de la médiane de 3 s (7 s au 90e centile).
+
+**Assez de données** : au moins 20 passages (`MIN_PASSAGES`) sur au moins
+3 jours (`MIN_DAYS`) par tronçon et par heure (ou journée). Sinon gris « pas
+assez de données ». Un trou de collecte ne donne aucun passage, donc du gris,
+jamais du vert. Jours `incomplet` et lignes Flex' exclus ; jours types
+séparés (semaine, samedi, dimanche).
+
+**Calcul nocturne** (`run`, timer `urban-vision-troncons`, 3 h 40) :
+`refresh_day` remplit `troncons_jour` pour chaque jour de `agg_daily` depuis
+`PERIOD_START` (le 01/09/2026, variable d'environnement
+`URBAN_VISION_TRONCONS_DEPUIS`) non encore traité (`troncons_jours_faits`),
+une seconde de pause entre deux jours ; `build_map` calcule les médianes
+exactes en Python, par paquets d'arrêts de départ (dernier chiffre de
+`from_stop_id`, `PARTITIONS`) pour limiter la mémoire ; `build_geometry`
+découpe le tracé de `route_shapes` entre les projections des deux arrêts
+(`segment_geometry`, à moins de 150 m et dans le bon ordre), sinon un segment
+droit. Mesuré en développement sur la copie de production : 5,5 s par jour,
+4 min pour 39 jours plus la carte ; `troncons_jour` compte 2,9 millions de
+lignes (35 Mo de valeurs) pour 39 jours. Échec journalisé « Tronçons : calcul
+échoué » dans `data/collect.log` (code 1, signalé par la veille).
+
+**Couverture** (semaine type, tronçons de bus colorés) : 77 % sur la
+journée, 68 % à 8 h, 67 % à 17 h, 49 % à 21 h. Les communes les moins couvertes
+sont en périphérie : Le Taillan-Médoc (47 % sur la journée, 40 % à 17 h),
+Bouliac (48 %), Carbon-Blanc (58 %), Saint-Aubin-de-Médoc (59 %, 24 % à 17 h),
+Ambarès-et-Lagrave (62 %).
+
 ---
 
 ## 11. Dashboard
@@ -1360,7 +1441,28 @@ lecteur qui n'est pas analyste :
    `.fiche-ligne`, `.carte-anchor`). Blocs repliables : **Comparer les
    communes** (périmètre « Réseau complet » ; `load_commune_stats`, graphique
    `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
-2. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
+2. **Où les bus perdent du temps** (`render_page_contention`, page
+   d'information : sans bandeau d'indicateurs, car elle porte sur la période
+   scolaire et non sur la période de la barre du haut) — carte des points de
+   contention (section 10.5). Choix « Jour » (semaine, samedi, dimanche type)
+   et « Heure » (0 h à 23 h, ou toute la journée) ; à l'ouverture, l'heure où le
+   plus de tronçons perdent beaucoup de temps (`worst_slot`). Composant
+   `dashboard/carte_troncons.py` + `carte_troncons.js` (deck.gl, fond Positron) :
+   - toutes les tranches partent en une fois (`troncons_payload` : tracé décalé
+     de 7 m à droite du sens de circulation, `offset_right`, pour séparer les
+     deux sens d'une rue ; une chaîne de 25 codes par tronçon, `cell_code` ;
+     valeurs mesurées par tranche), le composant change de tranche sans
+     relancer Streamlit ;
+   - couleurs des trois paliers, gris pour « pas assez de données », « début ou
+     fin de ligne » et lignes au temps réel insuffisant ; bus en trait plein,
+     ferry en tirets, tram en gris hachuré (« mesure par tronçon indisponible
+     pour le tram ») ; le vert est plus fin et plus clair, les tronçons qui
+     perdent du temps sont dessinés par-dessus ;
+   - légende en barre sur la carte, infobulle au survol (lignes, temps perdu
+     et part du temps prévu, nombre de passages, ou raison du gris) ;
+   - commune choisie : la carte se cadre sur ses tronçons, les autres sont
+     estompés ; une phrase sous la carte donne le nombre de tronçons mesurés.
+3. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour
    analyser cette ligne ↓ » et un clic sur une barre ouvre la fiche,
    `_on_ranking_click`) ; en vue détaillée, tableau de toutes les lignes du
@@ -1371,7 +1473,7 @@ lecteur qui n'est pas analyste :
    (§11.7), calculée sur toute la ligne quel que soit le filtre « Territoire ».
    Toute ouverture de fiche ligne fait défiler la page jusqu'à ses
    indicateurs.
-3. **Quand ?** — deux vues :
+4. **Quand ?** — deux vues :
    - *Selon le créneau* : verdict (créneau qui se détache, règle de
      concentration de §11.7), **score de fiabilité par créneau**
      (`period_score_chart`), retards > 5 min par mode et créneau
@@ -1397,18 +1499,18 @@ lecteur qui n'est pas analyste :
      (`engagement_progression_chart`, détail repliable). Loaders
      `load_daily_metrics` (`group_metrics` : une ligne « Ensemble » et une par
      mode) et `load_engagement_progression`.
-4. **Modes de transport** — même contenu dans les deux vues : carte de risque
+5. **Modes de transport** — même contenu dans les deux vues : carte de risque
    des lignes (`scatter_chart`, seuils de `risk_zone`, libellé de chaque zone
    dans son coin : « Retards rares mais longs », « Zone critique », « Retards
    fréquents mais courts », « Risque faible »), verdict (mode le moins
    ponctuel), cartes par mode (glyphe ● ■ ▲, bordure au palier), comparaison
    d'indicateurs ; répartition des écarts, tableau détaillé des lignes et
    tableau par mode (repliables).
-5. **Perturbations** — alertes actives à l'instant courant + historique
+6. **Perturbations** — alertes actives à l'instant courant + historique
    (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-6. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
+7. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
    identifiant `lexique_slug` ; un lien `?lexique=<terme>`, venu d'une aide « ? »
    ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné en
    crème et le fait défiler à l'écran, sans afficher le guide ; mots du
@@ -1423,7 +1525,7 @@ lecteur qui n'est pas analyste :
    courses suivies, observations par minute sur 7 jours glissants en
    Highcharts Stock, répartition horaire des 7 derniers jours).
 
-7. **Rapports mensuels** — `render_page_reports` : choix du mois
+8. **Rapports mensuels** — `render_page_reports` : choix du mois
    (`list_reports(REPORTS_DIR)` parcourt `reports/output/AAAA-MM/` et ne
    retient que les mois qui ont au moins un PDF, du plus récent au plus
    ancien) ; bouton de téléchargement du rapport réseau et, pour une commune
@@ -1431,7 +1533,7 @@ lecteur qui n'est pas analyste :
    nommés par `generate_all_reports.slug`, noms affichés depuis
    `stop_municipalities`), de son rapport. Mention de la licence et de la
    citation attendue.
-8. **À propos** — `render_page_about` : objet du projet, indépendance,
+9. **À propos** — `render_page_about` : objet du projet, indépendance,
    contact, sources et licences, mentions légales et confidentialité
    (section 16).
 
@@ -1886,6 +1988,7 @@ compilation : `xelatex/lualatex introuvable…` (`compile_pdf`).
 | `src/scripts/sauvegarde.py` | Sauvegarde quotidienne, contrôle, rotation, copie hors VM | `--db`, `--dest`, `--verifier [archive]`, `--sans-envoi` |
 | `src/scripts/archive_gtfs.py` | Archive du GTFS statique quand il change (timer quotidien), puis recharge les tracés | `--dest`, `--db` |
 | `src/scripts/route_shapes.py` | Tracés des lignes depuis un GTFS archivé (`route_shapes`) | `--zip`, `--db` |
+| `src/scripts/troncons.py` | Carte des points de contention (timer nocturne, section 10.5) | `--db`, `--log`, `--depuis` |
 | `src/scripts/analyse_troncons.py` | Faisabilité de la carte des points de contention : temps perdu par tronçon entre deux arrêts consécutifs, bruit, seuils (lecture seule, sorties dans `data/analyses/troncons/`) | `--db`, `--lignes`, `--temoin`, `--depuis`, `--jusqu-a`, `--seuils`, `--reseau-jours`, `--sortie` |
 | `deploy/deployer.sh` | Déploiement sur la VM (section 20.2) | `--sans-pull`, `--sans-redemarrage` |
 | `src/scripts/veille_visiteurs.py` | Veille des visiteurs humains (cron 5 min) | `--logs-dir`, `--state`, `--html`, `--since`, `--no-lookup` |
@@ -1925,6 +2028,7 @@ Depuis le 01/10/2026, les unités sont **versionnées dans `deploy/systemd/`**
 | `urban-vision-sauvegarde.service` + `.timer` | ponctuel | sauvegarde de la base (section 19) | chaque nuit à 2 h 30 |
 | `urban-vision-archive-gtfs.service` + `.timer` | ponctuel | archive du GTFS statique (section 9.5) | chaque jour à 6 h 15 |
 | `urban-vision-rapports.service` + `.timer` | ponctuel | rapports du mois précédent (section 12) | le 1er du mois à 3 h |
+| `urban-vision-troncons.service` + `.timer` | ponctuel | carte des points de contention (section 10.5) | chaque nuit à 3 h 40 |
 
 Réglages communs : `User=ubuntu`, `WorkingDirectory=/home/ubuntu/Urban-Vision`,
 `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=full`,
@@ -1934,7 +2038,7 @@ Réglages communs : `User=ubuntu`, `WorkingDirectory=/home/ubuntu/Urban-Vision`,
 interroger systemd ; l'unité des rapports n'a pas de restriction réseau). Les
 services continus redémarrent seuls (`Restart=always`, `RestartSec=10`). Les
 tâches lourdes tournent en basse priorité : recalcul `Nice=5`, sauvegarde et
-archive `Nice=10` (sauvegarde en E/S `idle`), rapports `Nice=19` et E/S
+archive et tronçons `Nice=10` (sauvegarde en E/S `idle`), rapports `Nice=19` et E/S
 `idle`. Secrets : la veille charge `/etc/urban-vision/alertes.env`
 (section 6.5), la sauvegarde `/etc/urban-vision/sauvegarde.env` s'il existe
 (section 6.6).
@@ -2599,7 +2703,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 540, isolés (suite `pytest` complète : 540 passed), flux synthétiques
+- Tests : 555, isolés (suite `pytest` complète : 555 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2624,7 +2728,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.2 Environnement de production
 
-État relevé sur la VM de production le 16/09/2026, mis à jour le 02/10/2026 :
+État relevé sur la VM de production le 16/09/2026, mis à jour le 02/10/2026 et le 11/10/2026 :
 
 | # | Point | État en production |
 |---|---|---|
@@ -2641,6 +2745,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U11 | Tests et rapports sur la VM | Suite lancée le 01/10/2026 sur une copie du commit déployé, avec l'interpréteur du venv (Python 3.12.14, SQLite 3.53.1, aarch64) et pytest installé hors du venv : 200 passed tant que `matplotlib` manquait (`test_monthly_report.py` non importable), 262 passed après son installation (`81eb95b`). Rapports d'août et de septembre générés le 01/10/2026 sur la VM (`--compile --pdf-only`, 34 PDF chacun) : 40 min pour août, 78 min pour septembre, 1 h 35 min de CPU au total, aucun trou de collecte pendant la génération ; les 6 anciens PDF d'août sont dans `reports/output/corbeille/2026-08-ancien/`. Timer `urban-vision-rapports.timer` installé, prochain lancement le 01/11/2026 à 3 h Rapports d'août et de septembre relancés le 01/10/2026 à 22 h 22 (unité transitoire `urban-vision-rapports-regeneration`) pour la ligne « trous de collecte » corrigée Cette régénération s'est terminée le 02/10/2026 à 0 h 01 (codes retour 0, 34 PDF par mois, 1 h 28 min de CPU). Le 02/10/2026 : suite lancée sur une copie de `915fde6` (Python 3.12.14, SQLite 3.53.1, pytest hors du venv) : 341 passed en 18 s ; rapports réseau d'août et de septembre régénérés avec la page « Méthode 2.0 » (unité transitoire `urban-vision-rapports-v2`, 68 s et 85 s) ; les rapports communaux de ces deux mois n'ont pas cette page. |
 | U12 | Protection des données | Première sauvegarde le 01/10/2026 à 22 h 11 : 3 628 Mo compressés en 955 Mo (zstd) en 5 min 33 s, restauration contrôlée en 3 min 13 s (12 983 514 observations) ; timers `urban-vision-sauvegarde` (2 h 30) et `urban-vision-archive-gtfs` (6 h 15) actifs ; première version du GTFS archivée (`gtfs_2026-10-01_3ea3193653b8.zip`, valide du 01/10 au 30/12/2026). Copie hors VM non configurée (`/etc/urban-vision/sauvegarde.env` absent) Sauvegarde avant le déploiement de la méthode 2.0 le 02/10/2026 à 0 h 01 (955 Mo, 6 min 46 s, contrôle ok). |
 | U13 | Configuration versionnée | Unités, vhost et rotation installés le 01/10/2026 par `deploy/deployer.sh` ; en-têtes HTTP actifs (HSTS, `nosniff`, `SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`) ; rotation hebdomadaire de `collect.log` et `alerts.log` ; crontab root identique à `deploy/cron/root.crontab` ; copie de l'ancien vhost conservée en `urban-vision.avant-<date>` Crontab root remplacée le 02/10/2026 par `deploy/cron/root.crontab` (GoAccess `--anonymize-ip`), copie de l'ancienne dans `/tmp/root.crontab.avant` le temps du déploiement. |
+| U14 | Score de fiabilité unique | Déployé le 11/10/2026 (`f673240`, `deploy/deployer.sh`) : colonne `cnt_lt60` ajoutée aux tables horaires au passage suivant du timer, rattrapage de 75 jours en 1 166 s (environ 15,5 s par jour), collecte ininterrompue pendant le rattrapage (21 relevés en 21 min, aucun trou) ; score de septembre 75,1 ± 1,2, identique entre le dashboard et `indicateurs.indicators` |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
@@ -2697,26 +2802,30 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 
 ### 26.5 Recommandations
 
-1. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
+1. **Retards exactement nuls** (audit du 11/10/2026, copie de production,
+   septembre 2026, à décider) : ils sont comptés comme des mesures dans la
+   ponctualité, le retard moyen, les retards > 5 min, la carte des arrêts, les
+   profils horaires et les rapports. Tram : 3,6 à 9,2 % de départs nuls
+   (85 % viennent de trajets entiers sans temps réel, 7,5 % des trajets) ;
+   ponctualité surestimée de 0,6 à 1,9 point (ligne A : 81,3 % au lieu de
+   79,4 %), retard moyen sous-estimé de 6 à 16 s ; réseau : 0,4 point de
+   ponctualité, 0,3 point de score. La base de développement en compte bien
+   plus (25 à 33 % pour le tram) : ne pas en tirer de conclusion.
+2. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
    et analyse (définition unique, désormais mesurable par `collection_runs`) ou
    documenter explicitement la divergence (déjà décrite en 7.3/23.2).
-2. **Planifier une politique de rétention** de `observations` (table
+3. **Planifier une politique de rétention** de `observations` (table
    volumineuse) et un VACUUM périodique, avec tests associés.
-3. **Copier les sauvegardes hors de la VM** (section 6.6) : sans cela, elles
+4. **Copier les sauvegardes hors de la VM** (section 6.6) : sans cela, elles
    ne protègent pas d'une perte du disque.
-4. Étendre l'intégration continue : règles `ruff` complètes, typage
+5. Étendre l'intégration continue : règles `ruff` complètes, typage
    (`pyright`), contrôles d'accessibilité.
-5. **Vérifier la carte de la veille des visiteurs** (`veille_visiteurs.py`,
+6. **Vérifier la carte de la veille des visiteurs** (`veille_visiteurs.py`,
    §17.2) : elle utilise les tuiles raster Carto
    `https://{s}.basemaps.cartocdn.com/light_all/...`, qui renvoyaient le
    01/10/2026, depuis le poste de développement, une image « API KEY
    REQUIRED ». Si c'est aussi le cas en production, passer au style
    vectoriel Positron (comme la carte du dashboard) ou à une clé Carto.
-6. **Déployer le score de fiabilité unique** : au premier passage du timer après
-   le déploiement, `ensure_hourly_early` recalcule tout l'historique horaire
-   (≈ 2,5 s par jour en développement, à mesurer sur la VM dans
-   `data/collect.log`) ; les créneaux et la ponctualité par heure sont faux tant
-   qu'il n'a pas fini.
 7. **Tester la vue rapide auprès de 3 à 5 lecteurs non analystes** (agents ou
    élus, proches non spécialistes) avant tout nouvel écran, sur des tâches
    précises (« trouver la ligne la plus problématique de ma commune »,

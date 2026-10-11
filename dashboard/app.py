@@ -33,6 +33,7 @@ import pandas as pd
 import streamlit as st
 
 from carte import carte_arrets, map_payload
+from carte_troncons import WHOLE_DAY_SLOT, carte_troncons, troncons_payload, worst_slot
 from graphique import graphique_cliquable
 
 import diagnostic as dg
@@ -1863,8 +1864,9 @@ def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | N
         st.caption(f"Tracés des lignes qui desservent l'arrêt sélectionné, à la couleur de leur état : {names}.")
 
 
+PAGE_CONTENTION = "Où les bus perdent du temps"
 NAV_ITEMS = [
-    "Mon territoire", "Lignes", "Quand ?", "Modes de transport", "Perturbations", "Rapports mensuels",
+    "Mon territoire", PAGE_CONTENTION, "Lignes", "Quand ?", "Modes de transport", "Perturbations", "Rapports mensuels",
     "Données & méthode", "À propos",
 ]
 HELP_TEXTS = {
@@ -1926,7 +1928,7 @@ def lexique_slug(term: str) -> str:
 
 def lexique_link(term: str) -> str:
     return f"?lexique={lexique_slug(term)}"
-INFO_PAGES = {"Rapports mensuels", "À propos"}
+INFO_PAGES = {"Rapports mensuels", "À propos", PAGE_CONTENTION}
 DETAIL_HINT = ("Graphiques et tableaux détaillés (où, quand, quel type de retard, contexte) : activez "
                "« Vue détaillée » dans le menu de gauche.")
 GUIDE_STEPS = [
@@ -3541,6 +3543,76 @@ def _download_pdf(label: str, path: Path, key: str) -> None:
                        width="stretch")
 
 
+CONTENTION_DAYS = {"semaine": "Semaine type", "samedi": "Samedi type", "dimanche": "Dimanche type"}
+CONTENTION_SLOTS = list(range(24)) + [WHOLE_DAY_SLOT]
+
+
+@st.cache_data(ttl=3600)
+def load_troncons_meta(_conn) -> dict:
+    """Période, date de calcul et qualité des lignes de la carte des tronçons ({} si jamais calculée)."""
+    try:
+        return {k: json.loads(v) for k, v in _conn.execute("SELECT cle, valeur FROM troncons_meta")}
+    except sqlite3.Error:
+        return {}
+
+
+@st.cache_data(ttl=3600)
+def load_troncons(_conn, jour_type: str, computed_at: int) -> dict:
+    """Géométrie, cases du jour type, lignes et noms des tronçons, tracés du tram (tables troncons_*)."""
+    geo = pd.read_sql_query("SELECT from_stop_id, to_stop_id, route_type, coords FROM troncons_geo", _conn)
+    geo["coords"] = geo["coords"].map(json.loads)
+    cells = pd.read_sql_query(
+        "SELECT heure, from_stop_id, to_stop_id, statut, palier, mediane_s, mediane_pct, passages "
+        "FROM troncons_carte WHERE jour_type = ?", _conn, params=(jour_type,))
+    lines: dict = {}
+    for a, b, name in _conn.execute(
+            "SELECT t.from_stop_id, t.to_stop_id, COALESCE(r.route_short_name, t.route_id) FROM troncons_lignes t "
+            "LEFT JOIN routes r ON r.route_id = t.route_id ORDER BY t.passages DESC"):
+        lines.setdefault((a, b), []).append(str(name))
+    tram = [json.loads(c) for (c,) in _conn.execute(
+        "SELECT s.coords FROM route_shapes s JOIN routes r ON r.route_id = s.route_id WHERE r.route_type = 0")]
+    return {"geo": geo, "cells": cells, "lines": {k: ", ".join(dict.fromkeys(v)) for k, v in lines.items()},
+            "names": dict(_conn.execute("SELECT stop_id, stop_name FROM stops")),
+            "communes": dict(_conn.execute("SELECT stop_id, commune_name FROM stop_municipalities")),
+            "tram": tram}
+
+
+def _slot_label(slot: int) -> str:
+    return "Toute la journée" if slot == WHOLE_DAY_SLOT else f"{slot} h"
+
+
+def render_page_contention(c: PageContext) -> None:
+    st.markdown("### Où les bus perdent du temps")
+    meta = load_troncons_meta(c.conn)
+    if not meta.get("calcule_le"):
+        st.info("La carte des tronçons n'est pas encore calculée : elle l'est chaque nuit.")
+        return
+    since = datetime.strptime(meta["depuis"], "%Y-%m-%d")
+    until = datetime.strptime(meta["jusqu_a"], "%Y-%m-%d") - timedelta(days=1)
+    st.markdown(
+        '<div class="section-note">Chaque tronçon entre deux arrêts est colorié selon le temps que les bus y perdent '
+        "(circulation, feux ou montée des voyageurs). Ce sont les valeurs habituelles de la période scolaire, du "
+        f"{since:%d/%m/%Y} au {until:%d/%m/%Y}, recalculées chaque nuit.</div>", unsafe_allow_html=True)
+    left, right = st.columns([0.28, 0.72], gap="large")
+    with left:
+        jour = st.selectbox("Jour", list(CONTENTION_DAYS), format_func=CONTENTION_DAYS.get, key="contention_jour")
+    data = load_troncons(c.conn, jour, int(meta["calcule_le"]))
+    payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
+                               data["tram"], c.commune, WHOLE_DAY_SLOT)
+    scope = [s["t"] for s in payload["segments"] if s["c"]]
+    if st.session_state.get("contention_slot_for") != (jour, c.commune):
+        st.session_state["contention_slot_for"] = (jour, c.commune)
+        st.session_state["contention_slot"] = worst_slot(scope) if worst_slot(scope) is not None else WHOLE_DAY_SLOT
+    with right:
+        slot = st.select_slider("Heure", CONTENTION_SLOTS, key="contention_slot", format_func=_slot_label)
+    payload["slot"] = int(slot)
+    carte_troncons(payload, key="carte_troncons")
+    codes = [t[slot] for t in scope]
+    measured = sum(code in "voc" for code in codes)
+    st.caption(f"{_slot_label(slot)} : {measured} tronçons de bus mesurés sur {len(codes)} "
+               f"{'dans la commune' if c.commune else 'sur le réseau'} ; les autres sont en gris.")
+
+
 def render_page_reports(c: PageContext) -> None:
     st.markdown("### Rapports mensuels")
     st.markdown("Chaque début de mois, un rapport PDF est produit pour l'ensemble du réseau et pour chacune "
@@ -3631,6 +3703,7 @@ def render_page_about(c: PageContext) -> None:
 
 PAGES = {
     "Mon territoire": render_page_territory,
+    PAGE_CONTENTION: render_page_contention,
     "Lignes": render_page_lines,
     "Quand ?": render_page_when,
     "Modes de transport": render_page_network,

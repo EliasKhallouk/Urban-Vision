@@ -42,6 +42,8 @@ Pipeline (doc § 2, § 8): TBM GTFS-RT feeds → collectors → one SQLite DB (W
 
 Stop map: `dashboard/carte.py` registers an `st.components.v2` component whose JavaScript (`dashboard/carte_arrets.js`) loads deck.gl and MapLibre from jsDelivr on Carto's vector Positron style (Carto raster tiles now require an API key). Zoom-dependent grouping, tooltip, selection halo and fly-to live in the JS; Python only builds the payload (`map_payload`, unit-tested in `tests/test_carte.py`) and receives the clicked stop through `on_clicked_change`. After editing the `.js`, restart Streamlit: the module keeps the old script in memory.
 
+Contention map (doc § 10.5): `src/scripts/troncons.py` (nightly timer `urban-vision-troncons`, 03:40) stores cleaned per-trip time lost between consecutive stops in `troncons_jour`, then exact medians per day type × hour in `troncons_carte` (tier rule `palette.troncon_tier`: ≥ 40 s and ≥ 50 % of scheduled time = high loss; ≥ 15 s and ≥ 25 % = some), line list and geometry; tram and lines with ≥ 25 % exact-zero delays or ≥ 15 % plateaus stay grey. The page « Où les bus perdent du temps » (`dashboard/carte_troncons.py` + `.js`) sends all 25 slots at once.
+
 Periods: `period_picker` (month by default) returns a `Period` with a comparison period (previous month, or the same length just before); every "évolution" (panel KPIs, priorities, "Dans le temps") compares against it.
 
 Modules are not a package: `dashboard/`, `reports/` and `src/scripts/` import each other by inserting their directories into `sys.path` (same in `tests/conftest.py`), so imports look like `import db`, `import app`, `from palette import ...`.

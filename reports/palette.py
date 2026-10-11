@@ -185,3 +185,27 @@ def risk_zone(median_s: float, pct_gt300: float) -> str:
     if heavy:
         return RARE_LONG
     return LOW
+
+TRONCON_SECONDS = (15.0, 40.0)
+TRONCON_PCT = (25.0, 50.0)
+NO_DATA = "#C4C4BC"
+TRONCON_LABELS = {
+    POSITIVE: "Les bus n'y perdent pas de temps",
+    MEDIUM: "Les bus y perdent un peu de temps",
+    NEGATIVE: "Les bus y perdent beaucoup de temps",
+}
+
+
+def troncon_tier(median_s: float, median_pct: float) -> str:
+    """Palier d'un tronçon : il faut perdre assez de secondes ET une part suffisante du temps prévu.
+
+    Négatif : au moins 40 s et la moitié du temps prévu ; moyen : au moins 15 s et un quart ;
+    sinon positif. Les deux conditions évitent de colorer à tort les tronçons longs (secondes
+    seules) ou très courts (pourcentage seul).
+    """
+    s, pct = float(median_s), float(median_pct)
+    if s >= TRONCON_SECONDS[1] and pct >= TRONCON_PCT[1]:
+        return NEGATIVE
+    if s >= TRONCON_SECONDS[0] and pct >= TRONCON_PCT[0]:
+        return MEDIUM
+    return POSITIVE

@@ -4,6 +4,61 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+TRONCONS_DDL = """
+CREATE TABLE IF NOT EXISTS troncons_jour (
+    date_service TEXT NOT NULL,
+    from_stop_id TEXT NOT NULL,
+    to_stop_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    n INTEGER NOT NULL,
+    n_zero INTEGER NOT NULL,
+    n_terminus INTEGER NOT NULL,
+    n_plateau INTEGER NOT NULL,
+    gains TEXT NOT NULL,
+    pcts TEXT NOT NULL,
+    PRIMARY KEY (date_service, from_stop_id, to_stop_id, route_id, heure)
+);
+CREATE INDEX IF NOT EXISTS idx_troncons_jour_date ON troncons_jour(date_service);
+CREATE TABLE IF NOT EXISTS troncons_jours_faits (
+    date_service TEXT PRIMARY KEY,
+    passages INTEGER NOT NULL,
+    computed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS troncons_carte (
+    jour_type TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    from_stop_id TEXT NOT NULL,
+    to_stop_id TEXT NOT NULL,
+    statut TEXT NOT NULL,
+    palier TEXT,
+    mediane_s REAL,
+    mediane_pct REAL,
+    passages INTEGER NOT NULL,
+    part_2min REAL,
+    jours INTEGER NOT NULL,
+    PRIMARY KEY (jour_type, heure, from_stop_id, to_stop_id)
+);
+CREATE TABLE IF NOT EXISTS troncons_lignes (
+    from_stop_id TEXT NOT NULL,
+    to_stop_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    passages INTEGER NOT NULL,
+    PRIMARY KEY (from_stop_id, to_stop_id, route_id)
+);
+CREATE TABLE IF NOT EXISTS troncons_geo (
+    from_stop_id TEXT NOT NULL,
+    to_stop_id TEXT NOT NULL,
+    route_type INTEGER NOT NULL,
+    coords TEXT NOT NULL,
+    PRIMARY KEY (from_stop_id, to_stop_id)
+);
+CREATE TABLE IF NOT EXISTS troncons_meta (
+    cle TEXT PRIMARY KEY,
+    valeur TEXT NOT NULL
+);
+"""
+
 AGG_DDL = """
 CREATE TABLE IF NOT EXISTS agg_daily (
     date_service TEXT NOT NULL,
@@ -204,7 +259,7 @@ CREATE TABLE IF NOT EXISTS route_shapes (
     coords TEXT NOT NULL,
     PRIMARY KEY (route_id, direction_id)
 );
-""" + AGG_DDL
+""" + AGG_DDL + TRONCONS_DDL
 
 
 OBSERVATION_COLUMNS_ADDED = (

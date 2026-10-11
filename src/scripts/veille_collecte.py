@@ -44,6 +44,7 @@ WATCHED_UNITS = (
     "urban-vision-sauvegarde.service",
     "urban-vision-archive-gtfs.service",
     "urban-vision-rapports.service",
+    "urban-vision-troncons.service",
 )
 FAILED_RESULTS = {"exit-code", "signal", "core-dump", "timeout", "watchdog", "oom-kill", "resources"}
 
