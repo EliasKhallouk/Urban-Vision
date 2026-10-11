@@ -3125,8 +3125,9 @@ def _when_by_slot(c: PageContext) -> None:
         st.markdown("#### Score de fiabilité par créneau")
         render_tier_legend("Score de fiabilité")
         hc_render(period_score_chart(period), height=330)
-        st.caption("Arrêts non desservis : ils n'ont pas d'heure dans les données ; chaque créneau reçoit le taux "
-                   "de ses jours (semaine ou week-end).")
+        st.caption("Les arrêts non desservis et les courses supprimées n'ont pas d'heure dans les données : le score "
+                   "d'un créneau est sa part de passages à l'heure × le service assuré de ses jours (semaine ou "
+                   "week-end).")
     with right:
         st.markdown("#### Retards > 5 min par mode et créneau")
         render_tier_legend("Retards > 5 min", invert=True)
