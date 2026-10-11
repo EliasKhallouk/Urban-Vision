@@ -5,6 +5,9 @@ const STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json
 const ORDER = { "-": 0, d: 1, t: 1, p: 1, v: 2, o: 3, c: 4 };
 const FERRY = 4;
 const WHOLE_DAY = 24;
+const PLAY_MS = 1000;
+let STEP = 1;
+let DATE = null;
 
 function loadScript(url, globalName) {
   if (window[globalName]) return Promise.resolve(window[globalName]);
@@ -38,8 +41,17 @@ function seconds(s) {
   return a < 60 ? `${a} s` : `${Math.floor(a / 60)} min ${String(a % 60).padStart(2, "0")} s`;
 }
 
+function slotEnd(slot) {
+  return slot + STEP >= 24 ? "minuit" : `${slot + STEP} h`;
+}
+
 function when(slot) {
-  return slot === WHOLE_DAY ? "sur la journée" : `entre ${slot} h et ${slot === 23 ? "minuit" : `${slot + 1} h`}`;
+  return slot === WHOLE_DAY ? "sur la journée" : `entre ${slot} h et ${slotEnd(slot)}`;
+}
+
+function clockText(slot) {
+  if (slot === WHOLE_DAY) return "Toute la journée";
+  return STEP === 1 ? `${slot} h` : `${slot}-${slot + STEP} h`;
 }
 
 function plural(n, one, many) {
@@ -65,7 +77,19 @@ function tramVerdict(line, slot) {
   return { text, sub: TRAM_NOTE };
 }
 
+function coverageText(measured, total) {
+  const reason = DATE && DATE.reason ? ` ${DATE.reason}` : "";
+  return `Ce jour-là, ${measured} ${plural(measured, "portion", "portions")} sur ${total} `
+    + `${plural(measured, "a", "ont")} assez de passages pour être mesurées. Les autres sont grises.${reason}`;
+}
+
 function verdict(data, slot) {
+  if (data.tram_line && !data.tram_lines[data.tram_line]) {
+    return {
+      text: "Le temps perdu de bout en bout du tram n'est calculé que pour les jours types (semaine, samedi, dimanche).",
+      sub: TRAM_NOTE,
+    };
+  }
   if (data.unmeasured) {
     return {
       text: `La ${data.label.charAt(0).toLowerCase()}${data.label.slice(1)} n'est pas mesurable : son temps réel est absent ou non fiable.`,
@@ -78,7 +102,7 @@ function verdict(data, slot) {
   const red = count("c");
   const ochre = count("o");
   const measured = red + ochre + count("v");
-  const time = slot === WHOLE_DAY ? "Sur toute la journée" : `À ${slot} h`;
+  const time = slot === WHOLE_DAY ? "Sur toute la journée" : (STEP === 1 ? `À ${slot} h` : `Entre ${slot} h et ${slotEnd(slot)}`);
   const place = data.place;
   let text;
   if (measured === 0) {
@@ -91,7 +115,9 @@ function verdict(data, slot) {
   } else {
     text = `${time}, les bus ne perdent pas de temps ${place}.`;
   }
-  const sub = `${measured} ${plural(measured, "portion mesurée", "portions mesurées")} sur ${scope.length}, les autres en gris.`;
+  const sub = DATE
+    ? coverageText(measured, scope.length)
+    : `${measured} ${plural(measured, "portion mesurée", "portions mesurées")} sur ${scope.length}, les autres en gris.`;
   return { text, sub };
 }
 
@@ -101,6 +127,11 @@ const GREY_REASONS = {
   t: "Début ou fin de ligne : le temps n'y est pas mesuré.",
   "-": "Aucun passage à ce moment.",
 };
+
+function greyReason(code) {
+  if (DATE && code === "p") return "Moins de 8 passages sur ce créneau ce jour-là : pas assez pour se prononcer.";
+  return GREY_REASONS[code] || GREY_REASONS["-"];
+}
 
 function lineText(seg, long = false) {
   const others = long ? "d'autres lignes y passent mais ne sont pas mesurables" : "et des lignes non mesurables";
@@ -121,14 +152,15 @@ function measuredAt(seg, slot) {
 function shortStatus(seg, slot) {
   if (measuredAt(seg, slot)) {
     const s = seg.v[slot][0];
+    if (DATE) return s > 0 ? `Les bus y ont perdu ${seconds(s)} ${when(slot)}.` : `Les bus n'y ont pas perdu de temps ${when(slot)}.`;
     return s > 0 ? `Les bus y perdent ${seconds(s)} ${when(slot)}.` : `Les bus n'y perdent pas de temps ${when(slot)}.`;
   }
-  return GREY_REASONS[seg.t[slot]] || GREY_REASONS["-"];
+  return greyReason(seg.t[slot]);
 }
 
 function worstHour(seg) {
   let best = null;
-  for (let h = 0; h < WHOLE_DAY; h += 1) {
+  for (let h = 0; h < WHOLE_DAY; h += STEP) {
     if (!measuredAt(seg, h)) continue;
     const s = seg.v[h][0];
     if (s > 0 && (best === null || s > best.s)) best = { h, s };
@@ -138,15 +170,15 @@ function worstHour(seg) {
 
 function hourStrip(seg, slot, colors) {
   const cells = [];
-  for (let h = 0; h < WHOLE_DAY; h += 1) {
+  for (let h = 0; h < WHOLE_DAY; h += STEP) {
     const code = seg.t[h];
     const ok = measuredAt(seg, h);
     const color = ok ? colors[code] : "#E4E4DE";
     let label = code === "-" ? "aucun passage" : "non mesuré";
     if (ok) label = seg.v[h][0] > 0 ? `${seconds(seg.v[h][0])} perdues` : "pas de temps perdu";
-    cells.push(`<span class="${h === slot ? "now" : ""}" style="background:${color}" title="${h} h : ${label}"></span>`);
+    cells.push(`<span class="${h === slot ? "now" : ""}" style="background:${color}" title="${clockText(h)} : ${label}"></span>`);
   }
-  return `<div class="uvt-strip" role="img" aria-label="Temps perdu heure par heure">${cells.join("")}</div>`
+  return `<div class="uvt-strip" style="grid-template-columns:repeat(${24 / STEP},1fr)" role="img" aria-label="Temps perdu heure par heure">${cells.join("")}</div>`
     + '<div class="uvt-strip-axis"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>';
 }
 
@@ -155,18 +187,23 @@ function panelHtml(seg, slot, colors) {
   let body;
   if (measuredAt(seg, slot)) {
     const [s, pct, n, part] = seg.v[slot];
+    const lost = DATE ? `C'est le temps médian que les bus ont perdu ici ce jour-là, ${when(slot)}.`
+      : `C'est le temps que les bus perdent habituellement ici ${when(slot)}.`;
     body = s > 0
-      ? `<div class="uvt-figure t-${code}">${seconds(s)}</div><p>C'est le temps que les bus perdent habituellement ici ${when(slot)}. ${extraTime(pct)}</p>`
-      : `<div class="uvt-figure ok">Pas de temps perdu</div><p>Les bus n'y perdent pas de temps ${when(slot)}.</p>`;
+      ? `<div class="uvt-figure t-${code}">${seconds(s)}</div><p>${lost} ${extraTime(pct)}</p>`
+      : `<div class="uvt-figure ok">Pas de temps perdu</div><p>${shortStatus(seg, slot)}</p>`;
     if (part > 0) body += `<p>${part} % des passages y perdent plus de 2 minutes.</p>`;
     if ("oc".includes(code)) body += "<p>C'est l'un des endroits où le retard des bus se crée : circulation, feux ou montée des voyageurs.</p>";
-    body += `<p class="uvt-foot">Valeur habituelle sur ${n} passages de la période scolaire.</p>`;
+    body += DATE ? `<p class="uvt-foot">Médiane de ${n} passages ce jour-là.</p>`
+      : `<p class="uvt-foot">Valeur habituelle sur ${n} passages de la période scolaire.</p>`;
   } else {
-    body = `<p class="uvt-grey-reason">${GREY_REASONS[code] || GREY_REASONS["-"]}</p>`;
+    body = `<p class="uvt-grey-reason">${greyReason(code)}</p>`;
     if (code === "p" && seg.v[slot]) body += `<p class="uvt-foot">${seg.v[slot][2]} passages mesurés à ce moment.</p>`;
   }
   const worst = worstHour(seg);
-  const worstText = worst ? `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>` : "";
+  let worstText = "";
+  if (worst && DATE) worstText = `<p>C'est entre <b>${worst.h} h et ${slotEnd(worst.h)}</b> que les bus y ont perdu le plus de temps ce jour-là (${seconds(worst.s)}).</p>`;
+  else if (worst) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
   return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>${esc(seg.n)}</h3>`
     + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
 }
@@ -288,11 +325,17 @@ function fitHeight(state) {
 
 function render(state) {
   const { data, slot } = state;
+  STEP = data.step || 1;
+  DATE = data.date || null;
   const v = verdict(data, slot);
   state.head.innerHTML = `${data.label ? `<div class="uvt-label">${esc(data.label)}</div>` : ""}`
     + `<div class="uvt-verdict">${esc(v.text)}</div><div class="uvt-sub">${esc(v.sub)}</div>`;
-  state.clock.textContent = slot === WHOLE_DAY ? "Toute la journée" : `${slot} h`;
+  state.clock.textContent = clockText(slot);
+  state.range.max = String(24 - STEP);
+  state.range.step = String(STEP);
   state.range.value = String(slot === WHOLE_DAY ? state.lastHour : slot);
+  state.play.setAttribute("aria-pressed", state.timer ? "true" : "false");
+  state.play.textContent = state.timer ? "Pause" : "▶ Lecture";
   state.range.classList.toggle("off", slot === WHOLE_DAY);
   state.allDay.setAttribute("aria-pressed", slot === WHOLE_DAY ? "true" : "false");
   if (state.selected) {
@@ -306,26 +349,63 @@ function render(state) {
   if (state.overlay && state.deck) state.overlay.setProps({ layers: buildLayers(state.deck, state) });
 }
 
+function stopPlay(state) {
+  if (state.timer) window.clearInterval(state.timer);
+  state.timer = null;
+}
+
+function firstServedSlot(data) {
+  const scope = data.segments.filter((s) => s.c);
+  for (let h = 0; h < WHOLE_DAY; h += STEP) {
+    if (h >= 5 && scope.some((s) => measuredAt(s, h))) return h;
+  }
+  return 6;
+}
+
 function buildControls(state) {
   const bottom = document.createElement("div");
   bottom.className = "uvt-bottom";
   bottom.innerHTML = '<div class="uvt-controls"><div class="uvt-clock" aria-live="polite"></div>'
     + '<div class="uvt-range-box"><input class="uvt-range" type="range" min="0" max="23" step="1" aria-label="Heure de la journée">'
     + '<div class="uvt-ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>23 h</span></div></div>'
+    + '<button class="uvt-play" type="button" aria-pressed="false" aria-label="Lecture animée heure par heure">▶ Lecture</button>'
     + '<button class="uvt-allday" type="button" aria-pressed="false">Toute la journée</button></div>'
     + '<div class="uvt-legend"></div>';
   state.root.append(bottom);
   state.clock = bottom.querySelector(".uvt-clock");
   state.range = bottom.querySelector(".uvt-range");
   state.allDay = bottom.querySelector(".uvt-allday");
+  state.play = bottom.querySelector(".uvt-play");
   state.legend = bottom.querySelector(".uvt-legend");
   state.range.addEventListener("input", () => {
+    stopPlay(state);
     state.slot = Number(state.range.value);
     state.lastHour = state.slot;
     render(state);
   });
   state.allDay.addEventListener("click", () => {
+    stopPlay(state);
     state.slot = state.slot === WHOLE_DAY ? state.lastHour : WHOLE_DAY;
+    render(state);
+  });
+  state.play.addEventListener("click", () => {
+    if (state.timer) {
+      stopPlay(state);
+      render(state);
+      return;
+    }
+    const last = 24 - STEP;
+    if (state.slot === WHOLE_DAY || state.slot >= last) state.slot = firstServedSlot(state.data);
+    state.lastHour = state.slot;
+    state.timer = window.setInterval(() => {
+      if (state.slot + STEP > last) {
+        stopPlay(state);
+      } else {
+        state.slot += STEP;
+        state.lastHour = state.slot;
+      }
+      render(state);
+    }, PLAY_MS);
     render(state);
   });
 }
@@ -358,9 +438,11 @@ export default async function (component) {
     fitHeight(state);
     window.addEventListener("resize", () => fitHeight(state));
   }
-  const key = `${data.view_key}|${data.segments.length}|${data.slot}`;
+  const key = `${data.view_key}|${data.mode}|${data.segments.length}|${data.slot}`;
   state.data = data;
+  STEP = data.step || 1;
   if (state.dataKey !== key) {
+    stopPlay(state);
     state.dataKey = key;
     state.slot = data.slot;
     state.lastHour = data.slot === WHOLE_DAY ? 8 : data.slot;
@@ -425,6 +507,7 @@ export default async function (component) {
   }
   render(state);
   return () => {
+    stopPlay(state);
     if (state.map) state.map.remove();
     delete parentElement.__uvTroncons;
   };

@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 576 tests pytest
+└── tests/                          # 29 fichiers, 580 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1417,6 +1417,18 @@ valeurs) pour 39 jours. Sur la VM, à `Nice=19` et E/S `idle`, la collecte
 attendu nul hors ces écritures d'au plus quelques secondes. Échec journalisé « Tronçons : calcul
 échoué » dans `data/collect.log` (code 1, signalé par la veille).
 
+**Date précise** (`date_cells`, calcul à la demande, rien n'est écrit) : les
+lignes de `troncons_jour` d'une date sont regroupées en créneaux de 2 h
+(`DATE_SLOT_HOURS`, heure = début du créneau : 0, 2, … 22) et sur la journée,
+avec `summarize_cells` et un seuil de `DATE_MIN_PASSAGES` = 8 passages ce
+jour-là (au lieu de 20 passages sur 3 jours pour un jour type) ; mêmes paliers
+et mêmes lignes exploitables que les jours types. Mesuré sur la copie de
+production : 0,3 à 0,5 s et 3 à 4 Mo par date. Couverture (portions de bus
+mesurées sur 4 932) : mercredi 07/10/2026, 1 244 à 8-10 h et 1 243 à
+16-18 h ; samedi 10/10, 365 et 874 ; dimanche 04/10, 92 et 310. Avec des
+créneaux de 4 h, le dimanche passerait à 692 (8-12 h) et 1 147 (16-20 h) :
+non retenu à ce jour.
+
 **Tram de bout en bout** (`build_tram`, table `troncons_tram`, même nuit,
 même période et mêmes jours exclus). Pour chaque course de tram : temps
 perdu = retard à l'arrivée au dernier arrêt observé (départ à défaut) − retard
@@ -1634,6 +1646,32 @@ lecteur qui n'est pas analyste :
      bandeau sous la carte, avec l'heure en grand et la légende en barre ;
      ouverture sur l'heure où le plus de tronçons perdent beaucoup de temps dans
      le périmètre (`worst_slot`) ;
+   - **lecture animée** (bouton « ▶ Lecture », « Pause » pendant la lecture) :
+     dans le navigateur, un cran par seconde (`PLAY_MS`), depuis l'heure
+     affichée, ou depuis le premier créneau servi à partir de 5 h quand la
+     carte est sur « Toute la journée » ; elle s'arrête au dernier créneau, dès
+     qu'on touche le curseur ou « Toute la journée », ou quand les données
+     changent ; jamais lancée d'office ;
+   - **date précise** (« Une date précise » dans le menu Jour, calendrier sur
+     la ligne du titre, `contention_date`) : jours calculés de la période
+     scolaire (`troncons_jours_faits`, `contention_dates`), hors jours exclus ;
+     un jour exclu ou non calculé est refusé avec sa raison. Les cases viennent
+     de `troncons.date_cells` (`load_troncons_date`, cache 1 h, 20 dates au
+     plus) ; le curseur passe en créneaux de 2 h (« 8-10 h », données `step` =
+     2) ; toutes les portions de bus sont dessinées, en gris « aucun passage »
+     faute de passage ce jour-là. Le verdict dit « Entre 8 h et 10 h, … » et sa
+     seconde phrase « Ce jour-là, 1233 portions sur 4932 ont assez de passages
+     pour être mesurées. Les autres sont grises. », suivie de la raison si
+     besoin (`date_coverage_reason`) : week-end (« C'est un dimanche : moins de
+     bus circulent… ») ou jour de semaine à moins de 70 % des passages d'un
+     jour de semaine médian (`CONTENTION_LOW_SERVICE`). Le panneau parle au
+     passé (« temps médian que les bus ont perdu ici ce jour-là », « Médiane de
+     N passages ce jour-là ») ; une portion grise dit « Moins de 8 passages sur
+     ce créneau ce jour-là ». Le tram de bout en bout n'existe que pour les
+     jours types : une ligne de tram choisie affiche « Le temps perdu de bout en
+     bout du tram n'est calculé que pour les jours types ». Données envoyées :
+     2,4 Mo pour une date contre 3,1 Mo pour un jour type, construites en
+     0,5 s ;
    - **verdict** en haut à gauche, recalculé à chaque cran : « À 17 h,
      17 portions entre deux arrêts ralentissent nettement les bus à Mérignac, et
      20 un peu. », puis le nombre de portions mesurées ; le nom du périmètre est
@@ -2851,6 +2889,9 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 16. **Vue rapide non éprouvée** : la vue rapide, le guide et le lexique
     (section 11.3) n'ont pas encore été testés auprès de lecteurs non
     analystes ; seuls ces tests diront où un élu ou un agent bloque encore.
+17. **Carte d'une date le week-end** : avec 8 passages par créneau de 2 h, un
+    dimanche ne colore que 2 à 7 % des portions de bus (section 10.5) ; la
+    carte reste surtout grise, la phrase de couverture le dit.
 
 ---
 
@@ -2930,7 +2971,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 576, isolés (suite `pytest` complète : 576 passed), flux synthétiques
+- Tests : 580, isolés (suite `pytest` complète : 580 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

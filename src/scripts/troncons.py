@@ -43,6 +43,8 @@ MAX_SCHEDULED_SECONDS = 1800
 BIG_LOSS_SECONDS = 120
 MIN_PASSAGES = 20
 MIN_DAYS = 3
+DATE_MIN_PASSAGES = 8
+DATE_SLOT_HOURS = 2
 MAX_ZERO_SHARE = ind.DOUBTFUL_ZERO_SHARE * 100
 MAX_PLATEAU_SHARE = 15.0
 WHOLE_DAY = -1
@@ -189,12 +191,14 @@ def _cell_stats(vals: pd.DataFrame, keys: list) -> pd.DataFrame:
                          "jours": g["date_service"].nunique()})
 
 
-def summarize_cells(rows: pd.DataFrame, good_routes: set) -> pd.DataFrame:
+def summarize_cells(rows: pd.DataFrame, good_routes: set, min_passages: int = MIN_PASSAGES,
+                    min_days: int = MIN_DAYS) -> pd.DataFrame:
     """Statut et médianes de chaque case (jour type, heure, tronçon), plus la journée entière (heure = -1).
 
     `rows` : lignes de `troncons_jour` (avec jour_type). Les lignes hors `good_routes` ne comptent
     que pour signaler un tronçon « douteux » quand elles sont seules à le parcourir. Les valeurs sont
-    lues en tableaux d'entiers (pas d'objets pandas) pour limiter la mémoire.
+    lues en tableaux d'entiers (pas d'objets pandas) pour limiter la mémoire. Une case est mesurée
+    à partir de `min_passages` passages sur `min_days` jours distincts.
     """
     cols = ["jour_type", "heure", "from_stop_id", "to_stop_id", "statut", "palier", "mediane_s", "mediane_pct",
             "passages", "part_2min", "jours"]
@@ -229,13 +233,26 @@ def summarize_cells(rows: pd.DataFrame, good_routes: set) -> pd.DataFrame:
     out = pd.concat(frames, ignore_index=True)
     out["passages"] = out["passages"].fillna(0).astype(int)
     out["jours"] = out["jours"].fillna(0).astype(int)
-    enough = (out["passages"] >= MIN_PASSAGES) & (out["jours"] >= MIN_DAYS)
+    enough = (out["passages"] >= min_passages) & (out["jours"] >= min_days)
     out["statut"] = np.select(
         [(out["measurable"] == 0) & (out["terminus"] > 0), ~out["any_good"], ~enough],
         [TERMINUS, DOUBTFUL, FEW], default=MEASURED)
     out["palier"] = [troncon_tier(s, p) if st == MEASURED else None
                      for s, p, st in zip(out["mediane_s"], out["mediane_pct"], out["statut"])]
     return out[cols]
+
+
+def date_cells(conn, day: str, good_routes: set) -> pd.DataFrame:
+    """Cases d'une date précise, calculées à la demande depuis `troncons_jour` (rien n'est écrit).
+
+    Créneaux de DATE_SLOT_HOURS heures (heure = début du créneau : 0, 2, … 22) et journée entière
+    (heure = -1) ; une case est mesurée à partir de DATE_MIN_PASSAGES passages ce jour-là.
+    """
+    rows = pd.read_sql_query(
+        "SELECT date_service, from_stop_id, to_stop_id, route_id, heure, n, n_terminus, gains, pcts "
+        "FROM troncons_jour WHERE date_service = ?", conn, params=(day,))
+    rows = rows.assign(jour_type=day, heure=rows["heure"] // DATE_SLOT_HOURS * DATE_SLOT_HOURS)
+    return summarize_cells(rows, good_routes, DATE_MIN_PASSAGES, 1)
 
 
 def build_map(conn, since: str, end: str) -> dict:

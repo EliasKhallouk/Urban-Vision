@@ -86,6 +86,7 @@ _SRC_SCRIPTS = str(Path(__file__).resolve().parents[1] / "src" / "scripts")
 if _SRC_SCRIPTS not in sys.path:
     sys.path.insert(0, _SRC_SCRIPTS)
 import indicateurs as ind  # noqa: E402
+import troncons  # noqa: E402
 from generate_all_reports import slug as report_slug  # noqa: E402
 from palette import (  # noqa: E402
     BLACK_FOREST,
@@ -3623,7 +3624,10 @@ def _download_pdf(label: str, path: Path, key: str) -> None:
                        width="stretch")
 
 
-CONTENTION_DAYS = {"semaine": "Semaine type", "samedi": "Samedi type", "dimanche": "Dimanche type"}
+CONTENTION_DAYS = {"semaine": "Semaine type", "samedi": "Samedi type", "dimanche": "Dimanche type",
+                   "date": "Une date précise"}
+CONTENTION_LOW_SERVICE = 0.7
+WEEKDAY_NAMES = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
 TRONCONS_TIMER = Path("/etc/systemd/system/urban-vision-troncons.timer")
 
 
@@ -3680,6 +3684,49 @@ def load_troncons(_conn, jour_type: str, computed_at: int) -> dict:
             "tram": tram, "tram_lines": tram_lines_payload(tram_rows, tram_names)}
 
 
+@st.cache_data(ttl=3600)
+def load_troncons_days(_conn, computed_at: int) -> dict:
+    """Dates calculées par `troncons.py` (table troncons_jours_faits) et leur nombre de passages gardés."""
+    try:
+        return dict(_conn.execute("SELECT date_service, passages FROM troncons_jours_faits ORDER BY 1"))
+    except sqlite3.Error:
+        return {}
+
+
+@st.cache_data(ttl=3600, max_entries=20)
+def load_troncons_date(_conn, day: str, computed_at: int, good: tuple) -> pd.DataFrame:
+    """Cases d'une date précise, en créneaux de 2 h (`troncons.date_cells`), gardées en cache une heure."""
+    return troncons.date_cells(_conn, day, set(good))
+
+
+def contention_dates(days: dict, since: str, until: str, excluded: list) -> list[str]:
+    """Dates proposées : jours calculés de la période, hors jours exclus (collecte incomplète)."""
+    return [d for d in days if since <= d < until and d not in set(excluded)]
+
+
+def date_coverage_reason(day: str, passages: dict, excluded: list) -> str | None:
+    """Raison d'une couverture faible ce jour-là : week-end, ou service bien plus faible qu'un jour de semaine."""
+    weekday = datetime.strptime(day, "%Y-%m-%d").weekday()
+    if weekday >= 5:
+        return (f"C'est un {WEEKDAY_NAMES[weekday]} : moins de bus circulent, beaucoup de portions n'atteignent "
+                "pas 8 passages en 2 heures.")
+    normal = [n for d, n in passages.items()
+              if d not in set(excluded) and datetime.strptime(d, "%Y-%m-%d").weekday() < 5]
+    if not normal or day not in passages:
+        return None
+    reference = float(np.median(normal))
+    share = passages[day] / reference if reference else 1.0
+    if share < CONTENTION_LOW_SERVICE:
+        return (f"Ce jour-là, le service était plus faible qu'un jour de semaine habituel ({share * 100:.0f} % "
+                "des passages).")
+    return None
+
+
+def date_label(day: str) -> str:
+    d = datetime.strptime(day, "%Y-%m-%d")
+    return f"{WEEKDAY_NAMES[d.weekday()]} {d:%d/%m/%Y}"
+
+
 def contention_scope(commune: str | None, route_id: str | None, line_name: str | None, stop_id: str | None,
                      stop_name: str | None) -> dict:
     """Périmètre de la carte des tronçons d'après le fil d'Ariane, avec ses textes.
@@ -3701,7 +3748,7 @@ def contention_scope(commune: str | None, route_id: str | None, line_name: str |
 
 def render_page_contention(c: PageContext) -> None:
     meta = load_troncons_meta(c.conn)
-    title, choice = st.columns([0.72, 0.28], vertical_alignment="bottom")
+    title, choice, pick = st.columns([0.5, 0.25, 0.25], vertical_alignment="bottom")
     title.markdown("### Où les bus perdent du temps")
     if not meta.get("calcule_le"):
         st.info(contention_empty_message(TRONCONS_TIMER.exists()))
@@ -3711,11 +3758,33 @@ def render_page_contention(c: PageContext) -> None:
                             label_visibility="collapsed")
     since = datetime.strptime(meta["depuis"], "%Y-%m-%d")
     until = datetime.strptime(meta["jusqu_a"], "%Y-%m-%d") - timedelta(days=1)
+    day = None
+    if jour == "date":
+        passages = load_troncons_days(c.conn, int(meta["calcule_le"]))
+        excluded = meta.get("jours_exclus", [])
+        dates = contention_dates(passages, meta["depuis"], meta["jusqu_a"], excluded)
+        if not dates:
+            st.info("Aucune date calculée sur la période scolaire.")
+            return
+        with pick:
+            picked = st.date_input("Date", value=datetime.strptime(dates[-1], "%Y-%m-%d").date(),
+                                   min_value=datetime.strptime(dates[0], "%Y-%m-%d").date(),
+                                   max_value=datetime.strptime(dates[-1], "%Y-%m-%d").date(),
+                                   format="DD/MM/YYYY", key="contention_date", label_visibility="collapsed")
+        day = picked.strftime("%Y-%m-%d")
+        if day not in dates:
+            st.warning(f"Pas de carte pour le {date_label(day)} : "
+                       + ("la collecte de ce jour est incomplète, il est exclu de toutes les analyses."
+                          if day in excluded else "ce jour n'a pas été calculé.")
+                       + " Choisissez une autre date.")
+            return
+    when = (f"le {date_label(day)}, par créneau de 2 heures" if day
+            else f"période scolaire du {since:%d/%m} au {until:%d/%m/%Y}")
     st.markdown(
         '<div class="section-note contention-note">Temps que les bus perdent entre deux arrêts (circulation, feux '
-        f"ou montée des voyageurs), période scolaire du {since:%d/%m} au {until:%d/%m/%Y}.</div>",
+        f"ou montée des voyageurs), {when}.</div>",
         unsafe_allow_html=True)
-    data = load_troncons(c.conn, jour, int(meta["calcule_le"]))
+    data = load_troncons(c.conn, ind.day_type(day) if day else jour, int(meta["calcule_le"]))
     route_id, stop_id = st.session_state.get("line_id"), st.session_state.get("stop_id")
     line_name = None
     if route_id:
@@ -3724,10 +3793,17 @@ def render_page_contention(c: PageContext) -> None:
         line_name = row[0] if row else route_id
     scope = contention_scope(c.commune, route_id, line_name, stop_id, data["names"].get(stop_id) if stop_id else None)
     measurable = {r for r, q in meta.get("lignes", {}).items() if q.get("ok")}
-    if route_id and route_id not in measurable and route_id not in data["tram_lines"]:
+    if route_id and route_id not in measurable and route_id not in {t["r"] for t in data["tram"]}:
         scope["unmeasured"] = True
-    payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
-                               data["tram"], scope, data["route_ids"], measurable, data["tram_lines"])
+    cells, tram_lines, date_info = data["cells"], data["tram_lines"], None
+    if day:
+        cells = load_troncons_date(c.conn, day, int(meta["calcule_le"]), tuple(sorted(measurable)))
+        tram_lines = {}
+        date_info = {"day": day, "label": date_label(day),
+                     "reason": date_coverage_reason(day, passages, meta.get("jours_exclus", []))}
+    payload = troncons_payload(data["geo"], cells, data["lines"], data["names"], data["communes"],
+                               data["tram"], scope, data["route_ids"], measurable, tram_lines,
+                               step=2 if day else 1, date_info=date_info)
     carte_troncons(payload, key="carte_troncons")
 
 

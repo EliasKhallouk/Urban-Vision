@@ -21,6 +21,7 @@ if _SRC_PALETTE not in sys.path:
 from palette import (  # noqa: E402
     BLACK_FOREST,
     COPPERWOOD,
+    CORNSILK,
     MEDIUM,
     NEGATIVE,
     NO_DATA,
@@ -30,6 +31,7 @@ from palette import (  # noqa: E402
 )
 
 SLOTS = 25
+TRAM_TYPE = 0
 WHOLE_DAY_SLOT = 24
 MAP_HEIGHT = 640
 OFFSET_METERS = 7.0
@@ -59,11 +61,14 @@ _CSS = f"""
 .uvt-range-box {{ flex: 1; }}
 .uvt-range {{ width: 100%; accent-color: {BLACK_FOREST}; cursor: pointer; margin: 0; }}
 .uvt-range.off {{ opacity: .4; }}
-.uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
+.uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-play:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
 .uvt-ticks {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
 .uvt-allday {{ flex: none; border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; background: #FFFFFF; color: {BLACK_FOREST};
               padding: 6px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }}
 .uvt-allday[aria-pressed="true"] {{ background: {BLACK_FOREST}; color: #FEFAE0; }}
+.uvt-play {{ flex: none; border: none; border-radius: 999px; background: #F2F2EE; color: {BLACK_FOREST}; padding: 7px 14px;
+            font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }}
+.uvt-play[aria-pressed="true"] {{ background: {CORNSILK}; box-shadow: inset 0 0 0 1.5px {BLACK_FOREST}; }}
 .uvt-legend {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; padding-top: 8px;
               border-top: 1px solid rgba(40, 54, 24, .12); font-size: 12.5px; }}
 .uvt-bar {{ display: flex; align-items: stretch; border-radius: 6px; overflow: hidden; }}
@@ -115,6 +120,7 @@ _CSS = f"""
   .uvt-clock {{ min-width: 0; font-size: 18px; }}
   .uvt-range-box {{ order: 3; flex-basis: 100%; }}
   .uvt-allday {{ margin-left: auto; padding: 4px 10px; font-size: 13px; }}
+  .uvt-play {{ padding: 4px 10px; font-size: 13px; }}
   .uvt-legend {{ gap: 4px 10px; margin-top: 6px; padding-top: 6px; font-size: 11.5px; }}
   .uvt-bar .lg {{ display: none; }}
   .uvt-bar .sh {{ display: inline; }}
@@ -206,10 +212,13 @@ def tram_lines_payload(rows: pd.DataFrame, line_names: dict) -> dict:
 
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
                      tram_paths: list, scope: dict | None = None, route_ids: dict | None = None,
-                     measurable: set | None = None, tram_lines: dict | None = None) -> dict:
+                     measurable: set | None = None, tram_lines: dict | None = None, step: int = 1,
+                     date_info: dict | None = None) -> dict:
     """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
     appartenance au périmètre), tracés du tram ({"r": route_id, "p": tracé}) et son temps perdu de
     bout en bout (`tram_lines`, voir `tram_lines_payload`), cadrage, tranche d'ouverture et textes.
+    `step` : 1 pour un jour type (24 heures), 2 pour une date précise (créneaux de 2 h, rangés au début
+    du créneau) ; `date_info` : day, label (« mercredi 07/10/2026 »), reason (couverture faible).
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
     to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
@@ -236,6 +245,8 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
     focused = any(scope.get(k) for k in ("commune", "route_id", "stop_id"))
     for g in geo.itertuples(index=False):
         seg = by_seg.get((g.from_stop_id, g.to_stop_id))
+        if seg is None and date_info and g.route_type != TRAM_TYPE:
+            seg = {"codes": [ABSENT] * SLOTS, "values": {}}
         if seg is None:
             continue
         routes = route_ids.get((g.from_stop_id, g.to_stop_id), [])
@@ -260,7 +271,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "c": 1 if inside else 0,
         })
     tram_lines = tram_lines or {}
-    tram_line = scope.get("route_id") if scope.get("route_id") in tram_lines else None
+    tram_line = scope.get("route_id") if scope.get("route_id") in {p["r"] for p in tram_paths} else None
     trams = []
     for path in tram_paths:
         inside = not focused or (tram_line is not None and path["r"] == tram_line)
@@ -283,7 +294,8 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
-            "unmeasured": bool(scope.get("unmeasured")),
+            "unmeasured": bool(scope.get("unmeasured")), "step": step, "date": date_info,
+            "mode": date_info["day"] if date_info else "type",
             "colors": COLORS, "height": MAP_HEIGHT}
 
 
