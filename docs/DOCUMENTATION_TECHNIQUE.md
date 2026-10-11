@@ -2830,7 +2830,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    septembre 2026, à décider) : ils sont comptés comme des mesures dans la
    ponctualité, le retard moyen, les retards > 5 min, la carte des arrêts, les
    profils horaires et les rapports. Tram : 3,6 à 9,2 % de départs nuls
-   (85 % viennent de trajets entiers sans temps réel, 7,5 % des trajets) ;
+   (82 % viennent de trajets entiers sans temps réel) ;
    ponctualité surestimée de 0,6 à 1,9 point (ligne A : 81,3 % au lieu de
    79,4 %), retard moyen sous-estimé de 6 à 16 s ; réseau : 0,4 point de
    ponctualité, 0,3 point de score. La base de développement en compte bien
