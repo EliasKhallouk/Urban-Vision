@@ -271,6 +271,13 @@ def test_textes_du_perimetre():
     assert (s["place"], s["label"]) == ("autour de l'arrêt Gare", "Gare")
 
 
+def test_message_carte_pas_encore_calculee():
+    import app as app_mod
+    assert app_mod.contention_empty_message(True) == "La carte n'est pas encore calculée : elle l'est chaque nuit à 3 h 40."
+    local = app_mod.contention_empty_message(False)
+    assert local.startswith("La carte n'est pas encore calculée") and ".venv/bin/python src/scripts/troncons.py" in local
+
+
 def test_le_service_nocturne_est_surveille():
     import veille_collecte as vc
     assert "urban-vision-troncons.service" in vc.WATCHED_UNITS

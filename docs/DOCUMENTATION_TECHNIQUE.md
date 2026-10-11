@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 573 tests pytest
+└── tests/                          # 29 fichiers, 574 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -384,6 +384,45 @@ deploy/deployer.sh --sans-pull --sans-redemarrage  # réinstalle la configuratio
 Prérequis propres à la VM, hors dépôt : identifiants SMTP de la veille
 (section 6.5), adresse optionnelle de copie des sauvegardes hors VM
 (section 6.6), clé BigDataCloud de la veille des visiteurs (section 17.2).
+
+### 5.8 Base locale à partir d'une sauvegarde de production
+
+Sur un poste de développement, aucun timer ne tourne : les agrégats, leur
+rattrapage (règle des trajets sans temps réel, section 7.4) et le calcul de
+nuit des tronçons (section 10.5) se lancent à la main. La sauvegarde
+compressée reste intacte dans `data/sauvegardes/` (copiée depuis
+`/home/ubuntu/Urban-Vision/data/sauvegardes/` sur la VM) ; on travaille sur
+une copie décompressée, `data/urban_vision_prod.db` (dossier `data/` ignoré
+par git) :
+
+```bash
+zstd -df data/sauvegardes/urban_vision_AAAA-MM-JJ.db.zst -o data/urban_vision_prod.db
+chmod 644 data/urban_vision_prod.db && rm -f data/urban_vision_prod.db-wal data/urban_vision_prod.db-shm
+.venv/bin/python src/scripts/rafraichir_agregats.py --db data/urban_vision_prod.db --log data/calcul_prod.log
+.venv/bin/python src/scripts/troncons.py --db data/urban_vision_prod.db --log data/calcul_prod.log
+```
+
+`chmod` et la suppression de `-wal` / `-shm` évitent l'erreur « attempt to
+write a readonly database » quand l'archive est en lecture seule (`zstd`
+garde les droits du fichier). Le premier `rafraichir_agregats.py` d'une
+sauvegarde antérieure au déploiement de la règle recalcule tous les jours
+(10 à 13 s par jour) et reprend où il s'est arrêté s'il est interrompu ; il
+écrit « Trajets sans temps réel : recalcul terminé » dans le journal. Une
+sauvegarde prise avant le déploiement du score 2.0 (11/10/2026, celle de
+2 h 30 ce jour-là comprise) recalcule aussi les départs en avance par heure
+(`ensure_hourly_early`) avant la règle, soit deux passages sur les mêmes
+jours. `troncons.py` prend ensuite quelques minutes. Suivre l'avancement :
+`tail -f data/calcul_prod.log` et
+`sqlite3 data/urban_vision_prod.db "SELECT valeur FROM agg_meta"` (dernier
+jour recalculé).
+
+Le dashboard lit `data/urban_vision.db` : pour qu'il utilise la copie,
+arrêter Streamlit, mettre la base de développement de côté et la remplacer par
+un lien (`mv data/urban_vision.db data/urban_vision_dev.db && ln -s
+urban_vision_prod.db data/urban_vision.db`) ; revenir en arrière par
+`rm data/urban_vision.db && mv data/urban_vision_dev.db data/urban_vision.db`.
+SQLite suit le lien : `-wal` et `-shm` sont créés à côté de
+`urban_vision_prod.db`.
 
 ---
 
@@ -1564,7 +1603,11 @@ lecteur qui n'est pas analyste :
    scolaire et non sur la période de la barre du haut ; sur cette page, le
    choix « Période » est grisé, « Période scolaire », avec la raison en aide :
    `period_picker(locked=True)`) — carte des points de contention
-   (section 10.5). Le choix « Jour » (semaine, samedi, dimanche type) est sur
+   (section 10.5). Tant que la carte n'a jamais été calculée, la page affiche
+   « La carte n'est pas encore calculée : elle l'est chaque nuit à 3 h 40. » ;
+   sur un poste sans `/etc/systemd/system/urban-vision-troncons.timer`, le
+   message donne aussi la commande à lancer (`contention_empty_message`,
+   section 5.8). Le choix « Jour » (semaine, samedi, dimanche type) est sur
    la ligne du titre, suivi d'une phrase d'explication ; la carte prend la
    hauteur de l'écran (`fitHeight` : entre 400 et 760 px sur ordinateur, entre
    460 et 720 px sous 640 px de large) pour que la carte, le curseur et la
@@ -2868,7 +2911,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 573, isolés (suite `pytest` complète : 573 passed), flux synthétiques
+- Tests : 574, isolés (suite `pytest` complète : 574 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

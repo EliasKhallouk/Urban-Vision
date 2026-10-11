@@ -3572,6 +3572,17 @@ def _download_pdf(label: str, path: Path, key: str) -> None:
 
 
 CONTENTION_DAYS = {"semaine": "Semaine type", "samedi": "Samedi type", "dimanche": "Dimanche type"}
+TRONCONS_TIMER = Path("/etc/systemd/system/urban-vision-troncons.timer")
+
+
+def contention_empty_message(timer_installed: bool) -> str:
+    """Message de la carte des tronçons jamais calculée ; sans le timer de nuit (poste local), la commande à lancer."""
+    text = "La carte n'est pas encore calculée : elle l'est chaque nuit à 3 h 40."
+    if timer_installed:
+        return text
+    return (f"{text}\n\nSur ce poste, le calcul de nuit n'est pas installé. Lancez-le depuis la racine du projet, "
+            "puis rechargez la page (quelques minutes, davantage au premier passage) :\n\n"
+            "```bash\n.venv/bin/python src/scripts/troncons.py\n```")
 
 
 @st.cache_data(ttl=3600)
@@ -3641,7 +3652,7 @@ def render_page_contention(c: PageContext) -> None:
     title, choice = st.columns([0.72, 0.28], vertical_alignment="bottom")
     title.markdown("### Où les bus perdent du temps")
     if not meta.get("calcule_le"):
-        st.info("La carte n'est pas encore calculée : elle l'est chaque nuit.")
+        st.info(contention_empty_message(TRONCONS_TIMER.exists()))
         return
     with choice:
         jour = st.selectbox("Jour", list(CONTENTION_DAYS), format_func=CONTENTION_DAYS.get, key="contention_jour",
