@@ -7,22 +7,19 @@ import diagnostic as dg
 
 
 class TestScore:
-    def test_formule_et_bornes(self):
-        assert dg.reliability_score(90.0, 5.0) == 80.0
-        assert dg.reliability_score(10.0, 20.0) == 0.0
-
-    def test_repartition_des_points_perdus(self):
-        b = dg.score_breakdown(88.0, 3.0)
+    def test_repartition_exacte_des_points_perdus(self):
+        b = dg.score_breakdown(82.0, 94.0)
         assert b["score"] == 82.0
         assert b["lost"] == 18.0
-        assert (b["lost_delay"], b["lost_skip"]) == (12.0, 6.0)
+        assert (b["lost_delay"], b["lost_service"]) == (12.0, 6.0)
+        assert b["lost_delay"] + b["lost_service"] == b["lost"]
         assert b["dominant"] == "retards"
 
     def test_service_non_rendu_dominant(self):
-        assert dg.score_breakdown(97.0, 6.0)["dominant"] == "service"
+        assert dg.score_breakdown(90.0, 92.0)["dominant"] == "service"
 
     def test_aucun_probleme_sous_5_points(self):
-        assert dg.score_breakdown(97.0, 0.5)["dominant"] == "aucun"
+        assert dg.score_breakdown(97.0, 99.0)["dominant"] == "aucun"
 
 
 class TestLigneResponsable:
@@ -160,18 +157,18 @@ class TestQuand:
         assert t.loc[0, "pct_gt300"] == 20.0
 
     def test_evolution_par_rapport_a_la_periode_precedente(self):
-        cols = ["obs", "cnt_le300", "skipped", "eligible"]
-        current = pd.DataFrame([[100, 70, 5, 100], [100, 70, 5, 100]], columns=cols)
-        previous = pd.DataFrame([[100, 90, 0, 100]], columns=cols)
+        cols = ["expected", "assured_on_time"]
+        current = pd.DataFrame([[100, 60], [100, 60]], columns=cols)
+        previous = pd.DataFrame([[100, 90]], columns=cols)
         assert dg.period_score(current) == 60.0
         assert dg.score_change(current, previous) == {"current": 60.0, "previous": 90.0, "delta": -30.0}
 
     def test_evolution_sans_periode_precedente(self):
-        cols = ["obs", "cnt_le300", "skipped", "eligible"]
-        current = pd.DataFrame([[10, 9, 0, 10]], columns=cols)
+        cols = ["expected", "assured_on_time"]
+        current = pd.DataFrame([[10, 9]], columns=cols)
         assert dg.score_change(current, None) is None
         assert dg.score_change(current, pd.DataFrame(columns=cols)) is None
-        assert dg.period_score(pd.DataFrame([[0, 0, 0, 0]], columns=cols)) is None
+        assert dg.period_score(pd.DataFrame([[0, 0]], columns=cols)) is None
 
     def test_rang(self):
         assert dg.percentile_rank(50.0, pd.Series([10.0, 50.0, 90.0, 95.0])) == 50.0
@@ -269,13 +266,15 @@ class TestPhrases:
 
     def test_fiche_ligne(self):
         origin = dg.classify_delay_origin(_profile())
-        lines = dg.line_summary("11", dg.score_breakdown(74.0, 6.0), 41, origin,
+        lines = dg.line_summary("11", dg.score_breakdown(62.0, 88.0), 41, origin,
                                 {"terminus": "vers Aéroport", "share": 0.7},
                                 {"verdict": "extrémités", "rate": 6.0, "block": None},
                                 {"days": 0, "bad_days": 0, "bad_dates": [], "verdict": "aucun"}, None)
         text = " ".join(lines)
-        assert text.startswith("Sur 38 points perdus, 26 viennent des retards et 12 des arrêts non desservis.")
-        assert "41 course(s) supprimée(s)" in text
+        assert text.startswith("Sur 38 points perdus, 26 viennent des horaires non tenus (retard de plus de "
+                               "5 min ou avance de plus d'1 min) et 12 du service non rendu (arrêts non "
+                               "desservis, courses supprimées).")
+        assert "41 course(s) supprimée(s) sur la période ; celles qui n'ont pas été remplacées comptent" in text
         assert "entre B et C (Mérignac)" in text
         assert "Le sens vers Aéroport concentre 70 %" in text
         assert "extrémités" in text

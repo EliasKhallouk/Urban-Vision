@@ -51,6 +51,19 @@ def ensure_segments(conn) -> int:
     return len(days)
 
 
+def ensure_hourly_early(conn, today: str) -> int:
+    days = [d for d in dbio.hourly_early_missing_days(conn) if d < today]
+    if not days:
+        return 0
+    logger.info("Départs en avance par heure (agg_hourly) : rattrapage de %d jours…", len(days))
+    start = time.monotonic()
+    for day in days:
+        dbio.refresh_aggregates(conn, days=[day])
+        time.sleep(BACKFILL_PAUSE_SECONDS)
+    logger.info("Départs en avance par heure : rattrapage terminé en %.0f s", time.monotonic() - start)
+    return len(days)
+
+
 def refresh_segments(conn, now: datetime) -> float:
     start = time.monotonic()
     dbio.refresh_segments(conn, days=days_to_refresh(now))
@@ -104,6 +117,11 @@ def main(argv=None) -> int:
             log_refresh_duration(refresh_segments(conn, now), "tronçons")
         except Exception as e:
             logger.warning("Refresh des tronçons échoué : %s", e)
+            status = 1
+        try:
+            ensure_hourly_early(conn, now.strftime("%Y-%m-%d"))
+        except Exception as e:
+            logger.warning("Rattrapage des départs en avance par heure échoué : %s", e)
             status = 1
         try:
             ensure_v2_history(conn, now.strftime("%Y-%m-%d"))

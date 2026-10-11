@@ -122,3 +122,40 @@ class TestMain:
         monkeypatch.setattr(dbio, "refresh_aggregates", boom)
         assert ra.main(["--db", str(db_path), "--log", str(tmp_path / "collect.log")]) == 1
         assert "Refresh des agrégats échoué : database is locked" in (tmp_path / "collect.log").read_text()
+
+
+class TestDepartsEnAvanceParHeure:
+    def _seed(self, conn):
+        departure = int(datetime(2026, 9, 11, 8, 0).timestamp())
+        conn.executemany(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id, "
+            "schedule_relationship, departure_delay, departure_time, last_seen_at) "
+            "VALUES (?, '20260911', 'A', 0, 1, 's1', 'SCHEDULED', ?, ?, ?)",
+            [("t1", -120, departure, departure), ("t2", 30, departure + 600, departure + 600)])
+        conn.commit()
+
+    def test_colonne_ajoutee_a_une_ancienne_table(self):
+        import db as dbio
+
+        old = sqlite3.connect(":memory:")
+        old.execute("CREATE TABLE agg_hourly (date_service TEXT, route_id TEXT, heure INTEGER, obs INTEGER, "
+                    "sum_delay INTEGER, cnt_le300 INTEGER, cnt_gt300 INTEGER)")
+        old.execute("INSERT INTO agg_hourly VALUES ('2026-09-11', 'A', 8, 2, 0, 2, 0)")
+        dbio.migrate_agg_columns(old)
+        assert old.execute("SELECT cnt_lt60 FROM agg_hourly").fetchone() == (0,)
+
+    def test_jours_sans_departs_en_avance_recalcules(self, conn, monkeypatch):
+        import db as dbio
+
+        self._seed(conn)
+        dbio.refresh_aggregates(conn, days=["2026-09-11"])
+        assert conn.execute("SELECT SUM(cnt_lt60) FROM agg_hourly").fetchone() == (1,)
+        assert dbio.hourly_early_missing_days(conn) == []
+        conn.execute("UPDATE agg_hourly SET cnt_lt60 = 0")
+        conn.execute("UPDATE agg_hourly_stop SET cnt_lt60 = 0")
+        assert dbio.hourly_early_missing_days(conn) == ["2026-09-11"]
+        monkeypatch.setattr(ra.time, "sleep", lambda s: None)
+        assert ra.ensure_hourly_early(conn, "2026-09-11") == 0
+        assert ra.ensure_hourly_early(conn, "2026-09-12") == 1
+        assert conn.execute("SELECT SUM(cnt_lt60) FROM agg_hourly_stop").fetchone() == (1,)
+        assert dbio.hourly_early_missing_days(conn) == []

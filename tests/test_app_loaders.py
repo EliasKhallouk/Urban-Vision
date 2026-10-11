@@ -279,14 +279,14 @@ class TestLoadCommuneStats:
         )
         conn.commit()
 
-    def test_classement_et_score_pondere_par_saute(self, conn):
+    def test_classement_et_score_service_assure_fois_ponctualite(self, conn):
         self._seed(conn)
         cutoff = _epoch_local(2026, 9, 12)
         since = _epoch_local(2026, 9, 1)
         end = _epoch_local(2026, 9, 12)
         df = app_mod.load_commune_stats(conn, cutoff, since, end)
         assert list(df["commune"]) == ["Ambarès", "Lormont"]
-        assert [round(v, 6) for v in df["score_fiabilite"]] == [50.0, 90.0]
+        assert [round(v, 6) for v in df["score_fiabilite"]] == [63.0, 90.0]
         row = df[df["commune"] == "Ambarès"].iloc[0]
         assert round(row["pct_arrets_sautes"], 6) == 10.0
         assert round(row["retard_moyen_s"], 6) == 200.0
@@ -331,7 +331,7 @@ class TestLoadTerritorial:
         )
         conn.commit()
 
-    def test_score_de_l_arret_integre_les_arrets_sautes(self, conn):
+    def test_score_de_l_arret_somme_les_composantes_de_ses_lignes(self, conn):
         self._seed(conn)
         cutoff = _epoch_local(2026, 9, 12)
         df = app_mod.load_territorial(conn, cutoff, _epoch_local(2026, 9, 1), _epoch_local(2026, 9, 12))
@@ -339,7 +339,7 @@ class TestLoadTerritorial:
         assert s1["observations"] == 400
         assert s1["pct_a_l_heure"] == 90.0
         assert s1["pct_arrets_sautes"] == 5.0
-        assert s1["score_fiabilite"] == 80.0
+        assert s1["score_fiabilite"] == round(100 * (285 / 300 * 285 + 75 / 100 * 95) / 400, 1)
         assert s1["lignes"] == "1, A"
 
     def test_ligne_principale_donne_le_mode_et_la_direction(self, conn):
@@ -561,12 +561,12 @@ class TestLoadersDiagnostic:
         st.cache_data.clear()
         assert app_mod.segments_available(conn) is True
 
-    def test_courses_supprimees_bornees_a_la_periode_et_stabilisees(self, conn):
+    def test_courses_supprimees_de_la_periode_comme_le_score(self, conn):
         self._seed(conn)
         cutoff, since, end = self._bounds()
         canc = app_mod.load_line_cancellations(conn, cutoff, since, end, "A")
         assert len(canc) == 1
-        assert (int(canc["cancelled"].iloc[0]), int(canc["trips"].iloc[0])) == (1, 3)
+        assert (int(canc["cancelled"].iloc[0]), int(canc["added"].iloc[0]), int(canc["trips"].iloc[0])) == (2, 0, 4)
 
     def test_arrets_de_la_ligne_classes_par_impact(self, conn):
         self._seed(conn)
@@ -575,7 +575,7 @@ class TestLoadersDiagnostic:
         assert stops.iloc[0]["stop_id"] in {"s2", "s3"}
         s3 = stops[stops["stop_id"] == "s3"].iloc[0]
         assert (s3["cnt_gt300"], s3["direction"]) == (1, "vers Parc")
-        assert s3["score_fiabilite"] == 50.0
+        assert s3["score_fiabilite"] == pytest.approx(100 * (1 / 2 * 2) / (2 + 2 * 2 / 2))
 
     def test_compteurs_d_un_arret_et_table_des_lignes(self, conn):
         self._seed(conn)
@@ -591,10 +591,10 @@ class TestLoadersDiagnostic:
 
 
 class TestAidesFiche:
-    def test_score_reseau_pondere(self):
-        ranking = pd.DataFrame({"observations": [100, 300], "pct_a_l_heure": [80.0, 100.0],
-                                "skipped": [5, 5], "eligible": [100, 400]})
-        assert app_mod.network_score(ranking) == pytest.approx(95.0 - 2 * 2.0)
+    def test_score_reseau_somme_des_composantes(self):
+        ranking = pd.DataFrame({"assured_on_time": [76.0, 395.0], "expected": [100.0, 400.0]})
+        assert app_mod.network_score(ranking) == pytest.approx(100 * 471 / 500)
+        assert app_mod.network_score(ranking.head(0)) == 0.0
 
     def test_libelles_de_recherche(self):
         df = pd.DataFrame({"stop_id": ["s1", "s2"], "stop_name": ["Gare", "Parc"],
@@ -622,6 +622,7 @@ class TestAidesFiche:
 
 class TestLoadRouteHourlyStops:
     def test_agregats_horaires_de_la_ligne_par_arret(self, conn):
+        gtfs_static.create_static_tables(conn)
         conn.executemany(
             "INSERT INTO agg_hourly_stop (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, "
             "cnt_gt300) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -664,4 +665,15 @@ class TestLoadMethodV2:
         assert line["attente_excedentaire"] == pytest.approx(2_000_000 / 6000 - 300)
         doubtful = app_mod.load_method_v2(conn, end, since, end, route_id="D")
         assert doubtful["disponible"] is False
-        assert "temps réel douteux" in app_mod.method_v2_caption(doubtful, "D")
+        assert app_mod.method_v2_caption(doubtful, "D") is None
+        assert "temps réel est douteux (100 %" in app_mod.excluded_line_message(conn, end, since, end, "D")
+        assert app_mod.excluded_line_message(conn, end, since, end, "A") is None
+
+    def test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score(self, conn):
+        self._seed(conn)
+        since, end = _epoch_local(2026, 9, 14), _epoch_local(2026, 9, 16)
+        ranking = app_mod.make_ranking(*app_mod.load_network_data(conn, end, since, end))
+        assert list(ranking["route_id"]) == ["A"]
+        assert app_mod.network_score(ranking) == pytest.approx(app_mod.load_method_v2(conn, end, since, end)["score"])
+        assert ranking["pct_a_l_heure"].iloc[0] == pytest.approx(80.0)
+        assert ranking["pct_service"].iloc[0] == pytest.approx(100 * 100 / 110)

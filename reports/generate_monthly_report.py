@@ -38,7 +38,7 @@ if _REPORTS_DIR not in sys.path:
     sys.path.insert(0, _REPORTS_DIR)
 from palette import (  # noqa: E402  (module partagé de charte et de seuils)
     BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, SUNLIT_CLAY, CORNSILK, WHITE, TEAL,
-    hex as palette_hex, kpi_latex as palette_kpi_latex,
+    hex as palette_hex, kpi_latex as palette_kpi_latex, tier_label,
 )
 
 _SCRIPTS_DIR = str(Path(__file__).resolve().parents[1] / "src" / "scripts")
@@ -91,7 +91,13 @@ def latex(value: object) -> str:
 
 
 def pct(value: float | None, decimals: int = 1) -> str:
-    return "—" if value is None or pd.isna(value) else f"{value:.{decimals}f}\\%"
+    return "—" if value is None or pd.isna(value) else f"{number(value, decimals)}\\,\\%"
+
+
+def fr(value: float, decimals: int = 1, signed: bool = False) -> str:
+    """Nombre en texte brut à la française (virgule décimale, signe moins typographique), hors LaTeX."""
+    text = f"{value:{'+' if signed else ''}.{decimals}f}".replace(".", ",")
+    return text.replace("-", "−")
 
 
 def number(value: float | int | None, decimals: int = 0) -> str:
@@ -186,8 +192,34 @@ def month_bounds(month: str) -> tuple[int, int]:
     return int(start.timestamp()), int(end.timestamp())
 
 
+def month_days(month: str) -> tuple[str, str]:
+    return f"{month}-01", f"{next_month(month)}-01"
+
+
+def month_exclusions(conn: sqlite3.Connection, month: str) -> ind.Exclusions:
+    """Jours incomplets et lignes au temps réel douteux du mois, écartés de tous les indicateurs."""
+    try:
+        return ind.exclusions(conn, *month_days(month))
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        return ind.Exclusions()
+
+
+def _in_list(values) -> str:
+    return ", ".join("?" for _ in values)
+
+
+def on_time_share(delays: pd.Series) -> float:
+    """Part (en %) des départs entre EARLY_TOLERANCE_SECONDS d'avance et LATE_TOLERANCE_SECONDS de retard."""
+    window = (delays >= -ind.EARLY_TOLERANCE_SECONDS) & (delays <= ind.LATE_TOLERANCE_SECONDS)
+    return float(window.mean() * 100) if len(delays) else float("nan")
+
+
 def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """Return scheduled and skipped observations for the calendar month and scope."""
+    """Return scheduled and skipped observations for the calendar month and scope.
+
+    Les jours incomplets et les lignes au temps réel douteux du mois (`month_exclusions`) sont exclus :
+    jour du départ effectif pour les passages, jour de la course pour les arrêts non desservis.
+    """
     latest = conn.execute("SELECT MAX(last_seen_at) FROM observations").fetchone()[0]
     if latest is None:
         raise ValueError("La base ne contient aucune observation.")
@@ -232,6 +264,14 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
         )
         params.extend(canonical_communes)
 
+    excl = month_exclusions(conn, month)
+    doubtful_filter = f" AND o.route_id NOT IN ({_in_list(excl.lignes)})" if excl.lignes else ""
+    params.extend(excl.lignes)
+    days = list(excl.jours)
+    departure_day_filter = (f" AND date(o.departure_time, 'unixepoch', 'localtime') NOT IN ({_in_list(days)})"
+                            if days else "")
+    trip_day_filter = (" AND substr(o.start_date, 1, 4) || '-' || substr(o.start_date, 5, 2) || '-' || "
+                       f"substr(o.start_date, 7, 2) NOT IN ({_in_list(days)})" if days else "")
     base = f"""
         FROM observations o
         LEFT JOIN routes r ON r.route_id = o.route_id
@@ -239,17 +279,19 @@ def query_observations(conn: sqlite3.Connection, month: str, scope: Scope) -> tu
           {route_filter}
           {commune_filter}
           {FLEX_ROUTES_SQL}
+          {doubtful_filter}
     """
     scheduled = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, o.departure_delay, o.departure_time "
-        + base + " AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL",
-        conn, params=params,
+        + base + " AND +o.schedule_relationship = 'SCHEDULED' AND o.departure_delay IS NOT NULL" + departure_day_filter,
+        conn, params=params + days,
     )
     skipped = pd.read_sql_query(
         "SELECT o.route_id, COALESCE(r.route_short_name, o.route_id) AS ligne, "
         "SUM(CASE WHEN o.schedule_relationship = 'SKIPPED' THEN 1 ELSE 0 END) AS skipped, COUNT(*) AS eligible "
-        + base + " AND +o.schedule_relationship IN ('SCHEDULED', 'SKIPPED') GROUP BY o.route_id, ligne",
-        conn, params=params,
+        + base + " AND +o.schedule_relationship IN ('SCHEDULED', 'SKIPPED')" + trip_day_filter
+        + " GROUP BY o.route_id, ligne",
+        conn, params=params + days,
     )
     collected_at = (
         datetime.fromtimestamp(int(month_latest)) if month_latest else datetime.fromtimestamp(cutoff)
@@ -278,6 +320,14 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
             f"WHERE commune_name IN ({placeholders}))"
         )
         params.extend(scope.communes)
+    excl = month_exclusions(conn, month)
+    exclusion_filter = ""
+    if excl.lignes:
+        exclusion_filter += f" AND o.route_id NOT IN ({_in_list(excl.lignes)})"
+        params.extend(excl.lignes)
+    if excl.jours:
+        exclusion_filter += f" AND date(o.departure_time, 'unixepoch', 'localtime') NOT IN ({_in_list(excl.jours)})"
+        params.extend(excl.jours)
     query = f"""
         SELECT o.stop_id, COALESCE(s.stop_name, o.stop_id) AS stop_name,
                o.departure_delay, o.route_id
@@ -287,6 +337,7 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
           {route_filter}
           {commune_filter}
           {FLEX_ROUTES_SQL}
+          {exclusion_filter}
           AND +o.schedule_relationship = 'SCHEDULED'
           AND o.departure_delay IS NOT NULL
     """
@@ -318,35 +369,39 @@ def query_stop_stats(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.D
 
 
 def query_monthly_evolution(conn: sqlite3.Connection, month: str, scope: Scope) -> pd.DataFrame:
-    """Return monthly punctuality trend for the scope (all months up to the given one)."""
-    params: list[object] = [f"{month}-32"]
-    table = "agg_daily"
-    filters = ""
+    """Score de fiabilité et ponctualité mois par mois jusqu'au mois du rapport, chaque mois avec ses exclusions."""
+    table = "agg_daily_stop" if scope.communes else "agg_daily"
+    filters, scope_params = "", []
     if scope.routes:
-        filters += f" AND a.route_id IN ({', '.join('?' for _ in scope.routes)})"
-        params.extend(scope.routes)
+        filters += f" AND a.route_id IN ({_in_list(scope.routes)})"
+        scope_params.extend(scope.routes)
     if scope.communes:
-        table = "agg_daily_stop"
-        filters += (
-            " AND a.stop_id IN (SELECT stop_id FROM stop_municipalities "
-            f"WHERE commune_name IN ({', '.join('?' for _ in scope.communes)}))"
-        )
-        params.extend(scope.communes)
-    query = f"""
-        SELECT substr(a.date_service, 1, 7) AS mois,
-               SUM(a.cnt_le300) * 100.0 / SUM(a.obs) AS ponctualite,
-               SUM(a.sum_delay) * 1.0 / SUM(a.obs) AS retard_moyen,
-               SUM(a.obs) AS passages
-        FROM {table} a
-        WHERE a.date_service < ? {filters}
-        GROUP BY mois
-        HAVING SUM(a.obs) > 0
-        ORDER BY mois
-    """
+        filters += (" AND a.stop_id IN (SELECT stop_id FROM stop_municipalities "
+                    f"WHERE commune_name IN ({_in_list(scope.communes)}))")
+        scope_params.extend(scope.communes)
+    columns = ["mois", "score", "ponctualite", "retard_moyen", "passages"]
     try:
-        return pd.read_sql_query(query, conn, params=params)
-    except (sqlite3.OperationalError, pd.errors.DatabaseError):
-        return pd.DataFrame()
+        months = [m for (m,) in conn.execute(
+            f"SELECT DISTINCT substr(date_service, 1, 7) FROM {table} WHERE date_service < ? ORDER BY 1",
+            (f"{month}-32",))]
+        rows = []
+        for m in months:
+            since, end = month_days(m)
+            excl_sql, excl_params = ind.exclusion_sql("a", month_exclusions(conn, m))
+            obs, on_time, sum_delay = conn.execute(
+                f"""SELECT SUM(a.obs), SUM(a.cnt_le300 - a.cnt_lt60), SUM(a.sum_delay) FROM {table} a
+                    WHERE a.date_service >= ? AND a.date_service < ? {filters} {excl_sql}""",
+                [since, end, *scope_params, *excl_params]).fetchone()
+            if not obs:
+                continue
+            result = ind.indicators(conn, since, end, routes=scope.routes or None, communes=scope.communes or None)
+            if not result.disponible:
+                continue
+            rows.append({"mois": m, "score": result.score, "ponctualite": on_time * 100.0 / obs,
+                         "retard_moyen": sum_delay * 1.0 / obs, "passages": int(obs)})
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns)
 
 
 def count_month_observations(conn: sqlite3.Connection, month: str) -> int:
@@ -392,8 +447,8 @@ def gap_methodology_line(gaps: dict | None, passages: int) -> str:
                  "quelques minutes après leur départ.")
     if gaps.get("total_raw"):
         line += (f" Passages analysés : {number(passages)} sur {number(gaps['total_raw'])} observations "
-                 "brutes ; les autres sont des arrêts non desservis, des passages sans retard publié ou "
-                 "des lignes à la demande.")
+                 "brutes ; les autres sont des arrêts non desservis, des passages sans retard publié, des "
+                 "lignes à la demande ou des jours et lignes écartés.")
     return line
 
 
@@ -512,9 +567,9 @@ def method_v2_summary(v2: dict | None) -> str:
     current = v2["current"]
     return (
         "\n\\vspace{.2cm}\n"
-        rf"\textbf{{Score {ind.METHOD_VERSION} (en test).}} {_with_margin(current.score, current.marge)} sur 100. "
-        "Cette mesure plus exigeante tient compte des départs en avance et des courses supprimées. "
-        rf"Elle est présentée page \pageref{{v2page}} et ne remplace pas encore le score ci-dessus."
+        rf"\textbf{{Marge d'incertitude.}} Score {_with_margin(current.score, current.marge)} sur 100 : "
+        "la marge tient compte des écarts d'un jour à l'autre. "
+        rf"Détail par type de jour, régularité et qualité des données page \pageref{{v2page}}."
     )
 
 
@@ -572,15 +627,15 @@ def method_v2_section(v2: dict | None) -> str:
     ) or "aucune"
 
     return rf"""\newpage
-\section*{{Méthode {ind.METHOD_VERSION} — indicateurs en test}}
+\section*{{Détail du score de fiabilité}}
 \label{{v2page}}
-Ces indicateurs sont calculés en parallèle du score de fiabilité, sans le remplacer. Ils corrigent trois limites de la méthode actuelle : un départ en avance n'est plus compté « à l'heure », les courses supprimées entrent dans le calcul, et chaque résultat est accompagné de sa marge d'incertitude. Le choix de la méthode de référence sera fait après plusieurs mois de double affichage.\\[.4cm]
-\makebox[\textwidth]{{\kpi[{score_color}]{{Score 2.0}}{{{_with_margin(current.score, current.marge)}}}\hfill
-\kpi[{punctuality_color}]{{Ponctualité stricte ($-1$ à $+5$ min)}}{{{_with_margin(current.ponctualite, current.marge_ponctualite)}\,\%}}\hfill
+Le score est accompagné de sa marge d'incertitude et décomposé entre le service assuré et la ponctualité.\\[.4cm]
+\makebox[\textwidth]{{\kpi[{score_color}]{{Score de fiabilité}}{{{_with_margin(current.score, current.marge)}}}\hfill
+\kpi[{punctuality_color}]{{À l'heure ($-1$ à $+5$ min)}}{{{_with_margin(current.ponctualite, current.marge_ponctualite)}\,\%}}\hfill
 \kpi{{Service assuré}}{{{_pct_fr(current.service)}}}}}
 
 \vspace{{.3cm}}
-\textbf{{Lecture.}} Sur 100 passages attendus, {number(current.service, 1)} ont été assurés (non supprimés, arrêt desservi) ; {_pct_fr(current.ponctualite)} des passages observés sont partis dans la fenêtre d'une minute d'avance à cinq minutes de retard et {_pct_fr(current.avance)} avec plus d'une minute d'avance. Le score 2.0 combine les deux : il compte les passages assurés et à l'heure parmi tous les passages attendus.
+\textbf{{Lecture.}} Sur 100 passages attendus, {number(current.service, 1)} ont été assurés (non supprimés, arrêt desservi) ; {_pct_fr(current.ponctualite)} des passages observés sont partis dans la fenêtre d'une minute d'avance à cinq minutes de retard et {_pct_fr(current.avance)} avec plus d'une minute d'avance. Le score de fiabilité combine les deux : il compte les passages assurés et à l'heure parmi tous les passages attendus.
 
 \subsection*{{Comparaison avec {latex(previous_label)}, à type de jour égal}}
 \begin{{tabularx}}{{\textwidth}}{{@{{}}lrrrX@{{}}}}
@@ -598,10 +653,10 @@ Ces indicateurs sont calculés en parallèle du score de fiabilité, sans le rem
 Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le prochain passage : ce qui compte est la régularité des intervalles. L'attente excédentaire est le temps d'attente moyen ajouté par des passages irréguliers par rapport à la grille prévue. Seules figurent les lignes fréquentes au moins un jour sur deux.\\[.2cm]
 {regularity_block}
 
-\subsection*{{Lignes les moins bien placées selon le score 2.0}}
+\subsection*{{Lignes les moins fiables : marge et décomposition du score}}
 \begin{{tabularx}}{{\textwidth}}{{@{{}}Xrrrrr@{{}}}}
 \toprule
-\textbf{{Ligne}} & \textbf{{Score 2.0}} & \textbf{{Ponctualité stricte}} & \textbf{{En avance}} & \textbf{{Service assuré}} & \textbf{{Passages}} \\
+\textbf{{Ligne}} & \textbf{{Score}} & \textbf{{À l'heure}} & \textbf{{En avance}} & \textbf{{Service assuré}} & \textbf{{Passages}} \\
 \midrule
 {line_rows}
 \bottomrule
@@ -609,9 +664,9 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 
 \subsection*{{Qualité des données}}
 \begin{{itemize}}[leftmargin=1.4em,itemsep=.2em]
-\item \textbf{{Jours exclus}} (collecte incomplète) : {excluded}.
+\item \textbf{{Jours exclus}} (collecte incomplète), de tous les indicateurs du rapport : {excluded}.
 \item \textbf{{Jours à collecte dégradée}} (conservés) : {degraded}.
-\item \textbf{{Lignes écartées}} (temps réel douteux) : {discarded}.
+\item \textbf{{Lignes écartées}} (temps réel douteux), de tous les indicateurs du rapport : {discarded}.
 \end{{itemize}}
 
 \subsection*{{Définitions}}
@@ -619,7 +674,7 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 \begin{{itemize}}[leftmargin=1.4em,itemsep=.15em]
 \item \textbf{{Fenêtre « à l'heure »}} : départ entre {ind.EARLY_TOLERANCE_SECONDS}~s d'avance et {ind.LATE_TOLERANCE_SECONDS // 60}~min de retard.
 \item \textbf{{Passages attendus}} : passages prévus (desservis ou non), plus les passages des courses supprimées. Ces derniers sont estimés au prorata du nombre moyen de passages par course de la ligne le même jour. Une course supprimée puis remplacée par une course ajoutée le même jour sur la même ligne n'est pas comptée comme perdue.
-\item \textbf{{Score 2.0}} = passages assurés et à l'heure / passages attendus. \textbf{{Service assuré}} = passages assurés / passages attendus. \textbf{{Ponctualité stricte}} = passages dans la fenêtre / passages observés.
+\item \textbf{{Score de fiabilité}} = passages assurés et à l'heure / passages attendus. \textbf{{Service assuré}} = passages assurés / passages attendus. \textbf{{À l'heure}} = passages dans la fenêtre / passages observés.
 \item \textbf{{Marge ($\pm$)}} : intervalle de confiance à 95\,\% (loi de Student), les jours étant traités comme unités d'échantillonnage. La marge reflète la variabilité d'un jour à l'autre et non la précision de la mesure d'un passage ; elle s'élargit quand peu de jours sont disponibles.
 \item \textbf{{Jour incomplet}} : au moins {QUALITY_INCOMPLETE_HOURS} heures entre 5~h et 23~h avec moins de la moitié du volume habituel (médiane des trois mêmes jours de la semaine précédents). Un jour incomplet est exclu ; un jour avec une ou deux heures lacunaires est conservé et signalé.
 \item \textbf{{Temps réel douteux}} : ligne dont au moins {int(ind.DOUBTFUL_ZERO_SHARE * 100)}\,\% des retards valent exactement zéro (horaire théorique republié à la place du temps réel).
@@ -630,17 +685,40 @@ Sur une ligne fréquente, l'usager n'attend pas un horaire précis mais le proch
 """
 
 
-def make_line_stats(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame:
+def query_scores(conn: sqlite3.Connection, month: str, scope: Scope) -> dict:
+    """Score de fiabilité du périmètre et de chacune de ses lignes (`indicateurs`, comme le tableau de bord).
+
+    `score` : score du périmètre (None si indisponible) ; `marge` : sa marge à 95 % ; `lines` :
+    route_id, score, service (service assuré, %) par ligne du périmètre.
+    """
+    since, end = month_days(month)
+    empty = pd.DataFrame(columns=["route_id", "score", "service"])
+    try:
+        total = ind.indicators(conn, since, end, routes=scope.routes or None, communes=scope.communes or None)
+        lines = ind.route_indicators(conn, since, end, communes=scope.communes or None, min_passages=0)
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        return {"score": None, "marge": None, "lines": empty}
+    lines = lines[~lines["temps_reel_douteux"].astype(bool)]
+    if scope.routes:
+        lines = lines[lines["route_id"].isin(scope.routes)]
+    lines = lines.rename(columns={"score_v2": "score", "service_assure": "service"})[["route_id", "score", "service"]]
+    return {"score": total.score, "marge": total.marge, "lines": lines}
+
+
+def make_line_stats(scheduled: pd.DataFrame, skipped: pd.DataFrame, line_scores: pd.DataFrame) -> pd.DataFrame:
+    """Une ligne par ligne de transport : passages, ponctualité stricte, retards, arrêts non desservis et
+    score de fiabilité (`query_scores`). Une ligne sans score (aucun passage attendu) n'est pas classée."""
     rows = scheduled.groupby(["route_id", "ligne"], as_index=False).agg(
         passages=("departure_delay", "size"),
         retard_moyen=("departure_delay", "mean"),
         retard_median=("departure_delay", "median"),
-        ponctualite=("departure_delay", lambda series: (series <= 300).mean() * 100),
+        ponctualite=("departure_delay", on_time_share),
         retard_5=("departure_delay", lambda series: (series > 300).mean() * 100),
     )
     rows = rows.merge(skipped, on=["route_id", "ligne"], how="left").fillna({"skipped": 0, "eligible": 0})
     rows["arrets_sautes"] = rows["skipped"] / rows["eligible"].replace(0, 1) * 100
-    rows["score"] = (rows["ponctualite"] - 2 * rows["arrets_sautes"]).clip(0, 100)
+    rows = rows.merge(line_scores[["route_id", "score"]], on="route_id", how="inner")
+    rows = rows[rows["score"].notna()]
     return rows.sort_values(["score", "passages"], ascending=[True, False])
 
 
@@ -659,18 +737,19 @@ def ranking_lines(lines: pd.DataFrame) -> pd.DataFrame:
     return filtered if not filtered.empty else lines
 
 
-def kpis(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> dict[str, float | int]:
+def kpis(scheduled: pd.DataFrame, skipped: pd.DataFrame, fiability: float | None) -> dict[str, float | int]:
+    """Indicateurs du périmètre ; `fiability` vient de `query_scores` (score de fiabilité)."""
     eligible = int(skipped["eligible"].sum()) if not skipped.empty else 0
     skipped_count = int(skipped["skipped"].sum()) if not skipped.empty else 0
     return {
         "passages": len(scheduled),
-        "ponctualite": (scheduled.departure_delay <= 300).mean() * 100,
+        "ponctualite": on_time_share(scheduled.departure_delay),
         "retard": scheduled.departure_delay.mean(),
         "retard_median": scheduled.departure_delay.median(),
         "retard_5": (scheduled.departure_delay > 300).mean() * 100,
         "skipped": skipped_count,
         "skip_rate": skipped_count / eligible * 100 if eligible else 0,
-        "fiability": max(0.0, (scheduled.departure_delay <= 300).mean() * 100 - 2 * (skipped_count / eligible * 100 if eligible else 0)),
+        "fiability": float("nan") if fiability is None else float(fiability),
     }
 
 
@@ -681,13 +760,13 @@ def comparison(current: dict[str, float | int], previous: dict[str, float | int]
                 "retard": "Historique en cours de constitution — comparaison disponible dès le rapport du mois prochain.",
                 "skip_rate": "Historique en cours de constitution — comparaison disponible dès le rapport du mois prochain."}
     return {
-        "fiability": f"{float(current['fiability']) - float(previous['fiability']):+.1f} / 100",
-        "ponctualite": f"{float(current['ponctualite']) - float(previous['ponctualite']):+.1f} %",
+        "fiability": f"{fr(float(current['fiability']) - float(previous['fiability']), 1, True)} / 100",
+        "ponctualite": f"{fr(float(current['ponctualite']) - float(previous['ponctualite']), 1, True)} %",
         "retard": (
-            f"moy. {float(current['retard']) - float(previous['retard']):+.0f} s ; "
-            f"méd. {float(current['retard_median']) - float(previous['retard_median']):+.0f} s"
+            f"moy. {fr(float(current['retard']) - float(previous['retard']), 0, True)} s ; "
+            f"méd. {fr(float(current['retard_median']) - float(previous['retard_median']), 0, True)} s"
         ),
-        "skip_rate": f"{float(current['skip_rate']) - float(previous['skip_rate']):+.2f} %",
+        "skip_rate": f"{fr(float(current['skip_rate']) - float(previous['skip_rate']), 2, True)} %",
     }
 
 
@@ -697,29 +776,19 @@ def previous_month(month: str) -> str:
 
 
 def executive_message(metrics: dict[str, float | int], lines: pd.DataFrame, scope: Scope | None = None) -> str:
-    p = metrics["ponctualite"]
+    score = float(metrics["fiability"])
+    p = float(metrics["ponctualite"])
     skip = metrics["skip_rate"]
     worst = lines.iloc[0]
     prefix = f"Le périmètre {latex(scope.description)} " if scope and scope.communes else "Le réseau TBM "
-    if p >= 95:
-        assessment = f"{prefix}affiche une ponctualité excellente ({p:.1f}\\%)."
-    elif p >= 90:
-        assessment = f"{prefix}enregistre un bon niveau de ponctualité ({p:.1f}\\%)."
-    elif p >= 85:
-        assessment = f"{prefix}présente une fiabilité correcte ({p:.1f}\\%), encore perfectible."
-    elif p >= 80:
-        assessment = f"{prefix}montre une fiabilité intermédiaire ({p:.1f}\\%)."
-    elif p >= 75:
-        assessment = f"{prefix}connaît des difficultés de ponctualité notables ({p:.1f}\\%)."
-    elif p >= 65:
-        assessment = f"{prefix}enregistre une ponctualité insuffisante ({p:.1f}\\%)."
-    else:
-        assessment = f"{prefix}subit des retards critiques ({p:.1f}\\% de passages à l'heure)."
+    assessment = (f"{prefix}obtient un score de fiabilité de {number(score, 1)}/100 ({tier_label(score)}) : "
+                  f"{pct(p)} des passages sont partis à l'heure, entre une minute d'avance et cinq minutes "
+                  "de retard.")
     if skip > 5:
-        assessment += f" Le taux d'arrêts non desservis ({skip:.2f}\\% des passages) aggrave la situation."
+        assessment += f" Le taux d'arrêts non desservis ({pct(skip, 2)} des passages) aggrave la situation."
     return (
         f"{assessment} La principale alerte concerne la ligne {latex(worst.ligne)}, avec un score de fiabilité "
-        f"de {worst.score:.1f}/100 et {worst.retard_5:.1f}\\% de passages au-delà de cinq minutes de retard."
+        f"de {number(worst.score, 1)}/100 et {pct(worst.retard_5)} de passages au-delà de cinq minutes de retard."
     )
 
 
@@ -885,17 +954,17 @@ def evolution_chart(monthly: pd.DataFrame, output_dir: Path, name: str) -> Path 
         return None
     fig, ax = plt.subplots(figsize=(7, 3.5))
     _setup_ax(ax)
-    colors = [palette_hex(float(r.ponctualite), "score") for _, r in monthly.iterrows()]
+    colors = [palette_hex(float(r.score), "score") for _, r in monthly.iterrows()]
     for i in range(len(monthly) - 1):
-        ax.plot([i, i + 1], [monthly.iloc[i]["ponctualite"], monthly.iloc[i + 1]["ponctualite"]],
+        ax.plot([i, i + 1], [monthly.iloc[i]["score"], monthly.iloc[i + 1]["score"]],
                 color=BLACK_FOREST, linewidth=1.5, zorder=2)
-    ax.scatter(range(len(monthly)), monthly["ponctualite"], c=colors, s=40, zorder=3, edgecolors="white", linewidth=0.5)
+    ax.scatter(range(len(monthly)), monthly["score"], c=colors, s=40, zorder=3, edgecolors="white", linewidth=0.5)
     ax.set_ylim(50, 100)
     ax.set_xticks(range(len(monthly)))
     ax.set_xticklabels(monthly["mois"].tolist(), fontsize=7, rotation=30, ha="right")
     ax.set_xlabel("Mois", color=BLACK_FOREST, fontsize=8)
-    ax.set_ylabel("Ponctualité (%)", color=BLACK_FOREST, fontsize=8)
-    ax.set_title("Évolution mensuelle de la ponctualité", color=BLACK_FOREST, fontsize=10, fontweight="bold")
+    ax.set_ylabel("Score de fiabilité (/100)", color=BLACK_FOREST, fontsize=8)
+    ax.set_title("Évolution mensuelle du score de fiabilité", color=BLACK_FOREST, fontsize=10, fontweight="bold")
     ax.yaxis.set_major_locator(mticker.MultipleLocator(10))
     fig.tight_layout(pad=0.8)
     return _save_chart(fig, output_dir, name)
@@ -909,13 +978,13 @@ def hourly_chart(hourly: pd.DataFrame, output_dir: Path, name: str) -> Path | No
     colors = [palette_hex(float(r.retard_5), "pourcent") for _, r in hourly.iterrows()]
     ax.bar(hourly["heure"], hourly["retard_5"], color=colors, width=0.7, zorder=3, edgecolor="white", linewidth=0.3)
     for _, row in hourly.iterrows():
-        ax.text(int(row.heure), float(row.retard_5) + 0.5, f"{row.retard_5:.1f}",
+        ax.text(int(row.heure), float(row.retard_5) + 0.5, fr(float(row.retard_5)),
                 ha="center", fontsize=6, color=BLACK_FOREST)
     ax.axvspan(7.5, 9.5, color=SUNLIT_CLAY_TINT, alpha=0.4, zorder=1)
     ax.axvspan(17.5, 19.5, color=SUNLIT_CLAY_TINT, alpha=0.4, zorder=1)
     net_avg = float(hourly["retard_5"].mean())
     ax.axhline(net_avg, color=BLACK_FOREST, linewidth=0.8, linestyle="--", zorder=2)
-    ax.text(23, net_avg, f"Moyenne réseau : {net_avg:.1f}%", fontsize=6, color=BLACK_FOREST, va="bottom", ha="right")
+    ax.text(23, net_avg, f"Moyenne réseau : {fr(net_avg)} %", fontsize=6, color=BLACK_FOREST, va="bottom", ha="right")
     ax.set_xlim(-0.5, 23.5)
     ax.set_xticks(range(0, 24, 2))
     ax.set_xlabel("Heure", color=BLACK_FOREST, fontsize=8)
@@ -1054,6 +1123,10 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         net_total = len(ranked)
         net_rank = {row.route_id: idx + 1 for idx, row in ranked.iterrows()}
 
+    v2_list_ref = r" (liste page \pageref{v2page})" if v2 else ""
+    v2_detail_ref = (r" ; la marge, les exclusions et les définitions détaillées figurent page \pageref{v2page}"
+                     if v2 else "")
+
     # Collection gaps info for methodology
     gap_line = gap_methodology_line(gaps, int(metrics["passages"]))
     evolution_note = rf"\textbf{{Évolution mensuelle.}} {change.get('fiability', '')}"
@@ -1067,7 +1140,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
         net = f" (rang réseau : {net_rank.get(row.route_id, '—')}/{net_total})" if net_rank else ""
         priority_items.append(
             rf"\item {marker}\textbf{{Ligne {latex(row.ligne)}}}{net}"
-            rf" : score {row.score:.1f}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts non desservis."
+            rf" : score {number(row.score, 1)}/100, {pct(row.retard_5)} de retards supérieurs à 5 minutes, {pct(row.arrets_sautes, 2)} d'arrêts non desservis."
         )
     priority_alerts = "\n".join(priority_items)
 
@@ -1173,9 +1246,9 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \hrule\vspace{{.45cm}}
 \section*{{Synthèse exécutive}}
 \textit{{Cette page présente les indicateurs à retenir. Les résultats détaillés et la méthode figurent en annexe.}}\\[.5cm]
-\makebox[\textwidth]{{\kpi[{kpi_color(metrics, 'fiability')}]{{Fiabilité}}{{{number(int(metrics['fiability']))}{net_val(network_metrics, 'fiability', number)}}}\hfill
+\makebox[\textwidth]{{\kpi[{kpi_color(metrics, 'fiability')}]{{Fiabilité}}{{{number(float(metrics['fiability']), 1)}{net_val(network_metrics, 'fiability', lambda v: number(float(v), 1))}}}\hfill
 \kpi{{Passages analysés}}{{{number(int(metrics['passages']))}{net_val(network_metrics, 'passages', number)}}}\hfill
-\kpi[{kpi_color(metrics, 'ponctualite')}]{{Ponctualité (retard $\leq$ 5 min)}}{{{pct(float(metrics['ponctualite']))}{net_val(network_metrics, 'ponctualite', pct)}}}}}
+\kpi[{kpi_color(metrics, 'ponctualite')}]{{À l'heure ($-1$ à $+5$ min)}}{{{pct(float(metrics['ponctualite']))}{net_val(network_metrics, 'ponctualite', pct)}}}}}
 
 \vspace{{1cm}}
 \makebox[\textwidth]{{\kpi[{kpi_color(metrics, 'retard')}]{{Retard moyen}}{{{duration(float(metrics['retard']))}{net_val(network_metrics, 'retard', duration)}}}\hfill
@@ -1195,7 +1268,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \textbf{{Lecture du mois.}} {executive_message(metrics, lines, scope)}
 
 \vspace{{.3cm}}
-\textbf{{Score de fiabilité.}} Ce score (sur 100) mesure la fiabilité du réseau sur le mois. Il part de la ponctualité : le pourcentage de passages avec au plus 5 minutes de retard. Puis il applique une pénalité pour les arrêts non desservis : chaque pourcent d'arrêts non desservis retire 2 points. Formule : \textit{{score = max(0 ; ponctualité - 2 $\times$ taux d'arrêts non desservis)}}. Un score faible signale une ligne prioritaire.
+\textbf{{Score de fiabilité.}} Sur 100 passages prévus, le score compte ceux qui ont été assurés (arrêt desservi, course non supprimée) et à l'heure (départ entre une minute d'avance et cinq minutes de retard). Fiable à partir de 80, problématique sous 50. Un score faible signale une ligne prioritaire.
 {method_v2_summary(v2)}
 
 \vspace{{.35cm}}
@@ -1209,7 +1282,7 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \newpage
 
 \section*{{Annexe — Résultats détaillés}}
-\textbf{{Périmètre analysé :}} {latex(scope.description)}. Les lignes sont classées de la plus à la moins prioritaire selon un score combinant la ponctualité et les arrêts non desservis.\\[.4cm]
+\textbf{{Périmètre analysé :}} {latex(scope.description)}. Les lignes sont classées de la plus à la moins prioritaire selon le score de fiabilité (passages assurés et à l'heure sur les passages prévus).\\[.4cm]
 \renewcommand{{\arraystretch}}{{1.18}}
 \begin{{longtable}}{{lrrrrr}}
 \toprule
@@ -1224,32 +1297,31 @@ def build_latex(month: str, scope: Scope, metrics: dict[str, float | int], chang
 \bottomrule
 \end{{longtable}}
 
-\small\color{{olive}} Sont exclues du classement les lignes comptant moins de {MIN_PASSAGES_FOR_RANKING} passages sur le mois (volume insuffisant pour un pourcentage d\'arrêts non desservis exploitable) ainsi que les lignes à la demande (Flex\', Flex\'Night), sans desserte à horaires fixes. Le graphique « Arrêts les plus problématiques » ne retient que les arrêts d\'au moins {MIN_PASSAGES_FOR_RANKING} passages.
+\small\color{{olive}} Sont exclues du classement les lignes comptant moins de {MIN_PASSAGES_FOR_RANKING} passages sur le mois (volume insuffisant pour un pourcentage d\'arrêts non desservis exploitable) ainsi que les lignes à la demande (Flex\', Flex\'Night), sans desserte à horaires fixes. Les jours à collecte incomplète et les lignes au temps réel douteux sont exclus de tous les indicateurs{v2_list_ref}. Le graphique « Arrêts les plus problématiques » ne retient que les arrêts d\'au moins {MIN_PASSAGES_FOR_RANKING} passages.
 
 {graphical_annex(lines, scheduled, network_lines, stop_stats, monthly_evolution, output_dir)}
 
 \newpage
 \section*{{Méthode et calcul de la fiabilité}}
-L'indice de fiabilité est un score synthétique (de 0 à 100) qui mesure à quel point les transports ont été fiables sur la période. Plus le score est élevé, meilleure est la fiabilité observée.
-
-Contrairement à une simple mesure de temps, cet indicateur combine deux facteurs clés :
+L'indice de fiabilité est un score synthétique (de 0 à 100) qui mesure à quel point les transports ont été fiables sur la période. Plus le score est élevé, meilleure est la fiabilité observée. Il répond à la question : sur 100 passages prévus, combien ont été assurés et à l'heure ?
 
 \begin{{itemize}}[leftmargin=1.4em]
-\item \textbf{{La ponctualité (la base)}} : le pourcentage de passages effectués avec au plus 5 minutes de retard. Chaque passage à l'heure fait monter ce score de base ; au-delà de 5 minutes, le retard est jugé trop pénalisant pour l'usager et le passage ne compte plus comme « à l'heure ».
-\item \textbf{{Les arrêts non desservis (la pénalité)}} : lorsqu'un véhicule ne dessert pas un arrêt prévu (événement \texttt{{SKIPPED}}), la gêne est maximale. Chaque pourcent d'arrêts non desservis retire donc 2 points au score.
+\item \textbf{{À l'heure}} : départ entre une minute d'avance et cinq minutes de retard. Un véhicule parti trop tôt fait manquer son passage à l'usager arrivé à l'heure : il n'est pas compté à l'heure.
+\item \textbf{{Service assuré}} : passage prévu qui a bien eu lieu, ni arrêt non desservi (événement \texttt{{SKIPPED}}), ni course supprimée. Une course supprimée puis remplacée par une course ajoutée le même jour sur la même ligne n'est pas comptée comme perdue.
 \end{{itemize}}
 
 \[
-\text{{Score de fiabilité}} = \max(0 \;,\; \text{{Ponctualité}} - 2 \times \text{{Taux d'arrêts non desservis}})
+\text{{Score de fiabilité}} = \frac{{\text{{passages assurés et à l'heure}}}}{{\text{{passages prévus}}}} \approx \text{{Service assuré}} \times \text{{Part à l'heure}}
 \]
 
 \vspace{{.2cm}}
-\textbf{{Exemple.}} Avec 92~\% de passages à l'heure et 3~\% d'arrêts non desservis, le score est de $92 - 2 \times 3 = 86$ sur 100.
+\textbf{{Exemple.}} Avec 96~\% de service assuré et 85~\% de passages à l'heure, le score est d'environ $0{{,}}96 \times 85 \approx 82$ sur 100.
 
 \vspace{{.2cm}}
 À noter~:
 \begin{{itemize}}[leftmargin=1.4em]
 \item Un score faible indique une ligne prioritaire à corriger.
+\item Les jours où la collecte est incomplète et les lignes dont le temps réel est douteux sont exclus de tous les indicateurs{v2_detail_ref}.
 \item Ce rapport repose sur l'analyse des données GTFS-RT consolidées (observations sorties du flux depuis plus de 20 minutes) et permet de mesurer la qualité de service observée, sans en analyser les causes opérationnelles.
 \end{{itemize}}
 
@@ -1316,10 +1388,16 @@ def main() -> int:
                 network_lines = None
                 stop_stats = None
             else:
-                lines = ranking_lines(make_line_stats(scheduled, skipped))
-                current = kpis(scheduled, skipped)
+                scores = query_scores(conn, month, scope)
+                if scores["score"] is None:
+                    raise ValueError(f"Score de fiabilité indisponible pour {month} : agrégats du mois absents "
+                                     "(lancer src/scripts/rafraichir_agregats.py).")
+                lines = ranking_lines(make_line_stats(scheduled, skipped, scores["lines"]))
+                current = kpis(scheduled, skipped, scores["score"])
                 previous_scheduled, previous_skipped, _ = query_observations(conn, previous_month(month), scope)
-                previous = kpis(previous_scheduled, previous_skipped) if not previous_scheduled.empty else None
+                previous_score = query_scores(conn, previous_month(month), scope)["score"]
+                previous = (kpis(previous_scheduled, previous_skipped, previous_score)
+                            if not previous_scheduled.empty and previous_score is not None else None)
                 network_metrics = None
                 network_lines = None
                 stop_stats = None
@@ -1328,8 +1406,9 @@ def main() -> int:
                     net_scope = Scope("Réseau TBM", scope.routes, [], "Réseau TBM global")
                     net_scheduled, net_skipped, _ = query_observations(conn, month, net_scope)
                     if not net_scheduled.empty:
-                        network_metrics = kpis(net_scheduled, net_skipped)
-                        network_lines = ranking_lines(make_line_stats(net_scheduled, net_skipped))
+                        net_scores = query_scores(conn, month, net_scope)
+                        network_metrics = kpis(net_scheduled, net_skipped, net_scores["score"])
+                        network_lines = ranking_lines(make_line_stats(net_scheduled, net_skipped, net_scores["lines"]))
                     stop_stats = query_stop_stats(conn, month, scope)
                 monthly_evolution = query_monthly_evolution(conn, month, scope)
                 gaps = query_collection_gaps(conn, month)

@@ -114,6 +114,10 @@ def _ranking_inputs():
             "pct_a_l_heure": [70.0, 90.0],
             "pct_retard_5min": [20.0, 5.0],
             "pct_avance_1min": [2.0, 1.0],
+            "on_time": [70.0, 45.0],
+            "expected": [100.0, 50.0],
+            "assured": [90.0, 50.0],
+            "assured_on_time": [63.0, 45.0],
         }
     )
     skipped = pd.DataFrame(
@@ -129,13 +133,14 @@ def _ranking_inputs():
 
 
 class TestMakeRanking:
-    def test_score_combine_ponctualite_et_arrets_sautes(self):
+    def test_score_assures_a_l_heure_sur_attendus(self):
         scheduled, skipped = _ranking_inputs()
         ranking = app_mod.make_ranking(scheduled, skipped)
         row_a = ranking[ranking["route_id"] == "A"].iloc[0]
         row_b = ranking[ranking["route_id"] == "B"].iloc[0]
         assert round(row_a["pct_arrets_sautes"], 6) == 10.0
-        assert round(row_a["score_fiabilite"], 6) == 50.0
+        assert round(row_a["score_fiabilite"], 6) == 63.0
+        assert round(row_a["pct_service"], 6) == 90.0
         assert round(row_b["score_fiabilite"], 6) == 90.0
 
     def test_trie_par_score_croissant(self):
@@ -150,26 +155,15 @@ class TestMakeRanking:
             "A": "Bus", "B": "Tramway"
         }
 
-    def test_score_borne_a_zero(self):
-        scheduled = pd.DataFrame(
-            {
-                "route_id": ["A"], "ligne": ["L"], "route_type": [3],
-                "observations": [10], "retard_moyen_s": [1.0], "retard_median_s": [1.0],
-                "pct_a_l_heure": [10.0], "pct_retard_5min": [90.0], "pct_avance_1min": [0.0],
-            }
-        )
-        skipped = pd.DataFrame(
-            {
-                "route_id": ["A"], "ligne": ["L"], "route_type": [3],
-                "skipped": [50], "eligible": [100],
-            }
-        )
+    def test_ligne_sans_passage_attendu_non_classee(self):
+        scheduled, skipped = _ranking_inputs()
+        scheduled.loc[scheduled["route_id"] == "B", ["expected", "assured", "assured_on_time"]] = 0.0
         ranking = app_mod.make_ranking(scheduled, skipped)
-        assert ranking.iloc[0]["score_fiabilite"] == 0.0
+        assert ranking["route_id"].tolist() == ["A"]
 
 
 def _daily_core():
-    return pd.DataFrame(
+    return app_mod.ind.add_components(pd.DataFrame(
         {
             "date_service": ["2026-09-10", "2026-09-11", "2026-09-10", "2026-09-11"],
             "route_id": ["A", "A", "B", "B"],
@@ -189,7 +183,7 @@ def _daily_core():
                 {"0": 9, "600": 1},
             ],
         }
-    )
+    ))
 
 
 class TestDailyToNetwork:
@@ -206,6 +200,8 @@ class TestDailyToNetwork:
         skp = skipped.set_index("route_id")
         assert skp.loc["A", "skipped"] == 1
         assert skp.loc["A", "eligible"] == 11
+        assert sch.loc["A", "expected"] == 11
+        assert sch.loc["A", "assured_on_time"] == pytest.approx(3 / 4 * 4 + 4 / 6 * 6)
 
     def test_core_vide_renvoie_des_frames_vides_bien_formees(self):
         core = pd.DataFrame(columns=[
@@ -233,6 +229,9 @@ class TestGroupDailyStopToRoute:
                 "cnt_lt60": [0, 0, 0],
                 "skipped": [1, 0, 0],
                 "eligible": [4, 1, 5],
+                "scheduled": [10, 10, 20],
+                "cancelled": [2, 2, 0],
+                "added": [1, 1, 0],
                 "histogram": [
                     json.dumps({"10": 1, "20": 1, "400": 1}),
                     json.dumps({"10": 1, "300": 1}),
@@ -245,6 +244,7 @@ class TestGroupDailyStopToRoute:
         assert a["obs"] == 4
         assert a["sum_delay"] == 440
         assert json.loads(a["histogram"]) == {"10": 2, "20": 1, "300": 1, "400": 1}
+        assert (a["scheduled"], a["cancelled"], a["added"]) == (10, 2, 1)
         b = agg[agg["route_id"] == "B"].iloc[0]
         assert b["obs"] == 5
 
@@ -452,22 +452,21 @@ class TestDirectionDepuisUnArret:
 
 class TestMethodV2Caption:
     def _v2(self, **kw):
-        base = {"disponible": True, "score": 72.34, "marge": 2.1, "ponctualite": 80.0, "service": 93.25,
+        base = {"disponible": True, "score": 72.34, "marge": 2.1, "ponctualite": 80.0, "service": 93.25, "avance": 4.5,
                 "attente_excedentaire": 45.0, "lignes_ecartees": {}}
         return {**base, **kw}
 
     def test_phrase_complete(self):
         assert app_mod.method_v2_caption(self._v2(), "A") == (
-            "Méthode 2.0 (en test) : score 72,3 ± 2,1 / 100 · ponctualité stricte (de −1 à +5 min) 80,0 % · "
-            "service assuré 93,2 % · attente excédentaire +45 s.")
+            "Détail du score : score 72,3 ± 2,1 / 100 (marge à 95 %), service assuré 93,2 %, "
+            "départs de plus d'1 min en avance 4,5 %, attente excédentaire +45 s.")
 
     def test_sans_marge_ni_regularite(self):
         text = app_mod.method_v2_caption(self._v2(marge=None, attente_excedentaire=None), "A")
         assert "score 72,3 / 100" in text
         assert "attente" not in text
 
-    def test_ligne_ecartee_et_indisponible(self):
-        assert "non évaluée" in app_mod.method_v2_caption(self._v2(disponible=False, lignes_ecartees={"A": 31.0}), "A")
+    def test_indisponible(self):
         assert app_mod.method_v2_caption(self._v2(disponible=False), "A") is None
         assert app_mod.method_v2_caption(None) is None
 
@@ -692,13 +691,16 @@ class TestEchelleTypographique:
 
 
 class TestIndicateursParGroupe:
-    def _core(self):
+    def _raw(self):
         return pd.DataFrame({
             "date_service": pd.to_datetime(["2026-09-05", "2026-09-05", "2026-09-07"]),
             "route_type": [0, 3, 3],
             "obs": [100, 100, 200], "sum_delay": [6000, 12000, 20000],
-            "cnt_le300": [90, 70, 180], "cnt_gt300": [10, 30, 20],
+            "cnt_le300": [90, 72, 180], "cnt_gt300": [10, 28, 20], "cnt_lt60": [0, 2, 0],
             "skipped": [0, 10, 0], "eligible": [100, 100, 200]})
+
+    def _core(self):
+        return app_mod.ind.add_components(self._raw())
 
     def test_ensemble_et_modes_par_jour(self):
         g = app_mod.group_metrics(self._core(), "date_service")
@@ -706,27 +708,31 @@ class TestIndicateursParGroupe:
         assert ensemble["route_type"] == -1
         assert ensemble["observations"] == 200
         assert ensemble["pct_a_l_heure"] == 80.0
-        assert ensemble["pct_retard_5min"] == 20.0
+        assert ensemble["pct_retard_5min"] == 19.0
         assert ensemble["retard_moyen_s"] == 90.0
         assert ensemble["pct_arrets_sautes"] == 5.0
-        assert ensemble["score_fiabilite"] == 70.0
+        assert ensemble["score_fiabilite"] == pytest.approx((90 + 70 / 100 * 90) / 200 * 100)
         assert set(g["groupe"]) == {"Ensemble", "Tramway", "Bus"}
 
     def test_toute_la_periode_et_score_global(self):
         g = app_mod.group_metrics(self._core(), None)
         assert len(g) == 3
-        assert round(app_mod.period_totals(g), 6) == round(85.0 - 2 * 2.5, 6)
+        assert app_mod.period_totals(g) == pytest.approx((90 + 63 + 180) / 400 * 100)
         assert app_mod.period_totals(g.head(0)) == 0.0
 
-    def test_sans_arrets_non_desservis_pas_de_score(self):
-        g = app_mod.group_metrics(self._core().drop(columns=["skipped", "eligible"]), "date_service")
+    def test_sans_composantes_pas_de_score(self):
+        hourly = self._raw().drop(columns=["skipped", "eligible"]).assign(heure=8)
+        hourly["on_time"] = hourly["cnt_le300"] - hourly["cnt_lt60"]
+        g = app_mod.group_metrics(hourly, "heure")
         assert "score_fiabilite" not in g.columns
-        assert app_mod.group_metrics(self._core().head(0), "heure").empty
+        assert g[g["groupe"] == "Ensemble"]["pct_a_l_heure"].iloc[0] == pytest.approx(340 / 400 * 100)
+        assert app_mod.group_metrics(hourly.head(0), "heure").empty
 
-    def test_taux_d_arrets_non_desservis_semaine_et_week_end(self):
-        rates = app_mod.period_skip_rates(self._core())
-        assert rates == {"semaine": 0.0, "week-end": 5.0}
-        assert app_mod.period_skip_rates(self._core().head(0)) == {"semaine": 0.0, "week-end": 0.0}
+    def test_service_et_arrets_non_desservis_semaine_et_week_end(self):
+        rates = app_mod.period_day_rates(self._core())
+        assert rates == {"semaine": {"service": 100.0, "skip": 0.0}, "week-end": {"service": 95.0, "skip": 5.0}}
+        assert app_mod.period_day_rates(self._core().head(0)) == {
+            "semaine": {"service": 100.0, "skip": 0.0}, "week-end": {"service": 100.0, "skip": 0.0}}
 
 
 class TestTerritoireEtFiches:
@@ -758,3 +764,13 @@ class TestTerritoireEtFiches:
         assert "Retards fréquents mais courts" in app_mod.zone_banner_html(400.0, 8.0)
         assert app_mod.zone_banner_html(None, 8.0) == ""
         assert app_mod.zone_banner_html(float("nan"), 8.0) == ""
+
+
+class TestNoteDExclusion:
+    def test_jours_et_lignes(self):
+        note = app_mod.exclusion_note(app_mod.ind.Exclusions(("2026-09-08", "2026-09-24"), ("102",)))
+        assert note == ("Chiffres calculés hors 2 jour(s) à collecte incomplète (08/09, 24/09) et 1 ligne(s) au "
+                        "temps réel douteux : détail dans « Données & méthode ».")
+
+    def test_rien_a_signaler(self):
+        assert app_mod.exclusion_note(app_mod.ind.Exclusions()) is None

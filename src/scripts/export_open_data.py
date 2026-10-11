@@ -6,7 +6,10 @@ par commune. Utilisé par le collecteur (cron) et par le tableau de bord
 (boutons de téléchargement « Données ouvertes »).
 
 Intervalles demi-ouverts [since, end) sur `date_service` (AAAA-MM-JJ),
-compatibles avec les bornes du dashboard (`_day_bounds`).
+compatibles avec les bornes du dashboard (`_day_bounds`). Mêmes règles que le
+tableau de bord et les rapports : à l'heure = départ de −60 à +300 s, score de
+fiabilité de `indicateurs`, lignes Flex', jours incomplets et lignes au temps
+réel douteux de la période écartés.
 """
 
 import argparse
@@ -16,6 +19,8 @@ import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import indicateurs as ind
 
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "urban_vision.db"
 DEFAULT_OUT = Path(__file__).resolve().parents[2] / "data" / "open_data"
@@ -69,6 +74,45 @@ def _mode(route_type):
     return MODE_LABELS.get(route_type) if route_type is not None else ""
 
 
+def _excluded(conn, since, end):
+    """Jours et lignes écartés de la période (mêmes règles que le tableau de bord), lignes Flex' comprises."""
+    try:
+        excl = ind.exclusions(conn, since, end)
+    except sqlite3.Error:
+        excl = ind.Exclusions()
+    routes = set(excl.lignes)
+    if _has_table(conn, "routes"):
+        routes |= {r[0] for r in conn.execute("SELECT route_id FROM routes WHERE route_long_name LIKE '%Flex%'")}
+    return set(excl.jours), routes
+
+
+def _kept(rows, excl):
+    days, routes = excl
+    return [r for r in rows if r["date_service"] not in days and r["route_id"] not in routes]
+
+
+def _trips(conn, since, end):
+    if not _has_table(conn, "agg_daily_trips"):
+        return {}
+    return {(r[0], r[1]): (r[2], r[3], r[4]) for r in conn.execute(
+        "SELECT date_service, route_id, scheduled, cancelled, added FROM agg_daily_trips "
+        "WHERE date_service >= ? AND date_service < ?", (since, end))}
+
+
+def _components(r, trips):
+    scheduled, cancelled, added = trips.get((r["date_service"], r["route_id"]), (0, 0, 0))
+    return ind.route_day_components(int(r["obs"]), int(r["cnt_le300"]) - int(r["cnt_lt60"]), int(r["eligible"]),
+                                    int(r["skipped"]), cancelled, added, scheduled, int(r["cnt_lt60"]))
+
+
+def _score(comp):
+    return round(100 * comp["assured_on_time"] / comp["expected"], 2) if comp["expected"] > 0 else None
+
+
+def _on_time_pct(r, obs):
+    return round((r["cnt_le300"] - r["cnt_lt60"]) / obs * 100, 2) if obs else None
+
+
 def _routes_join(conn):
     if _has_table(conn, "routes"):
         return ("LEFT JOIN routes r ON r.route_id = d.route_id",
@@ -89,8 +133,9 @@ def _rows_lignes(conn, since, end):
         ORDER BY d.date_service, d.route_id
         """, (since, end),
     ).fetchall()
+    trips = _trips(conn, since, end)
     out = []
-    for r in rows:
+    for r in _kept(rows, _excluded(conn, since, end)):
         obs = int(r["obs"])
         eligible = int(r["eligible"])
         out.append({
@@ -102,10 +147,11 @@ def _rows_lignes(conn, since, end):
             "observations": obs,
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
             "retard_median_s": _median_seconds(r["histogram"]),
-            "pct_a_l_heure": round(r["cnt_le300"] / obs * 100, 2) if obs else None,
+            "pct_a_l_heure": _on_time_pct(r, obs),
             "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
             "pct_avance_1min": round(r["cnt_lt60"] / obs * 100, 2) if obs else None,
             "pct_arrets_sautes": round(r["skipped"] / eligible * 100, 2) if eligible else 0.0,
+            "score_fiabilite": _score(_components(r, trips)),
             "histogram": r["histogram"],
         })
     return out
@@ -143,8 +189,9 @@ def _rows_arrets(conn, since, end):
     if not rows:
         return []
     directions = _directions(conn)
+    trips = _trips(conn, since, end)
     out = []
-    for r in rows:
+    for r in _kept(rows, _excluded(conn, since, end)):
         obs = int(r["obs"])
         eligible = int(r["eligible"])
         out.append({
@@ -161,10 +208,11 @@ def _rows_arrets(conn, since, end):
             "stop_lon": r["stop_lon"],
             "observations": obs,
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
-            "pct_a_l_heure": round(r["cnt_le300"] / obs * 100, 2) if obs else None,
+            "pct_a_l_heure": _on_time_pct(r, obs),
             "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
             "pct_avance_1min": round(r["cnt_lt60"] / obs * 100, 2) if obs else None,
             "pct_arrets_sautes": round(r["skipped"] / eligible * 100, 2) if eligible else 0.0,
+            "score_fiabilite": _score(_components(r, trips)),
             "histogram": r["histogram"],
         })
     return out
@@ -175,14 +223,14 @@ def _rows_horaire(conn, since, end):
     rows = conn.execute(
         f"""
         SELECT d.date_service, d.route_id, {ligne_col}, {type_col}, d.heure,
-               d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300
+               d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60
         FROM agg_hourly d {route_join}
         WHERE d.date_service >= ? AND d.date_service < ?
         ORDER BY d.date_service, d.route_id, d.heure
         """, (since, end),
     ).fetchall()
     out = []
-    for r in rows:
+    for r in _kept(rows, _excluded(conn, since, end)):
         obs = int(r["obs"])
         out.append({
             "date_service": r["date_service"],
@@ -193,7 +241,7 @@ def _rows_horaire(conn, since, end):
             "heure": int(r["heure"]),
             "observations": obs,
             "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
-            "pct_a_l_heure": round(r["cnt_le300"] / obs * 100, 2) if obs else None,
+            "pct_a_l_heure": _on_time_pct(r, obs),
             "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
         })
     return out
@@ -204,32 +252,46 @@ def _rows_communes(conn, since, end):
         return []
     rows = conn.execute(
         """
-        SELECT d.date_service, sm.commune_name, MIN(sm.insee_code) AS insee_code,
+        SELECT d.date_service, sm.commune_name, sm.insee_code, d.route_id,
                SUM(d.obs) AS obs, SUM(d.sum_delay) AS sum_delay,
-               SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300,
-               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible,
-               COUNT(DISTINCT d.route_id) AS n_lignes
+               SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300, SUM(d.cnt_lt60) AS cnt_lt60,
+               SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible
         FROM agg_daily_stop d
         JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
         WHERE d.date_service >= ? AND d.date_service < ?
-        GROUP BY d.date_service, sm.commune_name
+        GROUP BY d.date_service, sm.commune_name, d.route_id
         ORDER BY d.date_service, sm.commune_name
         """, (since, end),
     ).fetchall()
+    trips = _trips(conn, since, end)
+    groups: dict = {}
+    for r in _kept(rows, _excluded(conn, since, end)):
+        key = (r["date_service"], r["commune_name"])
+        g = groups.setdefault(key, {"insee_code": r["insee_code"], "routes": set(), "obs": 0, "sum_delay": 0,
+                                    "on_time": 0, "cnt_gt300": 0, "skipped": 0, "eligible": 0,
+                                    "expected": 0.0, "assured_on_time": 0.0})
+        g["insee_code"] = min(g["insee_code"], r["insee_code"])
+        g["routes"].add(r["route_id"])
+        for col in ("obs", "sum_delay", "cnt_gt300", "skipped", "eligible"):
+            g[col] += int(r[col])
+        g["on_time"] += int(r["cnt_le300"]) - int(r["cnt_lt60"])
+        comp = _components(r, trips)
+        g["expected"] += comp["expected"]
+        g["assured_on_time"] += comp["assured_on_time"]
     out = []
-    for r in rows:
-        obs = int(r["obs"])
-        eligible = int(r["eligible"])
+    for (day, commune), g in groups.items():
+        obs, eligible = g["obs"], g["eligible"]
         out.append({
-            "date_service": r["date_service"],
-            "commune": r["commune_name"],
-            "insee_code": r["insee_code"],
+            "date_service": day,
+            "commune": commune,
+            "insee_code": g["insee_code"],
             "observations": obs,
-            "retard_moyen_s": round(r["sum_delay"] / obs, 2) if obs else None,
-            "pct_a_l_heure": round(r["cnt_le300"] / obs * 100, 2) if obs else None,
-            "pct_retard_5min": round(r["cnt_gt300"] / obs * 100, 2) if obs else None,
-            "pct_arrets_sautes": round(r["skipped"] / eligible * 100, 2) if eligible else 0.0,
-            "n_lignes": int(r["n_lignes"]),
+            "retard_moyen_s": round(g["sum_delay"] / obs, 2) if obs else None,
+            "pct_a_l_heure": round(g["on_time"] / obs * 100, 2) if obs else None,
+            "pct_retard_5min": round(g["cnt_gt300"] / obs * 100, 2) if obs else None,
+            "pct_arrets_sautes": round(g["skipped"] / eligible * 100, 2) if eligible else 0.0,
+            "score_fiabilite": _score(g),
+            "n_lignes": len(g["routes"]),
         })
     return out
 
@@ -270,6 +332,12 @@ def write_datasets(conn, out_dir, since="0000-00-00", end="9999-12-31"):
         "license": "Licence Ouverte / Open Licence 2.0 (Etalab)",
         "source": "Urban Vision, d'après les données TBM (Licence Ouverte 2.0) ; agrégats sans données personnelles",
         "row_counts": counts,
+        "definitions": {
+            "pct_a_l_heure": "part des passages partis entre 1 min d'avance et 5 min de retard",
+            "score_fiabilite": "passages assurés (arrêt desservi, course non supprimée) et à l'heure / passages prévus",
+        },
+        "exclusions": {"jours": sorted(_excluded(conn, since, end)[0]),
+                       "lignes": sorted(_excluded(conn, since, end)[1])},
     }
     with open(out_dir / "METADATA.json", "w", encoding="utf-8") as fh:
         json.dump(meta, fh, ensure_ascii=False, indent=2)

@@ -127,30 +127,28 @@ def period_labels(date_service: pd.Series, heure: pd.Series) -> list[str]:
     return labels
 
 
-def reliability_score(pct_on_time: float, pct_skipped: float) -> float:
-    """Score de fiabilité = ponctualité ≤ 5 min − 2 × taux d'arrêts non desservis, borné 0–100."""
-    return float(min(100.0, max(0.0, pct_on_time - 2 * pct_skipped)))
+def score_breakdown(score: float, pct_service: float) -> dict:
+    """Répartit exactement les points perdus (100 − score) entre service non rendu et horaires.
 
-
-def score_breakdown(pct_on_time: float, pct_skipped: float) -> dict:
-    """Répartit les points perdus (100 − score) entre retards et service non rendu.
-
-    `lost_delay` = 100 − ponctualité ; `lost_skip` = 2 × taux d'arrêts non desservis.
-    `dominant` : « retards », « service » ou « aucun » (moins de
-    NO_PROBLEM_LOST_POINTS points perdus).
+    Score = passages assurés et à l'heure / passages attendus ; service assuré =
+    passages assurés / passages attendus. `lost_service` = 100 − service assuré
+    (arrêts non desservis et courses supprimées) ; `lost_delay` = service assuré
+    − score (passages assurés mais en retard de plus de 5 min ou partis plus d'une
+    minute en avance). `dominant` : « retards », « service » ou « aucun » (moins
+    de NO_PROBLEM_LOST_POINTS points perdus).
     """
-    lost_delay = max(0.0, 100.0 - float(pct_on_time))
-    lost_skip = max(0.0, 2.0 * float(pct_skipped))
-    score = reliability_score(pct_on_time, pct_skipped)
-    lost = 100.0 - score
+    score, service = float(score), float(pct_service)
+    lost = max(0.0, 100.0 - score)
+    lost_service = max(0.0, 100.0 - service)
+    lost_delay = max(0.0, service - score)
     if lost < NO_PROBLEM_LOST_POINTS:
         dominant = "aucun"
-    elif lost_delay >= lost_skip:
+    elif lost_delay >= lost_service:
         dominant = "retards"
     else:
         dominant = "service"
     return {"score": score, "lost": lost, "lost_delay": lost_delay,
-            "lost_skip": lost_skip, "dominant": dominant}
+            "lost_service": lost_service, "dominant": dominant}
 
 
 def responsible_line(lines: pd.DataFrame) -> dict | None:
@@ -297,15 +295,14 @@ def concentration(table: pd.DataFrame, label_col: str) -> dict | None:
 
 
 def period_score(daily: pd.DataFrame | None) -> float | None:
-    """Score de fiabilité d'un ensemble d'agrégats (colonnes obs, cnt_le300, skipped, eligible)."""
+    """Score de fiabilité d'un ensemble d'agrégats (colonnes expected et assured_on_time de
+    `indicateurs.add_components`), ou None sans passage attendu."""
     if daily is None or daily.empty:
         return None
-    obs = float(daily["obs"].sum())
-    if obs <= 0:
+    expected = float(daily["expected"].sum())
+    if expected <= 0:
         return None
-    eligible = float(daily["eligible"].sum())
-    skip = float(daily["skipped"].sum()) / eligible * 100 if eligible else 0.0
-    return reliability_score(float(daily["cnt_le300"].sum()) / obs * 100, skip)
+    return 100 * float(daily["assured_on_time"].sum()) / expected
 
 
 def score_change(current: pd.DataFrame | None, previous: pd.DataFrame | None) -> dict | None:
@@ -557,10 +554,12 @@ def line_summary(ligne: str, breakdown: dict, cancelled: int, origin: dict,
         out.append(f"La ligne {ligne} ne perd que {breakdown['lost']:.0f} point(s) de fiabilité.")
     else:
         out.append(f"Sur {breakdown['lost']:.0f} points perdus, {breakdown['lost_delay']:.0f} "
-                   f"viennent des retards et {breakdown['lost_skip']:.0f} des arrêts non desservis.")
+                   f"viennent des horaires non tenus (retard de plus de 5 min ou avance de plus d'1 min) "
+                   f"et {breakdown['lost_service']:.0f} du service non rendu (arrêts non desservis, "
+                   "courses supprimées).")
     if cancelled:
-        out.append(f"{cancelled} course(s) supprimée(s) sur la période ; la plupart n'apparaissent "
-                   "plus dans le flux et n'entrent donc pas dans le score.")
+        out.append(f"{cancelled} course(s) supprimée(s) sur la période ; celles qui n'ont pas été "
+                   "remplacées comptent dans le score comme service non rendu.")
     verdict = origin["verdict"]
     if verdict == "départ":
         out.append(f"Le retard est déjà là au départ ({format_seconds(origin['first_delay'], signed=True)} "

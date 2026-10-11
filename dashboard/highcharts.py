@@ -320,7 +320,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
 
 
 def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
-    metrics = [("pct_a_l_heure", "Ponctualité ≤ 5 min", True),
+    metrics = [("pct_a_l_heure", "À l'heure (−1 à +5 min)", True),
                ("pct_retard_5min", "Retards > 5 min", False),
                ("pct_avance_1min", "En avance > 1 min", False),
                ("pct_arrets_sautes", "Arrêts non desservis", False)]
@@ -349,7 +349,7 @@ PERIOD_DETAILS = {
 }
 TREND_METRICS = {
     "score_fiabilite": ("Score de fiabilité", " / 100", 1, "score"),
-    "pct_a_l_heure": ("Ponctualité (5 min ou moins)", " %", 1, "score"),
+    "pct_a_l_heure": ("À l'heure (−1 à +5 min)", " %", 1, "score"),
     "pct_retard_5min": ("Retards de plus de 5 min", " %", 1, "pourcent"),
     "retard_moyen_s": ("Retard moyen", " s", 0, "retard"),
     "pct_arrets_sautes": ("Arrêts non desservis", " %", 2, "pourcent"),

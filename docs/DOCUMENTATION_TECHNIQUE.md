@@ -188,7 +188,7 @@ Urban-Vision/
 │   ├── urban-vision-logo-color.png
 │   └── urban-vision-logo-white.png # utilisé par le dashboard et les rapports
 ├── dashboard/
-│   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches, 3668 lignes)
+│   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches, 3742 lignes)
 │   ├── carte.py                    # carte des arrêts : composant st.components.v2, données, icônes
 │   ├── carte_arrets.js             # JavaScript du composant (deck.gl + MapLibre)
 │   ├── diagnostic.py               # logique pure des fiches arrêt / ligne (verdicts, phrases)
@@ -235,13 +235,13 @@ Urban-Vision/
 │   │   ├── db.py                   # schéma SQLite + agrégats (source unique)
 │   │   ├── export_open_data.py     # export CSV open data (lecture seule)
 │   │   ├── gtfs_static.py          # chargement routes/stops
-│   │   ├── indicateurs.py          # indicateurs de la méthode 2.0 (en test)
+│   │   ├── indicateurs.py          # score de fiabilité : composantes, exclusions, marges
 │   │   ├── rafraichir_agregats.py  # recalcul des agrégats (timer 5 min)
 │   │   ├── route_shapes.py         # tracés des lignes extraits du GTFS (carte)
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 27 fichiers, 528 tests pytest
+└── tests/                          # 27 fichiers, 538 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -440,7 +440,7 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | `DB_BUSY_TIMEOUT_MS` (alertes) | 180 000 ms | `collect_alerts.py:27` |
 | Intervalle du recalcul des agrégats | 5 min (`OnCalendar=*:2/5`) | `deploy/systemd/urban-vision-rafraichir.timer` |
 | `REFRESH_WARN_SECONDS` | 60 s (warning « Rafraîchissement des agrégats lent ») | `rafraichir_agregats.py:15` |
-| `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés (tronçons, méthode 2.0), pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
+| `BACKFILL_PAUSE_SECONDS` | 1 s de pause entre deux jours rattrapés (tronçons, départs en avance par heure, historique du score), pour que le collecteur obtienne le verrou d'écriture | `rafraichir_agregats.py:16` |
 | `SKP_LAST_SEEN_MARGIN_SECONDS` | 86 400 s (marge `last_seen_at` du recalcul incrémental) | `db.py:383` |
 | Seuils de la veille (`HEARTBEAT_MAX_AGE_SECONDS`, `GAP_WINDOW_SECONDS`, `LOG_MIN_LINES`, `VOLUME_MIN_RATIO`, `VOLUME_MIN_BASELINE`, `REMINDER_SECONDS`, `FROZEN_WINDOW_SECONDS`, `FROZEN_MIN_RUNS`, `BACKUP_MAX_AGE_SECONDS`) | 600 s, 3 600 s, 3 lignes/h, 20 %, 2 000 passages, 12 h, 900 s, 5 relevés, 26 h | `veille_collecte.py:26-48` |
 | `SIGNIFICANT_GAP_SECONDS` | 600 s (interruption comptée dans la méthode du rapport) | `generate_monthly_report.py:62` |
@@ -453,9 +453,9 @@ python reports/generate_single_report.py --month 2026-08 --profile mairie_merign
 | Veille des visiteurs (`RETENTION_DAYS`, `GEO_MAX_PER_RUN`) | 30 jours de conservation, 50 géolocalisations au plus par passage | `veille_visiteurs.py:41-43` |
 | `timeout` HTTP (collecte) | 15 s | `collect.py:44`, `collect_alerts.py:59` |
 | `timeout` HTTP (gtfs statique) | 30 s | `gtfs_static.py:25` |
-| Seuil « ponctuel » (retard ≤ 5 min) | 300 s | commun (SQL, rapport, palette) |
+| Seuil « retard de plus de 5 min » | > 300 s | commun (SQL, rapport, palette) |
 | Seuil « en avance > 1 min » | < −60 s | `db.py:242`, `analyze.py:66` |
-| Fenêtre « à l'heure » de la méthode 2.0 (`EARLY_TOLERANCE_SECONDS`, `LATE_TOLERANCE_SECONDS`) | de −60 s à +300 s | `indicateurs.py:10-11` |
+| Fenêtre « à l'heure » (`EARLY_TOLERANCE_SECONDS`, `LATE_TOLERANCE_SECONDS`), partout | de −60 s à +300 s | `indicateurs.py:10-11` |
 | Quantiles de Student des marges (`T975`, puis `Z95`) | 12,706 pour 2 jours … 2,042 pour 31 jours, 1,96 au-delà | `indicateurs.py:12-15` |
 | Temps réel douteux (`DOUBTFUL_ZERO_SHARE`, `DOUBTFUL_MIN_PASSAGES`) | au moins 25 % de retards exactement nuls, sur au moins 200 passages | `indicateurs.py:16-17` |
 | Ligne fréquente (`FREQUENT_MIN_DEPARTURES_PER_HOUR`, `HEADWAY_MAX_SECONDS`) | au moins 5 passages prévus dans l'heure à l'arrêt ; intervalles de plus d'1 h ignorés | `db.py:564-565` |
@@ -679,13 +679,13 @@ simplifiées à 4 m près (Douglas-Peucker, `SIMPLIFY_METERS`) : 245 tracés,
 Colonne `cause` (entier protobuf) quasi toujours `UNKNOWN_CAUSE` — ignorée dans
 le dashboard et les rapports.
 
-**Tables agrégées** (calculées par `db.py::refresh_aggregates` ; les trois
-dernières, propres à la méthode 2.0, par `db.py::refresh_v2`, qu'il appelle)
+**Tables agrégées** (calculées par `db.py::refresh_aggregates` ; `agg_daily_trips`,
+`agg_hourly_regularity` et `quality_days` par `db.py::refresh_v2`, qu'il appelle)
 
 | Table | Granularité | Colonnes clés |
 |---|---|---|
 | `agg_daily` | jour × ligne | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60`, `skipped`, `eligible`, `histogram` |
-| `agg_hourly` | jour × ligne × heure | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300` |
+| `agg_hourly` | jour × ligne × heure | `obs`, `sum_delay`, `cnt_le300`, `cnt_gt300`, `cnt_lt60` |
 | `agg_daily_stop` | jour × ligne × arrêt | idem `agg_daily` + `skipped`/`eligible` |
 | `agg_hourly_stop` | jour × ligne × arrêt × heure | idem `agg_hourly` |
 | `agg_daily_trips` | jour de course × ligne | `scheduled`, `cancelled`, `added` : courses par statut, lues dans `trip_status` |
@@ -693,9 +693,15 @@ dernières, propres à la méthode 2.0, par `db.py::refresh_v2`, qu'il appelle)
 | `quality_days` | jour | `passages`, `lacunar_hours` (heures lacunaires, JSON), `flag` (`ok`, `degrade`, `incomplet`, `non_evalue`), `computed_at` |
 | `agg_daily_segment` | jour × ligne × direction × arrêt | voir ci-dessous (calculée par `db.py::refresh_segments`) |
 
-- `cnt_le300` : passages avec retard ≤ 300 s (« à l'heure »).
+- `cnt_le300` : passages avec retard ≤ 300 s.
 - `cnt_gt300` : passages avec retard > 300 s.
-- `cnt_lt60` : passages en avance de plus de 60 s.
+- `cnt_lt60` : passages en avance de plus de 60 s. Un passage est **à l'heure**
+  s'il part entre 60 s d'avance et 300 s de retard : `cnt_le300 − cnt_lt60`.
+  La colonne a été ajoutée aux tables horaires (`agg_hourly`, `agg_hourly_stop`)
+  après coup : `db.py::migrate_agg_columns` l'ajoute (valeur 0) aux bases
+  existantes, appelé par `init_db` et `refresh_aggregates`, et
+  `rafraichir_agregats.py::ensure_hourly_early` recalcule les jours concernés
+  (section 10.2).
 - `histogram` : JSON `{secondes_de_retard: effectif}` permettant de reconstruire
   une **médiane exacte** sur toute période (`app.py::_median_from_hists`).
 - `agg_daily_trips` : `cancelled` = `CANCELED` ou `DELETED`, `added` = `ADDED`,
@@ -703,7 +709,7 @@ dernières, propres à la méthode 2.0, par `db.py::refresh_v2`, qu'il appelle)
 - `agg_hourly_regularity` : seules les heures avec au moins 5 passages prévus
   à l'arrêt sont conservées (lignes fréquentes) ; l'intervalle est attribué à
   l'heure du second départ.
-- `quality_days` : un jour reçoit sa ligne dès que sa méthode 2.0 est calculée
+- `quality_days` : un jour reçoit sa ligne dès que ses courses et sa qualité sont calculées
   (sauf le jour courant) ; elle sert aussi de marqueur au rattrapage de
   l'historique (section 10.2).
 
@@ -779,11 +785,16 @@ consommateur :
 
 - `analyze.py` : exclut les observations tombant dans une fenêtre de ± buffer
   autour d'un `collection_gaps` ;
-- `generate_monthly_report.py` : n'exclut pas les observations, mais **compte*
-  les secondes de coupure et les observations écartées dans la section
-  « Méthode » (grâce à `query_collection_gaps`) ;
+- `generate_monthly_report.py` : n'exclut pas les observations des trous, mais
+  **compte** les secondes de coupure et les observations écartées dans la
+  section « Méthode » (grâce à `query_collection_gaps`) ;
 - `app.py` (dashboard) : n'applique pas l'exclusion des trous (l'écart est
   visible dans « Données & méthode › Suivi de la collecte »).
+
+En revanche, le dashboard, les rapports et l'export open data écartent tous
+de **tous** leurs indicateurs les mêmes jours et les mêmes lignes de la
+période (`indicateurs.exclusions`, section 10.3) : jours `incomplet` de
+`quality_days`, lignes au temps réel douteux et lignes Flex'.
 
 ---
 
@@ -798,7 +809,7 @@ Vue temporelle d'une journée-type :
  120 s       collect_alerts.py ──► upsert service_alerts
  5 min       rafraichir_agregats.py ──► refresh_aggregates(days=[hier, aujourd'hui])
                                     ──► refresh_segments(days=[hier, aujourd'hui])
-                                    ──► méthode 2.0 (refresh_v2, quality_days)
+                                    ──► courses et qualité (refresh_v2, quality_days)
  5 min       veille_collecte.py ──► alertes email, signal de vie
  02:30       sauvegarde.py ──► data/sauvegardes/ (+ copie hors VM)
  06:15       archive_gtfs.py ──► data/gtfs_archive/ si le GTFS a changé
@@ -835,7 +846,7 @@ Détails des requêtes SQL d'agrégation (`db.py`)
 - Jour-service : dérivé de `departure_time` (local) pour les délais, et de
   `start_date` pour les arrêts non desservis ; deux clauses bornées
   (`::SCHED_BOUNDS::` / `::SKP_BOUNDS::`) paramétrées par le mode d'exécution.
-- Méthode 2.0 (`refresh_v2(days)`, mêmes modes complet et incrémental) :
+- Courses, régularité et qualité (`refresh_v2(days)`, mêmes modes complet et incrémental) :
   `_TRIPS_SQL` compte les courses de `trip_status` par jour de course
   (`start_date`) et par statut ; `_REGULARITY_SQL` calcule, par ligne, sens et
   arrêt, l'intervalle réel (`departure_time`) et l'intervalle prévu
@@ -1054,7 +1065,13 @@ en X s », warning « Rafraîchissement des agrégats lent » au-delà de 60 s) 
 sort en code 1 en cas d'échec, ce que la veille signale (« Tâche planifiée en
 échec »).
 
-Ensuite, `ensure_v2_history` calcule la méthode 2.0 des jours de `agg_daily`
+Ensuite, `ensure_hourly_early` recalcule, un jour à la fois et avec la même
+pause, les jours dont `agg_daily` compte des départs en avance mais pas
+`agg_hourly` (`db.py::hourly_early_missing_days` : colonne `cnt_lt60` ajoutée
+après coup, ≈ 2,5 s par jour sur le poste de développement) ; échec journalisé
+« Rattrapage des départs en avance par heure échoué » (code 1).
+
+Puis `ensure_v2_history` calcule les courses et la qualité des jours de `agg_daily`
 antérieurs à aujourd'hui qui n'ont pas encore de ligne dans `quality_days`,
 un jour à la fois, avec la même pause d'une seconde entre deux jours pour que
 le collecteur obtienne le verrou d'écriture (≈ 4 s par jour en production),
@@ -1062,54 +1079,86 @@ puis réévalue la qualité de tous les jours ; c'est ce qui
 construit l'historique au premier passage après un déploiement. Un jour sans
 course connue dans `trip_status` reçoit quand même sa ligne de qualité : il
 n'est pas recalculé à chaque passage. `PRAGMA optimize` suit. Échec
-journalisé « Méthode 2.0 : calcul de l'historique échoué » (code 1).
+journalisé « Méthode 2.0 : calcul de l'historique échoué » (code 1, libellé
+inchangé dans les logs).
 
 Cf. sections 7.1 et 8. Les valeurs réseau du dashboard sont issues d'une
 lecture des `agg_*` puis de regroupements en mémoire :
 
 - `app.py::_load_daily_core` → `agg_daily` (+ variante `agg_daily_stop`
-  filtrée par `stop_municipalities` pour la vue territoriale) ;
+  filtrée par `stop_municipalities` pour la vue territoriale), jointe à
+  `agg_daily_trips`, hors jours et lignes écartés (`load_exclusions`) ; les
+  composantes du score sont ajoutées ligne × jour (`indicateurs.add_components`) ;
 - `app.py::_group_daily_stop_to_route` : la vue territoriale par arrêt est
-  regroupée au niveau ligne (sommes + fusion des histogrammes JSON) ;
-- `app.py::_daily_to_network` + `make_ranking` : calcule
-  `pct_arrets_sautes` (skipped/eligible), puis
-  `score_fiabilite = max(0, pct_a_l_heure − 2 × pct_arrets_sautes)`, le mode
-  et sa couleur, et trie par score croissant (du plus prioritaire au meilleur).
+  regroupée au niveau ligne (sommes + fusion des histogrammes JSON, courses de
+  la ligne ce jour-là) avant le calcul des composantes ;
+- `app.py::_daily_to_network` + `make_ranking` : somme les composantes par
+  ligne, calcule `pct_arrets_sautes` (skipped/eligible), `pct_service` et
+  `score_fiabilite = indicateurs.score_of(Σ assurés à l'heure, Σ attendus)`,
+  le mode, et trie par score croissant (du plus prioritaire au meilleur) ; une
+  ligne sans passage attendu n'est pas classée.
 - Médiane : reconstruite à partir des histogrammes JSON (`_median_from_hists`).
 
-### 10.3 Méthode de la fiabilité (formule centrale)
+### 10.3 Score de fiabilité (formule centrale, `indicateurs.py`)
+
+Le score de fiabilité est le même partout : bandeau, classements, carte,
+fiches, créneaux et évolutions du dashboard, rapports mensuels et export open
+data. Il répond à la question : sur 100 passages prévus, combien ont été
+assurés et à l'heure ? Il remplace depuis le 11/10/2026 l'ancienne formule
+`max(0 ; ponctualité ≤ 5 min − 2 × taux d'arrêts non desservis)`, qui
+comptait « à l'heure » un départ très en avance et ignorait les courses
+supprimées ; il a été publié à côté d'elle (« méthode 2.0 ») en septembre
+2026. Les rapports PDF déjà produits (jusqu'à celui de septembre 2026) gardent
+l'ancien calcul ; la page « Rapports mensuels » du dashboard le signale.
 
 ```
-Score de fiabilité = max(0 ; Ponctualité − 2 × Taux d'arrêts non desservis)
-```
-
-- **Ponctualité** : % de passages avec retard ≤ 5 min (300 s).
-- **Taux d'arrêts non desservis** : `SKIPPED / (SCHEDULED + SKIPPED)` (en %).
-- Un score faible = ligne prioritaire à corriger. Seuils de lecture : ≥ 80
-  (positif), 50–80 (moyen), < 50 (négatif).
-
-### 10.4 Méthode 2.0 (indicateurs en test, `indicateurs.py`)
-
-La méthode 2.0 est publiée **à côté** du score de fiabilité dans le rapport
-mensuel (section 12.3) et dans le dashboard (« Données & méthode », fiche
-ligne, section 11), sans le remplacer. Le choix de la méthode de
-référence se fera après plusieurs mois de double affichage. Elle corrige trois
-limites de la formule de la section 10.3 : un départ en avance y était compté
-« à l'heure », les courses supprimées n'entraient pas dans le calcul et aucun
-résultat n'avait de marge d'incertitude.
-
-```
-Par ligne et par jour :
+Par ligne et par jour (et par arrêt quand le périmètre est un arrêt) :
+  à l'heure           = passages partis entre −60 s et +300 s (cnt_le300 − cnt_lt60)
   supprimées nettes   = max(supprimées − ajoutées, 0)
   passages supprimés  = supprimées nettes × éligibles / (prévues + ajoutées)
   attendus            = éligibles (SCHEDULED + SKIPPED) + passages supprimés
   assurés             = éligibles − sautés
-  ponctualité stricte = passages entre −60 s et +300 s / passages observés
-Sur la période :
-  Score 2.0           = Σ (assurés × ponctualité stricte) / Σ attendus
-  Service assuré      = Σ assurés / Σ attendus
-  Ponctualité stricte = Σ passages dans la fenêtre / Σ passages observés
+  assurés à l'heure   = à l'heure / passages observés × assurés
+Sur un regroupement quelconque (période, ligne, arrêt, commune, mode, jour) :
+  Score de fiabilité  = 100 × Σ assurés à l'heure / Σ attendus
+  Service assuré      = 100 × Σ assurés / Σ attendus
+  À l'heure           = 100 × Σ à l'heure / Σ passages observés
 ```
+
+- **Source unique** : `indicateurs.add_components(df)` ajoute les colonnes
+  `on_time`, `expected`, `assured`, `assured_on_time` à n'importe quel tableau
+  d'agrégats (ligne × jour ou arrêt × ligne × jour) ; `score_of(Σ assurés à
+  l'heure, Σ attendus)` donne le score (NaN sans passage attendu). Les
+  composantes se somment sur tout regroupement : le score d'une commune, d'un
+  mode ou du réseau est celui de la somme de ses lignes et de ses jours, pas une
+  moyenne de scores. `route_day_components` fait le même calcul ligne à ligne
+  (méthode `indicators`) ; un test vérifie que le dashboard et `indicators`
+  donnent le même score.
+- **Décomposition exacte** : 100 − score = (100 − service assuré) [service non
+  rendu : arrêts non desservis, courses supprimées] + (service assuré − score)
+  [horaires non tenus : retard de plus de 5 min ou avance de plus d'1 min]
+  (`diagnostic.score_breakdown`).
+- **Exclusions, partout** (`indicateurs.exclusions(conn, début, fin)` →
+  `Exclusions(jours, lignes)`, filtre SQL `exclusion_sql(alias, excl)`) : jours
+  `incomplet` de `quality_days`, lignes au temps réel douteux de la période,
+  lignes Flex'. Elles s'appliquent à tous les indicateurs (passages, retards,
+  carte, fiches, rapports, open data), pas seulement au score.
+- **Créneaux** : les arrêts non desservis et les courses supprimées n'ont pas
+  d'heure ; le score d'un créneau est sa part à l'heure × le service assuré des
+  jours qu'il couvre (semaine ou week-end, `app.py::period_day_rates`).
+- Seuils de lecture inchangés : ≥ 80 fiable (positif), 50–80 à surveiller
+  (moyen), < 50 problématique (négatif).
+
+### 10.4 Marges, comparaisons et qualité des données (`indicateurs.py`)
+
+Le score est accompagné d'une marge d'incertitude (« Données & méthode », fiche
+ligne, page « Détail du score de fiabilité » du rapport mensuel).
+
+Fonctions de période : `indicators(conn, début, fin, routes, communes,
+stop_ids, day_types)` renvoie un `Indicateurs` (score, marge, ponctualité à
+l'heure et sa marge, service assuré, part des départs en avance, passages,
+attendus, jours, jours exclus, lignes écartées), sur les mêmes exclusions que
+section 10.3.
 
 - **Courses supprimées nettes** : lors d'un incident, le flux publie souvent
   la suppression des courses prévues puis des courses de remplacement
@@ -1138,8 +1187,8 @@ Sur la période :
   par ligne ; `quality_flags` lit `quality_days`. Les bornes sont des jours
   `AAAA-MM-JJ`, fin exclue.
 
-Septembre 2026 (copie de la base de production du 01/10/2026) : score 2.0
-75,1 ± 1,2 contre 83 pour le score de fiabilité ; ponctualité stricte
+Septembre 2026 (copie de la base de production du 01/10/2026) : score
+75,1 ± 1,2 contre 83 avec l'ancienne formule ; à l'heure
 78,4 ± 0,9 % ; service assuré 95,9 % ; 8,1 % des passages partent plus
 d'une minute en avance. Jours de semaine : 73,9 ± 1,0 contre 78,1 ± 1,3 en
 août, baisse significative de 4,2 ± 1,7 points ; samedis et dimanches dans
@@ -1212,7 +1261,7 @@ lecteur qui n'est pas analyste :
   réservés à la vue détaillée : les blocs repliables de « Mon territoire »
   (comparaison des communes, tous les arrêts) et de « Quand ? », le tableau
   de toutes les lignes, les sous-vues des fiches (où, quand, quel type,
-  contexte) et la phrase « Méthode 2.0 » de la fiche ligne. La page « Modes de
+  contexte) et la ligne « Détail du score » de la fiche ligne. La page « Modes de
   transport » est la même dans les deux vues ;
 - **guide de lecture** (`show_guide`, boîte `st.dialog`) : trois étapes
   (`GUIDE_STEPS` : choisir territoire et période, lire l'état en un mot,
@@ -1261,7 +1310,7 @@ lecteur qui n'est pas analyste :
      voisins dans la direction réelle de sa position tant qu'ils sont à moins
      de 30 px les uns des autres (`MIN_SEP_PX`), puis à sa place exacte ;
    - couleur = palier du score de fiabilité du quai, toutes lignes confondues
-     (ponctualité ≤ 5 min − 2 × arrêts non desservis, borné 0–100) ; forme = mode de
+     (section 10.3, composantes de chaque ligne et jour à ce quai) ; forme = mode de
      la ligne principale ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m
      selon les passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
      (`STOP_SIZE_PIXELS`) ; icônes tirées d'un atlas PNG unique
@@ -1326,9 +1375,9 @@ lecteur qui n'est pas analyste :
      10 h–16 h, Pointe du soir 16 h–20 h, Soirée & nuit 20 h–6 h (lundi–vendredi)
      et Week-end ; leurs jours et heures sont écrits sous chaque créneau, sur
      l'axe des deux graphiques (`period_category`, `PERIOD_DETAILS`). Les
-     arrêts non desservis n'ont pas d'heure dans les données : le score d'un
-     créneau retire 2 × le taux d'arrêts non desservis des jours qu'il couvre
-     (semaine ou week-end, `period_skip_rates`). Loaders `load_period_stats`,
+     arrêts non desservis et les courses supprimées n'ont pas d'heure dans les
+     données : le score d'un créneau est sa part à l'heure × le service assuré
+     des jours qu'il couvre (semaine ou week-end, `period_day_rates`). Loaders `load_period_stats`,
      `load_period_mode`, `load_period_lines`, `load_hourly_metrics`.
    - *Dans le temps* : la période est comparée à sa période de comparaison
      (le mois précédent pour un mois, voir le sélecteur de période ci-dessous).
@@ -1357,10 +1406,10 @@ lecteur qui n'est pas analyste :
    ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné en
    crème et le fait défiler à l'écran, sans afficher le guide ; mots du
    tableau de bord et des rapports en langage courant), *Méthode* (définitions, seuils,
-   stabilisation 20 min, lecture des fiches, arrêts non desservis, bloc « Méthode 2.0
-   (en test) » : score 2.0 ± marge, ponctualité stricte ± marge, service
-   assuré, départs en avance, jours exclus ou dégradés et lignes écartées de
-   la période et du territoire, loader `load_method_v2`), *Données
+   stabilisation 20 min, jours et lignes écartés, lecture des fiches, arrêts non
+   desservis, bloc « Le score de fiabilité de la période » : score ± marge, à
+   l'heure ± marge, service assuré, départs en avance, jours exclus ou dégradés
+   et lignes écartées de la période et du territoire, loader `load_method_v2`), *Données
    ouvertes* (boutons de téléchargement CSV de la période, loader
    `load_open_dataset`, qui passe par `src/scripts/export_open_data.py` — voir
    §11.6) et *Suivi de la collecte* (observations brutes, passages analysés,
@@ -1532,10 +1581,14 @@ Quatre datasets :
 
 | Dataset | Fichier | Contenu |
 |---|---|---|
-| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), ponctualité ≤ 5 min, retards > 5 min, en avance, arrêts non desservis, histogramme JSON |
+| `lignes_journalier` | `lignes-journalier.csv` | Par (date, ligne) : observations, retards moyen/médian (médiane exacte via histogramme), à l'heure (−1 à +5 min), retards > 5 min, en avance, arrêts non desservis, score de fiabilité, histogramme JSON |
 | `arrets_journalier` | `arrets-journalier.csv` | Par (date, ligne, arrêt) : + nom, commune, direction, coordonnées |
-| `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retard moyen, ponctualité, retards > 5 min |
-| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts non desservis, nombre de lignes |
+| `horaire` | `horaire.csv` | Par (date, ligne, heure) : observations, retard moyen, à l'heure, retards > 5 min |
+| `communes_journalier` | `communes-journalier.csv` | Par (date, commune) : code Insee, observations, retards, arrêts non desservis, score de fiabilité, nombre de lignes |
+
+Mêmes règles que le dashboard (section 10.3) : jours et lignes écartés de la
+période exportée, lignes Flex' exclues ; `METADATA.json` en donne la liste
+(`exclusions`) et les définitions (`definitions`).
 
 Commandes :
 
@@ -1568,11 +1621,15 @@ terminus. Les
 sous-vues passent par `st.segmented_control` : seule la sous-vue affichée est
 calculée.
 
-**Méthode 2.0** : sous les cartes de la fiche ligne, une ligne de texte
-(`method_v2_caption`) donne le score 2.0 ± marge, la ponctualité stricte, le
-service assuré et, pour une ligne fréquente, l'attente excédentaire
-(`load_method_v2`, section 10.4) ; une ligne au temps réel douteux est
-signalée comme non évaluée.
+**Détail du score** : sous les cartes de la fiche ligne (vue détaillée), une
+ligne de texte (`method_v2_caption`) donne le score ± marge, le service assuré,
+la part des départs de plus d'1 min en avance et, pour une ligne fréquente,
+l'attente excédentaire (`load_method_v2`, section 10.4). Une ligne écartée de la
+période (temps réel douteux) n'est dans aucun classement ; ouverte par un lien
+`?ligne=`, sa fiche le dit (`excluded_line_message`). Les cartes « Points perdus :
+horaires » et « Points perdus : service non rendu » suivent la décomposition
+exacte de la section 10.3 ; « Courses supprimées » lit `agg_daily_trips`, comme
+le score.
 
 **Lien direct** : la fiche affichée est reflétée dans l'URL (`?arret=<stop_id>`
 ou `?ligne=<route_id>`, sans mention dans la fiche) ; `apply_query_params`
@@ -1626,7 +1683,7 @@ Règles (`diagnostic.py`, constantes en tête de module) :
 | Tronçon amont dominant | le tronçon amont qui prend le plus de retard n'est cité comme origine que s'il pèse au moins 25 % du retard importé (`is_dominant_hotspot`) ; sinon « accumulation progressive » |
 | Jour dégradé, récurrence | part des passages > 5 min ≥ 15 % (palier négatif `pourcent`), jours d'au moins 5 passages ; ponctuel < 25 % des jours, fréquent < 50 %, chronique au-delà ; aucun verdict sous 5 jours observés |
 | Concentration | créneau (ou jour) dont la part de passages > 5 min atteint 1,5 fois celle du reste et au moins 5 % |
-| Répartition des points perdus | score = ponctualité − 2 × arrêts non desservis : points perdus par les retards = 100 − ponctualité, par le service non rendu = 2 × taux d'arrêts non desservis |
+| Répartition des points perdus | points perdus par le service non rendu = 100 − service assuré, par les horaires non tenus = service assuré − score (section 10.3) |
 | Origine du retard d'une ligne | par direction : « départ » si le retard au premier arrêt atteint 50 % du maximum atteint, « localisé » si les 3 tronçons qui prennent le plus de retard en concentrent ≥ 50 %, sinon « diffus » ; aucun verdict si le maximum reste < 60 s |
 | Arrêts non desservis | « extrémités » (≥ 60 % des sauts sur les 15 % premiers ou derniers arrêts), « bloc » (≥ 60 % sur une suite d'arrêts consécutifs à taux double de la moyenne), sinon « dispersé » ; rien sous 0,5 % |
 | Déséquilibre de direction | une direction porte ≥ 65 % des passages > 5 min de la ligne |
@@ -1700,7 +1757,7 @@ dossier ne garde que son PDF et `compile_all.sh` est supprimé :
 `<AAAA-MM>/communes/<slug>/<pdf>`. Si une compilation échoue, tous les fichiers
 intermédiaires sont conservés pour le diagnostic.
 
-### 12.3 Moteur (`generate_monthly_report.py` : 1360 lignes)
+### 12.3 Moteur (`generate_monthly_report.py` : 1439 lignes)
 
 - **Périmètre** : `Scope(recipient, routes, communes, description)`. En CLI :
   `--recipient`, `--routes` (séparées par virgules), `--communes`, `--profile`
@@ -1709,21 +1766,28 @@ intermédiaires sont conservés pour le diagnostic.
 - **Mois** : `--month AAAA-MM` ou auto := dernier mois présent dans
   `observations` (max `departure_time`).
 - **Interrogations** (`query_*`) : observations SCHEDULED/SKIPPED du mois (avec
-  filtre lignes/communes et seuil de stabilisation de 20 min), stats par arrêt
+  filtre lignes/communes, seuil de stabilisation de 20 min et exclusions du mois,
+  `month_exclusions` : jour du départ pour les passages, jour de la course pour
+  les arrêts non desservis), stats par arrêt
   (uniquement si ≥ `MIN_PASSAGES_FOR_RANKING` passages, sinon tout le périmètre),
-  évolution mensuelle (lue dans `agg_daily`, ou `agg_daily_stop` pour une
-  commune : mêmes passages, regroupés par mois de `date_service`), trous de collecte, alertes ServiceAlerts actives sur la
+  évolution mensuelle (score de fiabilité et ponctualité de chaque mois, avec
+  les exclusions de ce mois, lue dans `agg_daily`, ou `agg_daily_stop` pour une
+  commune ; le graphique trace le score), scores (`query_scores` : score du
+  périmètre ± marge et de chaque ligne, par `indicateurs`), trous de collecte, alertes ServiceAlerts actives sur la
   période pour les lignes du périmètre. **Les lignes à la demande** (Flex',
   Flex'Night) ne sont **pas traitées** dans ces requêtes ni dans les classements
   ni dans le graphique « Arrêts les plus problématiques ».
-- **KPIs** : `kpis()` calcule passages, ponctualité, retard moyen/médian, > 5 min,
-  arrêts non desservis + taux, **fiabilité**. `comparison()` calcule la variation
+- **KPIs** : `kpis(scheduled, skipped, fiabilité)` calcule passages, part à
+  l'heure (−1 à +5 min, `on_time_share`), retard moyen/médian, > 5 min, arrêts
+  non desservis + taux ; la **fiabilité** vient de `query_scores`.
+  `make_line_stats(scheduled, skipped, scores des lignes)` fait de même par
+  ligne (une ligne sans score n'est pas classée). Les nombres sont écrits à la
+  française (`number`, `pct`, `fr` : virgule décimale). `comparison()` calcule la variation
   vs mois précédent. Les rapports communaux comparent **aussi** la ligne au
   réseau (valeurs en olive « Réseau : … »).
-- **Synthèse exécutive** : texte rédigé selon des seuils de ponctualité
-  (≥95 % « excellente », ≥90 % « bon », ≥85 % « correcte », ≥80 %
-  « intermédiaire », ≥75 % « notables », ≥65 % « insuffisante », <65 %
-  « retards critiques »), complété si `skip_rate > 5 %`.
+- **Synthèse exécutive** : score de fiabilité et son état (fiable, à surveiller,
+  problématique : `palette.tier_label`), part à l'heure, complété si
+  `skip_rate > 5 %`, puis la ligne la moins fiable.
 - **Sections du PDF** : couverture (logo, rapport, date, périmètre),
   synthèse exécutive (6 KPI colorés + évolution), alertes prioritaires (top 3
   des lignes les plus en difficulté ; le glyphe ⚠ n'apparaît que pour les
@@ -1735,23 +1799,24 @@ intermédiaires sont conservés pour le diagnostic.
   deux barres par arrêt avec légende),
   profil opérationnel (risque horaire, distribution), Infos trafic (page dédiée
   des ServiceAlerts, dédoublonnées par contenu :
-  route × titre × période), méthode (formule, marge ± 60 s, trous de collecte,
-  non-interférence des alertes travaux), page « Méthode 2.0 — indicateurs en
-  test » entre la méthode et les Infos trafic.
-- **Méthode 2.0 (en test)** : `query_method_v2` calcule, avec
+  route × titre × période), méthode (formule, exemple, marge ± 60 s, trous de
+  collecte, non-interférence des alertes travaux), page « Détail du score de
+  fiabilité » entre la méthode et les Infos trafic (les renvois
+  `\pageref{v2page}` n'apparaissent que si elle existe).
+- **Détail du score** : `query_method_v2` calcule, avec
   `src/scripts/indicateurs.py` (section 10.4) et sur le même périmètre
   (lignes, communes), les indicateurs du mois, la comparaison au mois
   précédent par type de jour (semaine, samedi, dimanche), les indicateurs
   par ligne et la régularité ; `None` si les tables 2.0 manquent ou sont
   vides, et la page n'est alors pas produite. `method_v2_section` rédige la
-  page : 3 KPI (score 2.0 ± marge, ponctualité stricte ± marge, service
+  page : 3 KPI (score ± marge, à l'heure ± marge, service
   assuré), une phrase de lecture, le tableau par type de jour (écart ± marge,
   « baisse significative », « hausse significative » ou « dans la marge
   d'incertitude »), la régularité des 8 lignes fréquentes (au moins un jour
   sur deux) à l'attente excédentaire la plus forte, les 8 lignes les moins
-  bien placées (lignes au temps réel douteux exclues), la qualité des données
+  fiables avec marge et décomposition (lignes au temps réel douteux exclues), la qualité des données
   (jours exclus, jours dégradés, lignes écartées) et les définitions.
-  `method_v2_summary` ajoute le score 2.0 ± marge à la synthèse exécutive,
+  `method_v2_summary` ajoute la marge du score à la synthèse exécutive,
   avec le renvoi à cette page. Le moteur importe `indicateurs` et `db` par
   `sys.path` (`src/scripts/`) ; l'import de `db` applique `init_db` à
   `data/urban_vision.db`, comme pour les autres scripts.
@@ -2182,7 +2247,7 @@ format, penser à `refresh_aggregates(days=None)` (recalcul complet) une fois
 via un Python shell. Pour `agg_daily_segment`, vider la table : au passage
 suivant du timer `urban-vision-rafraichir`, `ensure_segments` la recalcule
 intégralement, jour par jour. De même, vider `quality_days` fait recalculer
-toute la méthode 2.0 (`ensure_v2_history`, section 10.2).
+les courses et la qualité de tous les jours (`ensure_v2_history`, section 10.2) ; l'historique horaire des départs en avance se rattrape seul (`ensure_hourly_early`).
 
 ---
 
@@ -2335,13 +2400,17 @@ dont le véhicule est sorti du flux temps réel depuis au moins 20 minutes
 (buffer de stabilisation) : le retard est alors considéré définitif.
 
 **Comment se calcule le score de fiabilité ?**
-`max(0 ; ponctualité − 2 × taux d'arrêts non desservis)`, avec ponctualité = % de
-passages à ≤ 5 min de retard (voir section 10.3).
+Sur 100 passages prévus, le nombre de passages assurés (arrêt desservi, course
+non supprimée) et à l'heure (entre 1 min d'avance et 5 min de retard), voir
+section 10.3.
 
 **Le dashboard et les rapports utilisent-ils les mêmes chiffres ?**
 Oui, à la granularité et au buffer près : même définition des passages
-(stabilisation 20 min, seuil 300 s), même formule de score, palette et seuils
-issus de `reports/palette.py`. Différences constatées : le dashboard n'exclut
+(stabilisation 20 min, fenêtre −60 s / +300 s), même score (`indicateurs`),
+mêmes jours et lignes écartés, palette et seuils issus de `reports/palette.py`.
+Le rapport compte les passages dans `observations` et le dashboard dans les
+agrégats : les deux comptes sont égaux quand les agrégats du mois sont à jour
+(un jour jamais agrégé manque au dashboard, pas au rapport). Différences constatées : le dashboard n'exclut
 pas les trous de collecte de ses agrégats (contrairement à `analyze.py`), voir
 section 7.3.
 
@@ -2405,12 +2474,11 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 8. **Exécution directe** : `generate_monthly_report.py` est documenté comme
    « moteur interne » ; appelé directement, il fonctionne mais peu de garde-fous
    UX.
-9. **Courses supprimées hors score** : la plupart des courses marquées
+9. **Courses supprimées estimées** : la plupart des courses marquées
    `CANCELED` dans `trip_status` n'ont aucune ligne dans `observations`
-   (2 562 sur 3 078 dans la base de développement au 15/09/2026) : leurs
-   arrêts ne sont pas comptés comme sautés et ne pèsent donc pas dans le score
-   de fiabilité. La fiche ligne les affiche à part (`load_line_cancellations`) ;
-   la méthode 2.0 les compte, nettes des courses ajoutées (section 10.4).
+   (2 562 sur 3 078 dans la base de développement au 15/09/2026). Le score les
+   compte, nettes des courses ajoutées, en estimant leurs passages au prorata
+   des passages par course de la ligne ce jour-là (section 10.3).
 10. **Profil de ligne approché** : l'ordre des arrêts est le rang moyen
     (`sum_seq / eligible`) ; sur une ligne à branches, les arrêts des
     différentes branches s'intercalent dans le profil (les variantes
@@ -2431,8 +2499,8 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
    contre ≈ 250 000 un jour de semaine). La veille (section 9.4) signale
    désormais ces situations ; les données manquantes ne sont pas récupérables.
    Ces deux journées sont marquées `incomplet` dans `quality_days` et exclues
-   des indicateurs de la méthode 2.0 (section 10.4).
-14. **Méthode 2.0** : une course ajoutée en renfort (`DUPLICATED`) compense
+   de tous les indicateurs (section 10.3).
+14. **Score de fiabilité** : une course ajoutée en renfort (`DUPLICATED`) compense
     une suppression de la même ligne le même jour, même à une autre heure ;
     les arrêts qu'une course de remplacement partielle ne dessert pas ne sont
     pas comptés comme non desservis ; la marge ne couvre que la variabilité
@@ -2487,14 +2555,13 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | **Observation (brute)** | une ligne `trip_update.stop_time_update` enregistrée (peu importe le statut). |
 | **Passage analysé** | observation `SCHEDULED`, retard et heure de départ connus, stabilisée ≥ 20 min. |
 | **Arrêt non desservi** | événement `SKIPPED` sur un arrêt prévu. |
-| **Ponctualité** | % de passages avec retard ≤ 300 s. |
-| **Score de fiabilité** | `max(0 ; ponctualité − 2 × taux d'arrêts non desservis)`. |
+| **Ponctualité (à l'heure)** | % de passages partis entre 60 s d'avance et 300 s de retard. |
+| **Score de fiabilité** | passages assurés et à l'heure / passages prévus, courses supprimées comprises (section 10.3). |
 | **Fiable / à surveiller / problématique** | état affiché selon le score : à partir de 80, de 50 à 80, sous 50 (`palette.tier_label`). |
 | **Vue rapide / vue détaillée** | deux niveaux de lecture du dashboard ; la vue rapide garde les phrases et le graphique principal (section 11.3). |
-| **Score 2.0** | passages assurés et partis entre 1 min d'avance et 5 min de retard, rapportés aux passages attendus, courses supprimées comprises (section 10.4, en test). |
 | **Service assuré** | part des passages attendus effectivement desservis (ni course supprimée, ni arrêt non desservi). |
 | **Attente excédentaire** | temps d'attente moyen ajouté par l'irrégularité des passages d'une ligne fréquente, par rapport à la grille prévue. |
-| **Jour incomplet** | jour dont au moins 3 heures comptent moins de la moitié du volume habituel (`quality_days`) ; exclu de la méthode 2.0. |
+| **Jour incomplet** | jour dont au moins 3 heures comptent moins de la moitié du volume habituel (`quality_days`) ; exclu de tous les indicateurs. |
 | **WAL** | Write-Ahead Log (mode journal SQLite, base lisible + écrivain concurrent). |
 | **Upsert** | `INSERT ... ON CONFLICT ... DO UPDATE` (dernière valeur gagne). |
 | **Agrégats** | tables `agg_*` précalculées (jour/heure × ligne/arrêt) par `refresh_aggregates`. |
@@ -2515,7 +2582,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Intervalles, timeouts et seuils (tableau 6.3 + 6.4).
 - Chaîne d'agrégation et mode incrémental `refresh_aggregates(days=...)` ; agrégat tronçon `refresh_segments(days=...)` et rattrapage au démarrage du collecteur.
 - Formule du score, seuils de la synthèse exécutive, structure des PDF.
-- Méthode 2.0 : `src/scripts/indicateurs.py`, tables `agg_daily_trips`,
+- Score de fiabilité : `src/scripts/indicateurs.py`, tables `agg_daily_trips`,
   `agg_hourly_regularity` et `quality_days`, testées par
   `tests/test_methode_v2.py`.
 - CLI complète des 6 scripts et du moteur.
@@ -2524,7 +2591,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 528, isolés (suite `pytest` complète : 528 passed), flux synthétiques
+- Tests : 538, isolés (suite `pytest` complète : 538 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2569,7 +2636,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 le 11/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -2600,6 +2667,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
+| I29 | Deux scores coexistaient : le score de fiabilité (ponctualité ≤ 5 min − 2 × arrêts non desservis) partout, et le score 2.0 « en test » dans « Méthode », la fiche ligne et une page du rapport ; « à l'heure » comptait les départs très en avance ; les courses supprimées n'entraient pas dans le score ; les jours incomplets et les lignes au temps réel douteux n'étaient écartés que du score 2.0 ; la carte « Courses supprimées » de la fiche ligne ne comptait pas les mêmes courses que le score ; le rapport mêlait point et virgule décimale et tronquait le score de sa carte « Fiabilité » | Un seul score (section 10.3), calculé par `indicateurs.add_components` / `score_of` dans le dashboard, les rapports et l'open data ; « à l'heure » = −1 à +5 min partout ; exclusions appliquées à tous les indicateurs ; `agg_hourly(_stop).cnt_lt60` et son rattrapage ; décomposition exacte des points perdus ; nombres du rapport à la française ; tests `TestComposantesPartagees`, `TestDepartsEnAvanceParHeure`, `TestExclusionsDuRapport`, `TestRegles`, `test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score` |
 
 ### 26.4 Dette documentaire
 
@@ -2636,10 +2704,11 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    01/10/2026, depuis le poste de développement, une image « API KEY
    REQUIRED ». Si c'est aussi le cas en production, passer au style
    vectoriel Positron (comme la carte du dashboard) ou à une clé Carto.
-6. **Choisir la méthode de référence** après le double affichage des rapports
-   d'octobre à décembre 2026 (section 10.4) : la méthode 2.0 compte les
-   courses supprimées (§23, point 9), le score historique non. Comparer les
-   classements de lignes des deux méthodes avant de basculer.
+6. **Déployer le score de fiabilité unique** : au premier passage du timer après
+   le déploiement, `ensure_hourly_early` recalcule tout l'historique horaire
+   (≈ 2,5 s par jour en développement, à mesurer sur la VM dans
+   `data/collect.log`) ; les créneaux et la ponctualité par heure sont faux tant
+   qu'il n'a pas fini.
 7. **Tester la vue rapide auprès de 3 à 5 lecteurs non analystes** (agents ou
    élus, proches non spécialistes) avant tout nouvel écran, sur des tâches
    précises (« trouver la ligne la plus problématique de ma commune »,

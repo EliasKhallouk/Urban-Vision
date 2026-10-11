@@ -143,3 +143,16 @@ class TestWriteDatasets:
         code = eod.main(["--print-datasets"])
         assert code == 0
         assert capsys.readouterr().out.splitlines() == eod.DATASETS
+
+class TestRegles:
+    def test_score_ponctualite_stricte_et_jours_ecartes(self, conn):
+        _seed(conn)
+        conn.execute("UPDATE agg_daily SET cnt_lt60 = 1 WHERE date_service = '2026-09-10'")
+        conn.execute("INSERT INTO quality_days VALUES ('2026-09-11', 0, '[]', 'incomplet', 0)")
+        conn.commit()
+        rows = eod.dataset_rows(conn, "lignes_journalier")
+        assert [r["date_service"] for r in rows] == ["2026-09-10"]
+        assert rows[0]["pct_a_l_heure"] == 50.0
+        assert rows[0]["score_fiabilite"] == 40.0
+        communes = eod.dataset_rows(conn, "communes_journalier")
+        assert [(r["date_service"], r["score_fiabilite"]) for r in communes] == [("2026-09-10", 60.0)]

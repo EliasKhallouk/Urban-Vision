@@ -42,14 +42,14 @@ Pipeline (doc § 2, § 8): TBM GTFS-RT feeds → collectors → one SQLite DB (W
 
 Stop map: `dashboard/carte.py` registers an `st.components.v2` component whose JavaScript (`dashboard/carte_arrets.js`) loads deck.gl and MapLibre from jsDelivr on Carto's vector Positron style (Carto raster tiles now require an API key). Zoom-dependent grouping, tooltip, selection halo and fly-to live in the JS; Python only builds the payload (`map_payload`, unit-tested in `tests/test_carte.py`) and receives the clicked stop through `on_clicked_change`. After editing the `.js`, restart Streamlit: the module keeps the old script in memory.
 
-Periods: `period_picker` (month by default) returns a `Period` with a comparison period (previous month, or the same length just before); every "évolution" (panel KPIs, watchlist, "Dans le temps") compares against it.
+Periods: `period_picker` (month by default) returns a `Period` with a comparison period (previous month, or the same length just before); every "évolution" (panel KPIs, priorities, "Dans le temps") compares against it.
 
 Modules are not a package: `dashboard/`, `reports/` and `src/scripts/` import each other by inserting their directories into `sys.path` (same in `tests/conftest.py`), so imports look like `import db`, `import app`, `from palette import ...`.
 
 ### Cross-cutting conventions
 
 - **Stabilisation cutoff**: analyses only count rows with `last_seen_at < MAX(last_seen_at) - 20 min` (`FRESHNESS_BUFFER_SECONDS`), consistently in `analyze.py`, `app.py` and the report engine. Collection-gap handling differs per consumer (doc § 7.3).
-- **Reliability score**: `max(0, % on time (delay ≤ 300 s) − 2 × % skipped stops)`, skipped rate = `SKIPPED / (SCHEDULED + SKIPPED)`. Reading thresholds ≥ 80 / 50–80 / < 50. Rankings sort by ascending score (most problematic first).
+- **Reliability score** (doc § 10.3, single source `src/scripts/indicateurs.py`): `100 × Σ assured on time / Σ expected`, computed per route × day (or stop × route × day) with `indicateurs.add_components` (on time = departure between −60 s and +300 s = `cnt_le300 − cnt_lt60`; expected = SCHEDULED + SKIPPED + passages of net cancelled trips from `agg_daily_trips`; assured = eligible − skipped), then summed over any grouping and turned into a score by `indicateurs.score_of`. Never average scores. Dashboard, reports and open data all drop the period's excluded days and lines (`indicateurs.exclusions` / `exclusion_sql`: `incomplet` days of `quality_days`, doubtful real-time lines, Flex') from every indicator. Reading thresholds ≥ 80 / 50–80 / < 50. Rankings sort by ascending score (most problematic first).
 - Service day is derived from local `departure_time` for delays and from `start_date` (`YYYYMMDD`) for skipped stops.
 
 ## Tests

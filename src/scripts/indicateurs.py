@@ -70,6 +70,65 @@ def route_day_components(obs, on_time, eligible, skipped, cancelled=0, added=0, 
     }
 
 
+COMPONENT_COLUMNS = ("on_time", "expected", "assured", "assured_on_time")
+
+
+def add_components(df: pd.DataFrame) -> pd.DataFrame:
+    """Composantes 2.0 de chaque ligne d'agrégat (une ligne de transport, un jour, éventuellement un arrêt).
+
+    Colonnes lues : obs, cnt_le300, cnt_lt60, eligible, skipped et, si présentes, scheduled,
+    cancelled, added (agg_daily_trips). Colonnes ajoutées : on_time (départs de −60 à +300 s),
+    expected, assured, assured_on_time, comme `route_day_components`. Les composantes se somment
+    sur n'importe quel regroupement ; le score se calcule ensuite avec `score_of`.
+    """
+    out = df.copy()
+    zeros = pd.Series(0, index=out.index)
+    cancelled = out["cancelled"].fillna(0) if "cancelled" in out else zeros
+    added = out["added"].fillna(0) if "added" in out else zeros
+    scheduled = out["scheduled"].fillna(0) if "scheduled" in out else zeros
+    obs = out["obs"].astype(float)
+    eligible = out["eligible"].astype(float)
+    lost = (cancelled - added).clip(lower=0)
+    operated = (scheduled + added).astype(float)
+    out["on_time"] = out["cnt_le300"] - out["cnt_lt60"]
+    out["expected"] = eligible + (lost * eligible / operated.where(operated > 0)).fillna(0.0)
+    out["assured"] = (eligible - out["skipped"]).clip(lower=0).astype(float)
+    out["assured_on_time"] = (out["on_time"] / obs.where(obs > 0) * out["assured"]).fillna(0.0)
+    return out
+
+
+def score_of(assured_on_time, expected):
+    """Score 2.0 (sur 100) à partir des composantes sommées ; NaN sans passage attendu."""
+    if isinstance(expected, pd.Series):
+        return 100 * assured_on_time / expected.where(expected > 0)
+    return 100 * float(assured_on_time) / float(expected) if expected and expected > 0 else float("nan")
+
+
+@dataclass(frozen=True)
+class Exclusions:
+    jours: tuple = ()
+    lignes: tuple = ()
+
+
+def exclusions(conn, since_day: str, end_day: str) -> Exclusions:
+    """Jours et lignes écartés de toute analyse de la période : jours incomplets, lignes au temps réel douteux."""
+    return Exclusions(tuple(excluded_days(conn, since_day, end_day)),
+                      tuple(sorted(doubtful_routes(conn, since_day, end_day))))
+
+
+def exclusion_sql(alias: str, excl: Exclusions) -> tuple[str, list]:
+    """Filtre SQL d'une table d'agrégats (colonnes date_service, route_id) : Flex', jours et lignes écartés."""
+    sql = f" AND {alias}.{FLEX_FILTER}"
+    params: list = []
+    if excl.jours:
+        sql += f" AND {alias}.date_service NOT IN ({', '.join('?' for _ in excl.jours)})"
+        params += list(excl.jours)
+    if excl.lignes:
+        sql += f" AND {alias}.route_id NOT IN ({', '.join('?' for _ in excl.lignes)})"
+        params += list(excl.lignes)
+    return sql, params
+
+
 def combine(days: dict, excluded=(), discarded=None) -> Indicateurs:
     kept = {d: v for d, v in days.items() if d not in excluded and v["expected"] > 0}
     result = Indicateurs(jours=len(kept), jours_exclus=sorted(d for d in days if d in excluded),

@@ -455,12 +455,12 @@ class TestRapportV2:
         assert r"75,1 $\pm$ 1,2" in tex
         assert "baisse significative" in tex
         assert "comparaison impossible" in tex
-        assert "(collecte incomplète) : 08/09, 24/09." in tex
+        assert "(collecte incomplète), de tous les indicateurs du rapport : 08/09, 24/09." in tex
         assert "(conservés) : 21/08." in tex
         assert r"Navette\_102 (100\,\% de retards nuls)" in tex
         assert r"S35 & 18,6 $\pm$ 11,0 & 18,9\,\% & 70,2\,\% & 100,0\,\% & 371" in tex
         assert "\nA & 5 min 00 s & 5 min 30 s & +30 s" in tex
-        assert "Navette" not in tex.split("Lignes les moins bien placées")[1].split("Qualité des données")[0]
+        assert "Navette" not in tex.split("Lignes les moins fiables : marge")[1].split("Qualité des données")[0]
         assert "\n19 &" not in tex
 
     def test_synthese_et_absence(self):
@@ -485,3 +485,48 @@ class TestRapportV2:
         import generate_monthly_report as report
 
         assert report.query_method_v2(v2_db, "2026-06", report.Scope("t", [], [], "t")) is None
+
+
+class TestComposantesPartagees:
+    def test_identiques_au_calcul_de_la_methode(self):
+        rows = pd.DataFrame({"obs": [100, 50, 0], "cnt_le300": [90, 45, 0], "cnt_lt60": [10, 0, 0],
+                             "eligible": [110, 60, 20], "skipped": [10, 5, 20],
+                             "scheduled": [20, 10, 0], "cancelled": [3, 0, 2], "added": [1, 0, 0]})
+        out = ind.add_components(rows)
+        for i, r in rows.iterrows():
+            expected = ind.route_day_components(r.obs, r.cnt_le300 - r.cnt_lt60, r.eligible, r.skipped,
+                                                r.cancelled, r.added, r.scheduled, r.cnt_lt60)
+            for col in ("expected", "assured", "assured_on_time"):
+                assert out.loc[i, col] == pytest.approx(expected[col])
+        assert out["on_time"].tolist() == [80, 45, 0]
+
+    def test_sans_colonnes_de_courses(self):
+        out = ind.add_components(pd.DataFrame({"obs": [10], "cnt_le300": [8], "cnt_lt60": [0],
+                                               "eligible": [10], "skipped": [0]}))
+        assert out["expected"].iloc[0] == 10
+        assert out["assured_on_time"].iloc[0] == pytest.approx(8)
+
+    def test_score_des_sommes(self):
+        assert ind.score_of(80.0, 100.0) == 80.0
+        assert math.isnan(ind.score_of(0.0, 0.0))
+        series = ind.score_of(pd.Series([8.0, 0.0]), pd.Series([10.0, 0.0]))
+        assert series.iloc[0] == 80.0 and math.isnan(series.iloc[1])
+
+    def test_filtre_d_exclusion_et_meme_score_que_la_methode(self, v2_db):
+        excl = ind.exclusions(v2_db, "2026-09-14", "2026-09-20")
+        assert excl == ind.Exclusions(("2026-09-15",), ("D",))
+        sql, params = ind.exclusion_sql("a", excl)
+        rows = pd.read_sql_query(
+            f"""SELECT a.date_service, a.route_id, a.obs, a.cnt_le300, a.cnt_lt60, a.eligible, a.skipped,
+                       COALESCE(t.scheduled, 0) scheduled, COALESCE(t.cancelled, 0) cancelled,
+                       COALESCE(t.added, 0) added
+                FROM agg_daily a LEFT JOIN agg_daily_trips t
+                     ON t.date_service = a.date_service AND t.route_id = a.route_id
+                WHERE a.date_service >= ? AND a.date_service < ? {sql}""",
+            v2_db, params=["2026-09-14", "2026-09-20", *params])
+        assert sorted(zip(rows["date_service"], rows["route_id"])) == [
+            ("2026-09-14", "A"), ("2026-09-14", "B"), ("2026-09-19", "A")]
+        comp = ind.add_components(rows)
+        score = ind.score_of(comp["assured_on_time"].sum(), comp["expected"].sum())
+        assert score == pytest.approx(ind.indicators(v2_db, "2026-09-14", "2026-09-20").score)
+        assert ind.exclusion_sql("a", ind.Exclusions()) == (f" AND a.{ind.FLEX_FILTER}", [])

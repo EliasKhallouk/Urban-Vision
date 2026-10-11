@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -34,10 +35,10 @@ class TestLatexEscape:
 
 class TestPct:
     def test_valeur_normale(self):
-        assert report.pct(90.123) == "90.1\\%"
+        assert report.pct(90.123) == "90,1\\,\\%"
 
     def test_valeur_zero(self):
-        assert report.pct(0) == "0.0\\%"
+        assert report.pct(0) == "0,0\\,\\%"
 
     def test_none_et_nan(self):
         assert report.pct(None) == "—"
@@ -191,21 +192,20 @@ def _skipped_frame(eligible=10, skipped=2):
 
 
 class TestKpis:
-    def test_formule(self):
-        scheduled = _scheduled_delays([0, 200, 500])
+    def test_ponctualite_stricte_et_score_fourni(self):
+        scheduled = _scheduled_delays([-120, -60, 0, 200, 500])
         skipped = _skipped_frame()
-        k = report.kpis(scheduled, skipped)
-        assert k["passages"] == 3
-        assert round(k["ponctualite"], 6) == 66.666667
-        assert round(k["retard"], 6) == 233.333333
-        assert k["retard_median"] == 200
+        k = report.kpis(scheduled, skipped, 72.5)
+        assert k["passages"] == 5
+        assert k["ponctualite"] == pytest.approx(60.0)
+        assert k["retard_median"] == 0
         assert round(k["skip_rate"], 6) == 20.0
-        assert round(k["fiability"], 6) == round(66.666667 - 40.0, 6)
+        assert k["fiability"] == 72.5
 
-    def test_sans_arrets_sautes(self):
-        k = report.kpis(_scheduled_delays([10, 20]), _skipped_frame(eligible=0, skipped=0))
+    def test_sans_score(self):
+        k = report.kpis(_scheduled_delays([10, 20]), _skipped_frame(eligible=0, skipped=0), None)
         assert k["skip_rate"] == 0
-        assert k["fiability"] == round(k["ponctualite"], 6)
+        assert math.isnan(k["fiability"])
 
 
 class TestComparison:
@@ -218,32 +218,38 @@ class TestComparison:
             {"fiability": 80, "ponctualite": 90, "retard": 20, "retard_median": 15, "skip_rate": 5},
             {"fiability": 75, "ponctualite": 85, "retard": 30, "retard_median": 25, "skip_rate": 3},
         )
-        assert c["fiability"] == "+5.0 / 100"
-        assert c["ponctualite"] == "+5.0 %"
+        assert c["fiability"] == "+5,0 / 100"
+        assert c["ponctualite"] == "+5,0 %"
         assert "moy." in c["retard"]
-        assert c["skip_rate"] == "+2.00 %"
+        assert c["skip_rate"] == "+2,00 %"
+        assert report.comparison({"fiability": 70, "ponctualite": 80, "retard": 40, "retard_median": 30,
+                                  "skip_rate": 1}, {"fiability": 75, "ponctualite": 85, "retard": 30,
+                                                    "retard_median": 25, "skip_rate": 3})["fiability"] == "−5,0 / 100"
 
 
 class TestMakeLineStats:
-    def test_score_et_tri(self):
-        scheduled = pd.DataFrame(
+    def _scheduled(self):
+        return pd.DataFrame(
             {
-                "route_id": ["A", "A", "A", "B", "B"],
-                "ligne": ["1", "1", "1", "2", "2"],
-                "departure_delay": [300, 400, 500, 0, 100],
+                "route_id": ["A", "A", "A", "B", "B", "C"],
+                "ligne": ["1", "1", "1", "2", "2", "3"],
+                "departure_delay": [300, 400, -500, 0, 100, 0],
             }
         )
-        lines = report.make_line_stats(scheduled, _skipped_frame())
-        row_a = lines[lines["route_id"] == "A"].iloc[0]
-        row_b = lines[lines["route_id"] == "B"].iloc[0]
-        assert row_a["passages"] == 3
-        assert row_b["passages"] == 2
-        assert row_b["score"] > row_a["score"]
 
-    def test_score_borne_a_zero(self):
-        scheduled = _scheduled_delays([1000, 1000])
-        lines = report.make_line_stats(scheduled, _skipped_frame(eligible=10, skipped=5))
-        assert lines.iloc[0]["score"] == 0.0
+    def test_score_de_la_methode_et_tri(self):
+        scores = pd.DataFrame({"route_id": ["A", "B"], "score": [30.0, 95.0], "service": [90.0, 95.0]})
+        lines = report.make_line_stats(self._scheduled(), _skipped_frame(), scores)
+        assert lines["route_id"].tolist() == ["A", "B"]
+        row_a = lines[lines["route_id"] == "A"].iloc[0]
+        assert row_a["passages"] == 3
+        assert row_a["ponctualite"] == pytest.approx(100 / 3)
+        assert row_a["score"] == 30.0
+
+    def test_ligne_sans_score_non_classee(self):
+        scores = pd.DataFrame({"route_id": ["A", "B"], "score": [30.0, float("nan")], "service": [90.0, None]})
+        lines = report.make_line_stats(self._scheduled(), _skipped_frame(), scores)
+        assert lines["route_id"].tolist() == ["A"]
 
 
 class TestRankingLines:
@@ -287,18 +293,19 @@ class TestRankingLines:
 class TestExecutiveMessage:
     def test_bon_et_pire_ligne(self):
         scheduled = _scheduled_delays([10, 400])
-        lines = report.make_line_stats(scheduled, _skipped_frame())
-        msg = report.executive_message(
-            report.kpis(scheduled, _skipped_frame()), lines
-        )
-        assert "1" in msg  # ligne A
-        assert "score de fiabilité" in msg
+        scores = pd.DataFrame({"route_id": ["A"], "score": [45.0], "service": [80.0]})
+        lines = report.make_line_stats(scheduled, _skipped_frame(), scores)
+        msg = report.executive_message(report.kpis(scheduled, _skipped_frame(), 84.0), lines)
+        assert msg.startswith("Le réseau TBM obtient un score de fiabilité de 84,0/100 (fiable) : 50,0\\,\\% des "
+                              "passages sont partis à l'heure, entre une minute d'avance et cinq minutes de retard.")
+        assert "ligne 1, avec un score de fiabilité de 45,0/100" in msg
 
-    def test_grand_rate_bas(self):
-        kpi = {"ponctualite": 70, "skip_rate": 0}
+    def test_etat_du_score_et_arrets_non_desservis(self):
+        kpi = {"fiability": 42.0, "ponctualite": 70, "skip_rate": 6.0}
         lines = pd.DataFrame([{"score": 40, "retard_5": 30, "ligne": "3"}])
         msg = report.executive_message(kpi, lines)
-        assert "insuffisante" in msg
+        assert "(problématique)" in msg
+        assert "aggrave la situation" in msg
         assert "ligne 3" in msg
 
 
@@ -415,14 +422,15 @@ class TestLigneTrousDeCollecte:
 
 class TestQueryMonthlyEvolution:
     def test_regroupement_mensuel(self, conn):
+        gtfs_static.create_static_tables(conn)
         for month in ["2026-07-11", "2026-08-11"]:
             departure = _epoch_local(2026, int(month[5:7]), 11, 8, 0)
             conn.execute(
                 "INSERT INTO observations (trip_id, start_date, route_id, direction_id, "
                 "stop_sequence, stop_id, schedule_relationship, departure_delay, "
                 "departure_time, last_seen_at) "
-                "VALUES (?, '20260711', 'A', 0, 1, 's1', 'SCHEDULED', 10, ?, ?)",
-                (f"t_{month}", departure, departure),
+                "VALUES (?, ?, 'A', 0, 1, 's1', 'SCHEDULED', 10, ?, ?)",
+                (f"t_{month}", month.replace("-", ""), departure, departure),
             )
         # une observation plus récente décale le buffer (cutoff = max - 20 min)
         deltat = _epoch_local(2026, 9, 11, 8, 0)
@@ -440,6 +448,7 @@ class TestQueryMonthlyEvolution:
         scope = report.Scope("test", [], [], "test")
         evo = report.query_monthly_evolution(conn, "2026-08", scope)
         assert evo["mois"].tolist() == ["2026-07", "2026-08"]
+        assert evo["score"].tolist() == [100.0, 100.0]
         assert evo["ponctualite"].tolist() == [100.0, 100.0]
         assert evo["retard_moyen"].tolist() == [10.0, 10.0]
         assert evo["passages"].tolist() == [1, 1]
@@ -734,3 +743,39 @@ class TestCompilePdf:
         monkeypatch.setattr(shutil, "which", lambda name: None)
         with pytest.raises(RuntimeError, match="introuvable"):
             report.compile_pdf(__import__("pathlib").Path("dummy.tex"))
+
+class TestExclusionsDuRapport:
+    def test_jours_et_lignes_ecartes_et_score_de_la_methode(self, conn):
+        import db as dbio
+        import indicateurs as ind
+
+        gtfs_static.create_static_tables(conn)
+        conn.executemany("INSERT INTO routes (route_id, route_short_name, route_type) VALUES (?, ?, 3)",
+                         [("A", "1"), ("D", "9")])
+        rows = []
+        for route, day, delay in [("A", 10, 30), ("A", 10, -200), ("A", 11, 600), ("D", 10, 0)]:
+            t = _epoch_local(2026, 9, day, 8, len(rows))
+            rows.append((f"t{len(rows)}", f"202609{day}", route, delay, t, t))
+        t = _epoch_local(2026, 10, 2, 8)
+        rows.append(("oct", "20261002", "A", 0, t, t))
+        conn.executemany(
+            "INSERT INTO observations (trip_id, start_date, route_id, direction_id, stop_sequence, stop_id, "
+            "schedule_relationship, departure_delay, departure_time, last_seen_at) "
+            "VALUES (?, ?, ?, 0, 1, 's1', 'SCHEDULED', ?, ?, ?)", rows)
+        conn.commit()
+        dbio.refresh_aggregates(conn, days=None)
+        conn.execute("DELETE FROM quality_days")
+        conn.execute("INSERT INTO quality_days VALUES ('2026-09-11', 0, '[]', 'incomplet', 0)")
+        conn.execute("UPDATE agg_daily SET histogram = '{\"0\": 300}' WHERE route_id = 'D'")
+        conn.commit()
+        scope = report.Scope("t", [], [], "t")
+        scheduled, skipped, _ = report.query_observations(conn, "2026-09", scope)
+        assert sorted(scheduled["departure_delay"]) == [-200, 30]
+        assert set(scheduled["route_id"]) == {"A"}
+        assert int(skipped["eligible"].sum()) == 2
+        scores = report.query_scores(conn, "2026-09", scope)
+        assert scores["score"] == pytest.approx(ind.indicators(conn, "2026-09-01", "2026-10-01").score)
+        assert scores["score"] == pytest.approx(50.0)
+        assert scores["lines"]["route_id"].tolist() == ["A"]
+        k = report.kpis(scheduled, skipped, scores["score"])
+        assert k["ponctualite"] == pytest.approx(50.0)

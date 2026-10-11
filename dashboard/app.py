@@ -42,7 +42,6 @@ from diagnostic import (
     format_number,
     format_seconds,
     number_formatter,
-    reliability_score,
     median_from_hists as _median_from_hists,
     period_labels as _period_labels,
 )
@@ -82,6 +81,10 @@ COLLECTION_HOURLY_DAYS = 7
 _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
+_SRC_SCRIPTS = str(Path(__file__).resolve().parents[1] / "src" / "scripts")
+if _SRC_SCRIPTS not in sys.path:
+    sys.path.insert(0, _SRC_SCRIPTS)
+import indicateurs as ind  # noqa: E402
 from generate_all_reports import slug as report_slug  # noqa: E402
 from palette import (  # noqa: E402
     BLACK_FOREST,
@@ -593,62 +596,80 @@ def inject_style() -> None:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_exclusions(_conn, since_day: str, end_day: str) -> ind.Exclusions:
+    """Jours incomplets et lignes au temps réel douteux de la période, écartés de toute analyse."""
+    return ind.exclusions(_conn, since_day, end_day)
+
+
+def _excluded(conn, alias: str, since_day: str, end_day: str) -> tuple[str, list]:
+    """Filtre SQL des agrégats : lignes Flex', jours et lignes écartés de la période (`load_exclusions`)."""
+    return ind.exclusion_sql(alias, load_exclusions(conn, since_day, end_day))
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def _load_daily_core(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
                      route_id: str | None = None, commune: str | None = None) -> pd.DataFrame:
-    """Lignes des agrégats journaliers (réseau ou commune restreinte).
+    """Lignes des agrégats journaliers (réseau ou commune restreinte), avec les composantes du score.
 
     En mode réseau, lit agg_daily (une ligne par ligne et par jour). En mode
     commune, lit agg_daily_stop (une ligne par arrêt, ligne et jour) puis groupe
-    au niveau ligne sur la période, pour restreindre aux arrêts de la commune.
+    au niveau ligne et jour, pour restreindre aux arrêts de la commune. Les jours
+    et lignes écartés (`load_exclusions`) et les lignes Flex' sont exclus ; les
+    composantes du score (`indicateurs.add_components`) sont calculées par ligne
+    et par jour, avec les courses supprimées de agg_daily_trips.
     """
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "d", since_day, end_day)
+    route_sql, route_params = (" AND d.route_id = ?", [route_id]) if route_id else ("", [])
     if commune is None:
-        route_sql, route_params = (" AND d.route_id = ?", [route_id]) if route_id else ("", [])
         df = pd.read_sql_query(
             f"""
             SELECT d.date_service, d.route_id,
                    COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
                    d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-                   d.skipped, d.eligible, d.histogram
+                   d.skipped, d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
             FROM agg_daily d LEFT JOIN routes r ON r.route_id = d.route_id
-            WHERE d.date_service >= ? AND d.date_service < ? {route_sql}
+            LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+            WHERE d.date_service >= ? AND d.date_service < ? {route_sql} {excl_sql}
             ORDER BY d.date_service
-            """, _conn, params=(since_day, end_day, *route_params),
+            """, _conn, params=(since_day, end_day, *route_params, *excl_params),
         )
     else:
-        route_sql, route_params = (" AND d.route_id = ?", [route_id]) if route_id else ("", [])
         df = pd.read_sql_query(
             f"""
             SELECT d.date_service, d.route_id, d.stop_id,
                    COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
                    d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60,
-                   d.skipped, d.eligible, d.histogram
+                   d.skipped, d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
             FROM agg_daily_stop d
             JOIN routes r ON r.route_id = d.route_id
             JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
-            WHERE sm.commune_name = ? AND d.date_service >= ? AND d.date_service < ? {route_sql}
+            LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+            WHERE sm.commune_name = ? AND d.date_service >= ? AND d.date_service < ? {route_sql} {excl_sql}
             ORDER BY d.date_service
-            """, _conn, params=(commune, since_day, end_day, *route_params),
+            """, _conn, params=(commune, since_day, end_day, *route_params, *excl_params),
         )
         if not df.empty:
             df = _group_daily_stop_to_route(df)
-    if not df.empty:
-        df["hist"] = df["histogram"].map(json.loads)
-        df["date_service"] = pd.to_datetime(df["date_service"])
+    df = ind.add_components(df)
+    df["hist"] = df["histogram"].map(json.loads)
+    df["date_service"] = pd.to_datetime(df["date_service"])
     return df
 
 
 def _group_daily_stop_to_route(df: pd.DataFrame) -> pd.DataFrame:
     """Agrège les lignes de agg_daily_stop au niveau (date_service, route_id).
 
-    Somme les compteurs et fusionne les histogrammes JSON arrêt par arrêt.
+    Somme les compteurs et fusionne les histogrammes JSON arrêt par arrêt ; les
+    courses (prévues, supprimées, ajoutées) sont celles de la ligne ce jour-là.
     """
     agg = (
         df.groupby(["date_service", "route_id", "ligne", "route_type"], sort=False)
         .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"),
              cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"),
              cnt_lt60=("cnt_lt60", "sum"), skipped=("skipped", "sum"),
-             eligible=("eligible", "sum"))
+             eligible=("eligible", "sum"), scheduled=("scheduled", "first"),
+             cancelled=("cancelled", "first"), added=("added", "first"))
         .reset_index()
     )
     hists = {}
@@ -672,37 +693,37 @@ def _load_hourly_core(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int |
     En mode commune, lit agg_hourly_stop puis groupe au niveau ligne.
     """
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "h", since_day, end_day)
+    route_sql, route_params = (" AND h.route_id = ?", [route_id]) if route_id else ("", [])
     if commune is None:
-        route_sql, route_params = (" AND h.route_id = ?", [route_id]) if route_id else ("", [])
-        return pd.read_sql_query(
+        df = pd.read_sql_query(
             f"""
             SELECT h.date_service, h.route_id, h.heure, r.route_type,
-                   h.obs, h.sum_delay, h.cnt_le300, h.cnt_gt300
+                   h.obs, h.sum_delay, h.cnt_le300, h.cnt_gt300, h.cnt_lt60
             FROM agg_hourly h LEFT JOIN routes r ON r.route_id = h.route_id
-            WHERE h.date_service >= ? AND h.date_service < ? {route_sql}
+            WHERE h.date_service >= ? AND h.date_service < ? {route_sql} {excl_sql}
             ORDER BY h.heure
-            """, _conn, params=(since_day, end_day, *route_params),
+            """, _conn, params=(since_day, end_day, *route_params, *excl_params),
         )
-    route_sql, route_params = (" AND h.route_id = ?", [route_id]) if route_id else ("", [])
-    df = pd.read_sql_query(
-        f"""
-        SELECT h.date_service, h.route_id, h.heure, r.route_type,
-               h.obs, h.sum_delay, h.cnt_le300, h.cnt_gt300
-        FROM agg_hourly_stop h
-        JOIN routes r ON r.route_id = h.route_id
-        JOIN stop_municipalities sm ON sm.stop_id = h.stop_id
-        WHERE sm.commune_name = ? AND h.date_service >= ? AND h.date_service < ? {route_sql}
-        ORDER BY h.heure
-        """, _conn, params=(commune, since_day, end_day, *route_params),
-    )
-    if df.empty:
-        return df
-    return (
-        df.groupby(["date_service", "route_id", "heure", "route_type"], sort=False)
-        .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"),
-             cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"))
-        .reset_index()
-    )
+    else:
+        df = pd.read_sql_query(
+            f"""
+            SELECT h.date_service, h.route_id, h.heure, r.route_type,
+                   h.obs, h.sum_delay, h.cnt_le300, h.cnt_gt300, h.cnt_lt60
+            FROM agg_hourly_stop h
+            JOIN routes r ON r.route_id = h.route_id
+            JOIN stop_municipalities sm ON sm.stop_id = h.stop_id
+            WHERE sm.commune_name = ? AND h.date_service >= ? AND h.date_service < ? {route_sql} {excl_sql}
+            ORDER BY h.heure
+            """, _conn, params=(commune, since_day, end_day, *route_params, *excl_params),
+        )
+        if not df.empty:
+            df = (df.groupby(["date_service", "route_id", "heure", "route_type"], sort=False)
+                  .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"), cnt_le300=("cnt_le300", "sum"),
+                       cnt_gt300=("cnt_gt300", "sum"), cnt_lt60=("cnt_lt60", "sum"))
+                  .reset_index())
+    df["on_time"] = df["cnt_le300"] - df["cnt_lt60"]
+    return df
 
 
 def _daily_to_network(core: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -710,7 +731,7 @@ def _daily_to_network(core: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if core.empty:
         empty_s = core[["route_id", "ligne", "route_type"]].copy()
         for col in ("observations", "retard_moyen_s", "retard_median_s",
-                    "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min"):
+                    "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min") + ind.COMPONENT_COLUMNS:
             empty_s[col] = np.nan
         empty_k = core[["route_id", "ligne", "route_type"]].copy()
         empty_k[["skipped", "eligible"]] = 0
@@ -725,9 +746,10 @@ def _daily_to_network(core: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             "route_type": sub["route_type"].iloc[0],
             "observations": obs,
             "retard_moyen_s": sub["sum_delay"].sum() / max(obs, 1),
-            "pct_a_l_heure": sub["cnt_le300"].sum() / max(obs, 1) * 100,
+            "pct_a_l_heure": sub["on_time"].sum() / max(obs, 1) * 100,
             "pct_retard_5min": sub["cnt_gt300"].sum() / max(obs, 1) * 100,
             "pct_avance_1min": sub["cnt_lt60"].sum() / max(obs, 1) * 100,
+            **{col: float(sub[col].sum()) for col in ind.COMPONENT_COLUMNS},
         }
     scheduled = pd.DataFrame(rows.values() if rows else rows)
     scheduled["retard_median_s"] = [_median_from_hists(hists[rid]) for rid in scheduled["route_id"]]
@@ -752,9 +774,15 @@ def load_network_data(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int |
 
 
 def make_ranking(scheduled: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame:
+    """Classement des lignes : score de fiabilité (`indicateurs.score_of`), service assuré, arrêts non desservis.
+
+    Une ligne sans passage attendu sur la période (aucun score possible) n'est pas classée.
+    """
     ranking = scheduled.merge(skipped, on=["route_id", "ligne", "route_type"], how="left").fillna({"skipped": 0, "eligible": 0})
     ranking["pct_arrets_sautes"] = np.where(ranking["eligible"] > 0, ranking["skipped"] / ranking["eligible"] * 100, 0)
-    ranking["score_fiabilite"] = (ranking["pct_a_l_heure"] - ranking["pct_arrets_sautes"] * 2).clip(0, 100)
+    ranking["score_fiabilite"] = ind.score_of(ranking["assured_on_time"], ranking["expected"])
+    ranking["pct_service"] = ind.score_of(ranking["assured"], ranking["expected"])
+    ranking = ranking[ranking["score_fiabilite"].notna()].copy()
     ranking["mode"] = ranking["route_type"].map(MODE_LABELS).fillna("Autre")
     return ranking.sort_values(["score_fiabilite", "observations"], ascending=[True, False])
 
@@ -774,11 +802,12 @@ def load_mode_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
             "route_type": rt,
             "observations": obs,
             "retard_moyen_s": sub["sum_delay"].sum() / max(obs, 1),
-            "pct_a_l_heure": sub["cnt_le300"].sum() / max(obs, 1) * 100,
+            "pct_a_l_heure": sub["on_time"].sum() / max(obs, 1) * 100,
             "pct_retard_5min": sub["cnt_gt300"].sum() / max(obs, 1) * 100,
             "pct_avance_1min": sub["cnt_lt60"].sum() / max(obs, 1) * 100,
             "skipped": int(sub["skipped"].sum()),
             "eligible": int(sub["eligible"].sum()),
+            "score_fiabilite": ind.score_of(sub["assured_on_time"].sum(), sub["expected"].sum()),
         }
     g = pd.DataFrame(rows.values() if rows else rows)
     g["retard_median_s"] = [_median_from_hists(hists[rt]) for rt in g["route_type"]]
@@ -835,26 +864,33 @@ def _sort_periods(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_period_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
                       commune: str | None = None) -> pd.DataFrame:
-    """Fiabilité par créneau (Matin/Journée/Pointe du soir/Soirée & nuit/Week-end)."""
+    """Fiabilité par créneau (Matin/Journée/Pointe du soir/Soirée & nuit/Week-end).
+
+    Les arrêts non desservis et les courses supprimées n'ont pas d'heure : le score d'un
+    créneau est sa part de passages à l'heure × le service assuré des jours qu'il couvre
+    (semaine ou week-end, `period_day_rates`).
+    """
     core = _load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune)
     if core.empty:
         return pd.DataFrame(columns=["période", "observations", "retard_moyen_s", "pct_a_l_heure",
-                                     "pct_retard_5min", "pct_arrets_sautes", "score_fiabilite"])
+                                     "pct_retard_5min", "pct_arrets_sautes", "pct_service", "score_fiabilite"])
     core = core.copy()
     core["période"] = _period_labels(core["date_service"], core["heure"])
     g = (core.groupby("période", sort=False)
          .agg(observations=("obs", "sum"), sum_delay=("sum_delay", "sum"),
-              cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+              on_time=("on_time", "sum"), cnt_gt300=("cnt_gt300", "sum"))
          .reset_index())
     g["retard_moyen_s"] = g["sum_delay"] / g["observations"].replace(0, np.nan)
-    g["pct_a_l_heure"] = g["cnt_le300"] / g["observations"].replace(0, np.nan) * 100
+    g["pct_a_l_heure"] = g["on_time"] / g["observations"].replace(0, np.nan) * 100
     g["pct_retard_5min"] = g["cnt_gt300"] / g["observations"].replace(0, np.nan) * 100
-    rates = period_skip_rates(_load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune))
-    g["pct_arrets_sautes"] = [rates["week-end" if p == "Week-end" else "semaine"] for p in g["période"]]
-    g["score_fiabilite"] = (g["pct_a_l_heure"] - 2 * g["pct_arrets_sautes"]).clip(0, 100)
+    rates = period_day_rates(_load_daily_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune))
+    day_type = ["week-end" if p == "Week-end" else "semaine" for p in g["période"]]
+    g["pct_arrets_sautes"] = [rates[d]["skip"] for d in day_type]
+    g["pct_service"] = [rates[d]["service"] for d in day_type]
+    g["score_fiabilite"] = g["pct_a_l_heure"] * g["pct_service"] / 100
     return _sort_periods(g).reset_index(drop=True)[
         ["période", "observations", "retard_moyen_s", "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes",
-         "score_fiabilite"]]
+         "pct_service", "score_fiabilite"]]
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -889,13 +925,13 @@ def load_period_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int |
         core = core[core["période"] == periode]
     lines = (core.groupby(["route_id", "route_type"], sort=False)
              .agg(observations=("obs", "sum"), sum_delay=("sum_delay", "sum"),
-                  cnt_le300=("cnt_le300", "sum"), cnt_gt300=("cnt_gt300", "sum"))
+                  on_time=("on_time", "sum"), cnt_gt300=("cnt_gt300", "sum"))
              .reset_index())
     lines = lines[lines["observations"] >= MIN_OBSERVATIONS]
     if lines.empty:
         return empty
     lines["retard_moyen_s"] = lines["sum_delay"] / lines["observations"].replace(0, np.nan)
-    lines["pct_a_l_heure"] = lines["cnt_le300"] / lines["observations"].replace(0, np.nan) * 100
+    lines["pct_a_l_heure"] = lines["on_time"] / lines["observations"].replace(0, np.nan) * 100
     lines["pct_retard_5min"] = lines["cnt_gt300"] / lines["observations"].replace(0, np.nan) * 100
     rows = _conn.execute(
         "SELECT route_id, COALESCE(route_short_name, route_id) FROM routes"
@@ -958,14 +994,14 @@ def _attach_mode(df: pd.DataFrame) -> pd.DataFrame:
 
 
 MODE_ORDER = ["Tramway", "Bus", "Ferry"]
-METRIC_SUMS = ("obs", "sum_delay", "cnt_le300", "cnt_gt300", "skipped", "eligible")
+METRIC_SUMS = ("obs", "sum_delay", "on_time", "cnt_gt300", "skipped", "eligible") + ind.COMPONENT_COLUMNS[1:]
 
 
 def group_metrics(core: pd.DataFrame, key: str | None) -> pd.DataFrame:
     """Indicateurs pour l'ensemble du périmètre (« Ensemble ») et pour chaque mode, par `key` (jour, heure…).
 
-    Score de fiabilité, ponctualité, retards > 5 min, retard moyen et arrêts non desservis quand les
-    colonnes des arrêts non desservis sont présentes (agrégats journaliers seulement).
+    Ponctualité, retards > 5 min et retard moyen ; score de fiabilité et arrêts non desservis quand
+    les composantes du score sont présentes (agrégats journaliers seulement).
     """
     keys = ([key] if key else []) + ["groupe", "route_type"]
     columns = keys + ["observations", "pct_a_l_heure", "pct_retard_5min", "retard_moyen_s"]
@@ -978,12 +1014,12 @@ def group_metrics(core: pd.DataFrame, key: str | None) -> pd.DataFrame:
     g = pd.concat(frames, ignore_index=True).groupby(keys, sort=True)[sums].sum().reset_index()
     obs = g["obs"].replace(0, np.nan)
     g["observations"] = g["obs"]
-    g["pct_a_l_heure"] = g["cnt_le300"] / obs * 100
+    g["pct_a_l_heure"] = g["on_time"] / obs * 100
     g["pct_retard_5min"] = g["cnt_gt300"] / obs * 100
     g["retard_moyen_s"] = g["sum_delay"] / obs
-    if "eligible" in g.columns:
+    if "expected" in g.columns:
         g["pct_arrets_sautes"] = np.where(g["eligible"] > 0, g["skipped"] / g["eligible"].replace(0, np.nan) * 100, 0.0)
-        g["score_fiabilite"] = (g["pct_a_l_heure"] - 2 * g["pct_arrets_sautes"]).clip(0, 100)
+        g["score_fiabilite"] = ind.score_of(g["assured_on_time"], g["expected"])
     return g
 
 
@@ -1008,15 +1044,23 @@ def load_hourly_metrics(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int
     return group_metrics(_load_hourly_core(_conn, cutoff_ts, since_ts, end_ts, commune=commune), "heure")
 
 
-def period_skip_rates(daily_core: pd.DataFrame) -> dict:
-    """Taux d'arrêts non desservis des jours de semaine et du week-end (en %)."""
+def period_day_rates(daily_core: pd.DataFrame) -> dict:
+    """Service assuré et arrêts non desservis (en %) des jours de semaine et du week-end.
+
+    `service` : passages assurés / passages attendus (composantes du score) ; `skip` :
+    arrêts non desservis / arrêts attendus. Sans passage attendu : 100 % et 0 %.
+    """
+    out = {name: {"service": 100.0, "skip": 0.0} for name in ("semaine", "week-end")}
     if daily_core.empty:
-        return {"semaine": 0.0, "week-end": 0.0}
+        return out
     weekend = pd.to_datetime(daily_core["date_service"]).dt.weekday >= 5
-    out = {}
     for name, mask in (("semaine", ~weekend), ("week-end", weekend)):
-        eligible = float(daily_core.loc[mask, "eligible"].sum())
-        out[name] = float(daily_core.loc[mask, "skipped"].sum()) / eligible * 100 if eligible else 0.0
+        sub = daily_core.loc[mask]
+        expected, eligible = float(sub["expected"].sum()), float(sub["eligible"].sum())
+        if expected > 0:
+            out[name]["service"] = float(sub["assured"].sum()) / expected * 100
+        if eligible > 0:
+            out[name]["skip"] = float(sub["skipped"].sum()) / eligible * 100
     return out
 
 
@@ -1106,7 +1150,7 @@ def load_open_dataset(_conn, name: str, cutoff_ts: int, since_ts: int | None,
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_method_v2(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
                    commune: str | None = None, route_id: str | None = None) -> dict:
-    """Indicateurs de la méthode 2.0 (en test) pour la période, via src/scripts/indicateurs."""
+    """Score de fiabilité de la période avec sa marge, service assuré, départs en avance (src/scripts/indicateurs)."""
     src_dir = Path(__file__).resolve().parents[1] / "src" / "scripts"
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
@@ -1134,54 +1178,56 @@ def _with_margin(value: float, margin: float | None) -> str:
 
 
 def method_v2_caption(v2: dict | None, route_id: str | None = None) -> str | None:
-    """Phrase de la fiche ligne sur la méthode 2.0 (en test), ou None si rien à dire."""
-    if not v2:
+    """Phrase de la fiche ligne : marge du score, service assuré, départs en avance, attente excédentaire."""
+    if not v2 or not v2["disponible"]:
         return None
-    if route_id is not None and route_id in v2["lignes_ecartees"]:
-        return (f"Méthode 2.0 (en test) : ligne non évaluée, temps réel douteux "
-                f"({v2['lignes_ecartees'][route_id]:.0f} % de retards exactement nuls).")
-    if not v2["disponible"]:
-        return None
-    parts = [f"score {_with_margin(v2['score'], v2['marge'])} / 100",
-             f"ponctualité stricte (de −1 à +5 min) {format_number(v2['ponctualite'], 1)} %",
-             f"service assuré {format_number(v2['service'], 1)} %"]
+    parts = [f"score {_with_margin(v2['score'], v2['marge'])} / 100 (marge à 95 %)",
+             f"service assuré {format_number(v2['service'], 1)} %",
+             f"départs de plus d'1 min en avance {format_number(v2['avance'], 1)} %"]
     if v2["attente_excedentaire"] is not None:
         parts.append(f"attente excédentaire {format_seconds(v2['attente_excedentaire'], signed=True)}")
-    return "Méthode 2.0 (en test) : " + " · ".join(parts) + "."
+    return "Détail du score : " + ", ".join(parts) + "."
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_commune_stats(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None) -> pd.DataFrame:
     """Fiabilité par commune, agrégée depuis agg_daily_stop (jamais la table brute)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
-    rows = _conn.execute(
-        """
-        SELECT sm.commune_name AS commune,
+    excl_sql, excl_params = _excluded(_conn, "d", since_day, end_day)
+    rows = pd.read_sql_query(
+        f"""
+        SELECT sm.commune_name AS commune, d.date_service, d.route_id,
                SUM(d.obs) AS obs, SUM(d.sum_delay) AS sum_delay,
-               SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300,
+               SUM(d.cnt_le300) AS cnt_le300, SUM(d.cnt_gt300) AS cnt_gt300, SUM(d.cnt_lt60) AS cnt_lt60,
                SUM(d.skipped) AS skipped, SUM(d.eligible) AS eligible,
-               COUNT(DISTINCT d.route_id) AS n_lignes
+               COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d
         JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
-        WHERE d.date_service >= ? AND d.date_service < ?
-        GROUP BY sm.commune_name
-        """, (since_day, end_day),
-    ).fetchall()
+        LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+        WHERE d.date_service >= ? AND d.date_service < ? {excl_sql}
+        GROUP BY sm.commune_name, d.date_service, d.route_id
+        """, _conn, params=(since_day, end_day, *excl_params),
+    )
     empty = pd.DataFrame(columns=[
         "commune", "observations", "retard_moyen_s", "pct_a_l_heure",
         "pct_retard_5min", "pct_arrets_sautes", "score_fiabilite", "n_lignes",
     ])
-    if not rows:
+    if rows.empty:
         return empty
-    df = pd.DataFrame(rows, columns=[
-        "commune", "obs", "sum_delay", "cnt_le300", "cnt_gt300", "skipped", "eligible", "n_lignes",
-    ])
+    rows = ind.add_components(rows)
+    df = (rows.groupby("commune", sort=False)
+          .agg(obs=("obs", "sum"), sum_delay=("sum_delay", "sum"), on_time=("on_time", "sum"),
+               cnt_gt300=("cnt_gt300", "sum"), skipped=("skipped", "sum"), eligible=("eligible", "sum"),
+               expected=("expected", "sum"), assured_on_time=("assured_on_time", "sum"),
+               n_lignes=("route_id", "nunique"))
+          .reset_index())
+    df = df[df["expected"] > 0].copy()
     df["observations"] = df["obs"]
     df["retard_moyen_s"] = df["sum_delay"] / df["obs"].replace(0, np.nan)
-    df["pct_a_l_heure"] = df["cnt_le300"] / df["obs"].replace(0, np.nan) * 100
+    df["pct_a_l_heure"] = df["on_time"] / df["obs"].replace(0, np.nan) * 100
     df["pct_retard_5min"] = df["cnt_gt300"] / df["obs"].replace(0, np.nan) * 100
     df["pct_arrets_sautes"] = np.where(df["eligible"] > 0, df["skipped"] / df["eligible"] * 100, 0)
-    df["score_fiabilite"] = (df["pct_a_l_heure"] - df["pct_arrets_sautes"] * 2).clip(0, 100)
+    df["score_fiabilite"] = ind.score_of(df["assured_on_time"], df["expected"])
     return df[
         ["commune", "observations", "retard_moyen_s", "pct_a_l_heure",
          "pct_retard_5min", "pct_arrets_sautes", "score_fiabilite", "n_lignes"]
@@ -1298,79 +1344,70 @@ def week_hour_grid_html(table: pd.DataFrame, peak: dict | None = None) -> str:
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None = None,
                      commune: str | None = None) -> pd.DataFrame:
-    """Arrêts du périmètre avec leur ligne principale et le score de fiabilité.
+    """Arrêts du périmètre avec leur ligne principale et leur score de fiabilité.
 
     Agrège depuis agg_daily_stop (jamais la table brute). Le score de l'arrêt
-    porte sur toutes ses lignes (ponctualité ≤ 5 min − 2 × arrêts non desservis, comme
-    le classement des lignes) ; la ligne la plus fréquentée devient la ligne
-    « principale », dont le mode donne la forme du marqueur.
+    porte sur toutes ses lignes (`indicateurs.score_of` sur les composantes de
+    chaque ligne et de chaque jour à cet arrêt, comme le classement des lignes) ;
+    la ligne la plus fréquentée devient la ligne « principale », dont le mode
+    donne la forme du marqueur. Un arrêt sans passage attendu n'est pas retenu.
     """
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
-    if commune is None:
-        rows = _conn.execute(
-            """
-            SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
-                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
-                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs, d.skipped, d.eligible
-            FROM agg_daily_stop d
-            JOIN stops s ON s.stop_id = d.stop_id
-            JOIN routes r ON r.route_id = d.route_id
-            WHERE d.date_service >= ? AND d.date_service < ?
-            """, (since_day, end_day),
-        ).fetchall()
-    else:
-        rows = _conn.execute(
-            """
-            SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
-                   d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
-                   d.sum_delay, d.cnt_le300, d.cnt_gt300, d.obs, d.skipped, d.eligible
-            FROM agg_daily_stop d
-            JOIN stops s ON s.stop_id = d.stop_id
-            JOIN routes r ON r.route_id = d.route_id
-            JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
-            WHERE sm.commune_name = ? AND d.date_service >= ? AND d.date_service < ?
-            """, (commune, since_day, end_day),
-        ).fetchall()
-    if not rows:
-        return pd.DataFrame(columns=[
-            "stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne", "route_type",
-            "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "observations",
-            "score_fiabilite", "lignes",
-        ])
-    df = pd.DataFrame(rows, columns=[
-        "stop_id", "stop_name", "stop_lat", "stop_lon", "route_id", "ligne", "route_type",
-        "sum_delay", "cnt_le300", "cnt_gt300", "obs", "skipped", "eligible",
-    ])
+    excl_sql, excl_params = _excluded(_conn, "d", since_day, end_day)
+    commune_join, commune_sql, commune_params = (
+        ("JOIN stop_municipalities sm ON sm.stop_id = d.stop_id", " AND sm.commune_name = ?", [commune])
+        if commune is not None else ("", "", []))
+    df = pd.read_sql_query(
+        f"""
+        SELECT d.stop_id, s.stop_name, s.stop_lat, s.stop_lon,
+               d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne, r.route_type,
+               d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.obs, d.skipped, d.eligible,
+               COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
+        FROM agg_daily_stop d
+        JOIN stops s ON s.stop_id = d.stop_id
+        JOIN routes r ON r.route_id = d.route_id
+        {commune_join}
+        LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+        WHERE d.date_service >= ? AND d.date_service < ? {commune_sql} {excl_sql}
+        """, _conn, params=(since_day, end_day, *commune_params, *excl_params),
+    )
+    columns = ["stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne", "route_type",
+               "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "observations",
+               "score_fiabilite", "lignes"]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    df = ind.add_components(df)
+    sums = ["obs", "on_time", "cnt_gt300", "skipped", "eligible", "expected", "assured_on_time"]
+    per_line = (df.groupby(["stop_id", "route_id"], sort=False)
+                .agg(**{c: (c, "sum") for c in sums}, stop_name=("stop_name", "first"),
+                     stop_lat=("stop_lat", "first"), stop_lon=("stop_lon", "first"),
+                     ligne=("ligne", "first"), route_type=("route_type", "first"))
+                .reset_index())
+    per_stop = per_line.groupby("stop_id", sort=False).agg(
+        **{c: (c, "sum") for c in sums},
+        lignes=("ligne", lambda v: ", ".join(sorted(set(v.astype(str))))))
+    main = (per_line.sort_values("obs", ascending=False).drop_duplicates("stop_id", keep="first")
+            .set_index("stop_id")[["stop_name", "stop_lat", "stop_lon", "route_id", "ligne", "route_type"]])
+    out = per_stop.join(main).reset_index()
+    out = out[out["expected"] > 0]
     directions = load_stop_directions(_conn)
-    out = []
-    best = df.sort_values("obs", ascending=False).drop_duplicates("stop_id", keep="first")
-    by_stop = df.groupby("stop_id", sort=False)
-    for _, top in best.iterrows():
-        sub = by_stop.get_group(top["stop_id"])
-        obs = int(sub["obs"].sum())
-        pct_le300 = sub["cnt_le300"].sum() / max(obs, 1) * 100
-        pct_gt300 = sub["cnt_gt300"].sum() / max(obs, 1) * 100
-        eligible = int(sub["eligible"].sum())
-        pct_skip = sub["skipped"].sum() / eligible * 100 if eligible else 0.0
-        score = min(100.0, max(0.0, pct_le300 - 2 * pct_skip))
-        lignes = ", ".join(sorted(set(sub["ligne"].astype(str))))
-        out.append({
-            "stop_id": top["stop_id"],
-            "stop_name": top["stop_name"],
-            "direction": directions.get((top["route_id"], top["stop_id"]), ""),
-            "lat": float(top["stop_lat"]),
-            "lon": float(top["stop_lon"]),
-            "route_id": top["route_id"],
-            "ligne": top["ligne"],
-            "route_type": top["route_type"],
-            "pct_a_l_heure": round(pct_le300, 1),
-            "pct_retard_5min": round(pct_gt300, 1),
-            "pct_arrets_sautes": round(pct_skip, 2),
-            "observations": obs,
-            "score_fiabilite": round(score, 1),
-            "lignes": lignes,
-        })
-    return pd.DataFrame(out)
+    obs = out["obs"].where(out["obs"] > 0)
+    return pd.DataFrame({
+        "stop_id": out["stop_id"],
+        "stop_name": out["stop_name"],
+        "direction": [directions.get((rid, sid), "") for rid, sid in zip(out["route_id"], out["stop_id"])],
+        "lat": out["stop_lat"].astype(float),
+        "lon": out["stop_lon"].astype(float),
+        "route_id": out["route_id"],
+        "ligne": out["ligne"],
+        "route_type": out["route_type"],
+        "pct_a_l_heure": (out["on_time"] / obs * 100).fillna(0.0).round(1),
+        "pct_retard_5min": (out["cnt_gt300"] / obs * 100).fillna(0.0).round(1),
+        "pct_arrets_sautes": (out["skipped"] / out["eligible"].where(out["eligible"] > 0) * 100).fillna(0.0).round(2),
+        "observations": out["obs"].astype(int),
+        "score_fiabilite": ind.score_of(out["assured_on_time"], out["expected"]).round(1),
+        "lignes": out["lignes"],
+    }, columns=columns).reset_index(drop=True)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
@@ -1508,18 +1545,21 @@ def load_disturbed_route_ids(_conn, since_ts: int | None, end_ts: int | None,
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_stop_daily(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
                     stop_id: str) -> pd.DataFrame:
-    """Compteurs quotidiens d'un arrêt, par ligne (agg_daily_stop, index sur stop_id)."""
+    """Compteurs quotidiens d'un arrêt, par ligne, avec les composantes du score (agg_daily_stop, index sur stop_id)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "d", since_day, end_day)
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT d.date_service, d.route_id, COALESCE(r.route_short_name, d.route_id) AS ligne,
-               r.route_type, d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.skipped,
-               d.eligible, d.histogram
+               r.route_type, d.obs, d.sum_delay, d.cnt_le300, d.cnt_gt300, d.cnt_lt60, d.skipped,
+               d.eligible, d.histogram, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d LEFT JOIN routes r ON r.route_id = d.route_id
-        WHERE d.stop_id = ? AND d.date_service >= ? AND d.date_service < ?
+        LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+        WHERE d.stop_id = ? AND d.date_service >= ? AND d.date_service < ? {excl_sql}
         ORDER BY d.date_service
-        """, _conn, params=(stop_id, since_day, end_day),
+        """, _conn, params=(stop_id, since_day, end_day, *excl_params),
     )
+    df = ind.add_components(df)
     df["hist"] = df["histogram"].map(json.loads)
     df["date_service"] = pd.to_datetime(df["date_service"])
     return df.drop(columns="histogram")
@@ -1530,12 +1570,13 @@ def load_stop_hourly(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
                      stop_id: str) -> pd.DataFrame:
     """Compteurs horaires d'un arrêt, toutes lignes (agg_hourly_stop, index sur stop_id)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "h", since_day, end_day)
     return pd.read_sql_query(
-        """
-        SELECT date_service, route_id, heure, obs, cnt_gt300
-        FROM agg_hourly_stop
-        WHERE stop_id = ? AND date_service >= ? AND date_service < ?
-        """, _conn, params=(stop_id, since_day, end_day),
+        f"""
+        SELECT h.date_service, h.route_id, h.heure, h.obs, h.cnt_gt300
+        FROM agg_hourly_stop h
+        WHERE h.stop_id = ? AND h.date_service >= ? AND h.date_service < ? {excl_sql}
+        """, _conn, params=(stop_id, since_day, end_day, *excl_params),
     )
 
 
@@ -1550,8 +1591,11 @@ def stop_lines_table(daily: pd.DataFrame) -> pd.DataFrame:
     for rid, sub in daily.groupby("route_id", sort=False):
         obs = int(sub["obs"].sum())
         eligible = int(sub["eligible"].sum())
-        pct_ok = sub["cnt_le300"].sum() / obs * 100 if obs else 0.0
+        pct_ok = sub["on_time"].sum() / obs * 100 if obs else 0.0
         pct_skip = sub["skipped"].sum() / eligible * 100 if eligible else 0.0
+        score = ind.score_of(sub["assured_on_time"].sum(), sub["expected"].sum())
+        if pd.isna(score):
+            continue
         rows.append({
             "route_id": rid, "ligne": sub["ligne"].iloc[0], "route_type": sub["route_type"].iloc[0],
             "mode": MODE_LABELS.get(sub["route_type"].iloc[0], "Autre"),
@@ -1562,7 +1606,7 @@ def stop_lines_table(daily: pd.DataFrame) -> pd.DataFrame:
             "pct_arrets_sautes": pct_skip,
             "retard_moyen_s": sub["sum_delay"].sum() / obs if obs else None,
             "retard_median_s": _median_from_hists(list(sub["hist"])),
-            "score_fiabilite": reliability_score(pct_ok, pct_skip),
+            "score_fiabilite": score,
         })
     return pd.DataFrame(rows, columns=cols).sort_values("cnt_gt300", ascending=False).reset_index(drop=True)
 
@@ -1606,8 +1650,9 @@ def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int
     prev_stop_name, pairs, obs, eligible, skipped, cnt_gain_gt120, terminus.
     """
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "g", since_day, end_day)
     df = pd.read_sql_query(
-        """
+        f"""
         SELECT g.direction_id, g.stop_id, s.stop_name, sm.commune_name AS commune,
                SUM(g.eligible) eligible, SUM(g.skipped) skipped, SUM(g.sum_seq) sum_seq,
                SUM(g.obs) obs, SUM(g.sum_delay) sum_delay, SUM(g.pairs) pairs,
@@ -1616,19 +1661,19 @@ def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int
         FROM agg_daily_segment g
         LEFT JOIN stops s ON s.stop_id = g.stop_id
         LEFT JOIN stop_municipalities sm ON sm.stop_id = g.stop_id
-        WHERE g.route_id = ? AND g.date_service >= ? AND g.date_service < ?
+        WHERE g.route_id = ? AND g.date_service >= ? AND g.date_service < ? {excl_sql}
         GROUP BY g.direction_id, g.stop_id
-        """, _conn, params=(route_id, since_day, end_day),
+        """, _conn, params=(route_id, since_day, end_day, *excl_params),
     )
     if df.empty:
         return df
     prev = pd.read_sql_query(
-        """
-        SELECT direction_id, stop_id, prev_stop_id, SUM(pairs) n
-        FROM agg_daily_segment
-        WHERE route_id = ? AND date_service >= ? AND date_service < ? AND prev_stop_id IS NOT NULL
-        GROUP BY direction_id, stop_id, prev_stop_id
-        """, _conn, params=(route_id, since_day, end_day),
+        f"""
+        SELECT g.direction_id, g.stop_id, g.prev_stop_id, SUM(g.pairs) n
+        FROM agg_daily_segment g
+        WHERE g.route_id = ? AND g.date_service >= ? AND g.date_service < ? AND g.prev_stop_id IS NOT NULL {excl_sql}
+        GROUP BY g.direction_id, g.stop_id, g.prev_stop_id
+        """, _conn, params=(route_id, since_day, end_day, *excl_params),
     )
     prev = prev.sort_values(["n", "prev_stop_id"], ascending=[False, True]).drop_duplicates(["direction_id", "stop_id"])
     df = df.merge(prev[["direction_id", "stop_id", "prev_stop_id"]], on=["direction_id", "stop_id"], how="left")
@@ -1648,19 +1693,16 @@ def load_route_segments(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_line_cancellations(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
                             route_id: str) -> pd.DataFrame:
-    """Courses supprimées (trip_status = CANCELED) et courses connues, par jour de service."""
+    """Courses supprimées, ajoutées et connues par jour de service (agg_daily_trips, comme le score ; jours écartés exclus)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "t", since_day, end_day)
     df = pd.read_sql_query(
-        """
-        SELECT substr(start_date, 1, 4) || '-' || substr(start_date, 5, 2) || '-'
-                   || substr(start_date, 7, 2) AS date_service,
-               SUM(CASE WHEN schedule_relationship = 'CANCELED' THEN 1 ELSE 0 END) AS cancelled,
-               COUNT(*) AS trips
-        FROM trip_status
-        WHERE route_id = ? AND start_date >= ? AND start_date < ? AND last_seen_at < ?
-        GROUP BY start_date
-        ORDER BY start_date
-        """, _conn, params=(route_id, since_day.replace("-", ""), end_day.replace("-", ""), cutoff_ts),
+        f"""
+        SELECT t.date_service, t.cancelled, t.added, t.scheduled + t.cancelled + t.added AS trips
+        FROM agg_daily_trips t
+        WHERE t.route_id = ? AND t.date_service >= ? AND t.date_service < ? {excl_sql}
+        ORDER BY t.date_service
+        """, _conn, params=(route_id, since_day, end_day, *excl_params),
     )
     df["date_service"] = pd.to_datetime(df["date_service"])
     return df
@@ -1671,28 +1713,33 @@ def load_line_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | N
                     route_id: str) -> pd.DataFrame:
     """Arrêts d'une ligne avec passages > 5 min, arrêts non desservis et direction (agg_daily_stop)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
-    df = pd.read_sql_query(
-        """
+    excl_sql, excl_params = _excluded(_conn, "d", since_day, end_day)
+    rows = pd.read_sql_query(
+        f"""
         SELECT d.stop_id, s.stop_name, sm.commune_name AS commune,
-               SUM(d.obs) obs, SUM(d.cnt_le300) cnt_le300, SUM(d.cnt_gt300) cnt_gt300,
-               SUM(d.skipped) skipped, SUM(d.eligible) eligible
+               d.obs, d.cnt_le300, d.cnt_lt60, d.cnt_gt300, d.skipped, d.eligible, COALESCE(t.scheduled, 0) AS scheduled, COALESCE(t.cancelled, 0) AS cancelled, COALESCE(t.added, 0) AS added
         FROM agg_daily_stop d
         LEFT JOIN stops s ON s.stop_id = d.stop_id
         LEFT JOIN stop_municipalities sm ON sm.stop_id = d.stop_id
-        WHERE d.route_id = ? AND d.date_service >= ? AND d.date_service < ?
-        GROUP BY d.stop_id
-        """, _conn, params=(route_id, since_day, end_day),
+        LEFT JOIN agg_daily_trips t ON t.date_service = d.date_service AND t.route_id = d.route_id
+        WHERE d.route_id = ? AND d.date_service >= ? AND d.date_service < ? {excl_sql}
+        """, _conn, params=(route_id, since_day, end_day, *excl_params),
     )
-    if df.empty:
-        return df
+    if rows.empty:
+        return rows
+    rows = ind.add_components(rows)
+    df = (rows.groupby("stop_id", sort=False)
+          .agg(stop_name=("stop_name", "first"), commune=("commune", "first"), obs=("obs", "sum"),
+               on_time=("on_time", "sum"), cnt_gt300=("cnt_gt300", "sum"), skipped=("skipped", "sum"),
+               eligible=("eligible", "sum"), expected=("expected", "sum"),
+               assured_on_time=("assured_on_time", "sum"))
+          .reset_index())
+    df = df[df["expected"] > 0].copy()
     directions = load_stop_directions(_conn)
     df["direction"] = [directions.get((route_id, sid), "") for sid in df["stop_id"]]
     df["pct_retard_5min"] = df["cnt_gt300"] / df["obs"].where(df["obs"] > 0) * 100
     df["pct_arrets_sautes"] = df["skipped"] / df["eligible"].where(df["eligible"] > 0) * 100
-    df["score_fiabilite"] = [
-        reliability_score(le / o * 100 if o else 0.0, sk / el * 100 if el else 0.0)
-        for le, o, sk, el in zip(df["cnt_le300"], df["obs"], df["skipped"], df["eligible"])
-    ]
+    df["score_fiabilite"] = ind.score_of(df["assured_on_time"], df["expected"])
     df["impact"] = df["cnt_gt300"] + df["skipped"]
     return df.sort_values("impact", ascending=False).reset_index(drop=True)
 
@@ -1702,12 +1749,13 @@ def load_route_hourly_stops(_conn, cutoff_ts: int, since_ts: int | None, end_ts:
                             route_id: str) -> pd.DataFrame:
     """Agrégats horaires d'une ligne, arrêt par arrêt (agg_hourly_stop, index route_id + date_service)."""
     since_day, end_day = _day_bounds(since_ts, end_ts, cutoff_ts)
+    excl_sql, excl_params = _excluded(_conn, "h", since_day, end_day)
     return pd.read_sql_query(
-        """
-        SELECT date_service, stop_id, heure, obs, sum_delay, cnt_gt300
-        FROM agg_hourly_stop
-        WHERE route_id = ? AND date_service >= ? AND date_service < ?
-        """, _conn, params=(route_id, since_day, end_day),
+        f"""
+        SELECT h.date_service, h.stop_id, h.heure, h.obs, h.sum_delay, h.cnt_gt300
+        FROM agg_hourly_stop h
+        WHERE h.route_id = ? AND h.date_service >= ? AND h.date_service < ? {excl_sql}
+        """, _conn, params=(route_id, since_day, end_day, *excl_params),
     )
 
 
@@ -1800,25 +1848,30 @@ NAV_ITEMS = [
     "Données & méthode", "À propos",
 ]
 HELP_TEXTS = {
-    "score": "Score sur 100 : part des passages partis avec moins de 5 min de retard, moins 2 points par "
-             "pourcent d'arrêts non desservis. Fiable à partir de 80, problématique sous 50.",
-    "ponctualite": "Part des passages partis de l'arrêt avec moins de 5 minutes de retard sur l'horaire prévu.",
+    "score": "Score sur 100 : sur 100 passages prévus, combien ont été assurés (ni arrêt non desservi, ni "
+             "course supprimée) et à l'heure. Fiable à partir de 80, problématique sous 50.",
+    "ponctualite": "Part des passages partis entre 1 minute d'avance et 5 minutes de retard sur l'horaire prévu.",
     "retard": "Écart moyen entre l'heure de départ réelle et l'heure prévue, sur tous les passages.",
     "skip": "Part des arrêts prévus où le véhicule ne s'est pas arrêté alors que la course continuait.",
     "passage": "Un passage = un départ d'un bus, tram ou bateau à un arrêt, dont le retard est connu.",
 }
 LEXIQUE = [
     ("Passage", "Le départ d'un véhicule (bus, tram, bateau) à un arrêt. C'est l'unité de mesure."),
-    ("À l'heure (ponctualité)", "Un passage est à l'heure s'il part avec moins de 5 minutes de retard sur "
-                                "l'horaire prévu."),
-    ("Score de fiabilité", "Note sur 100 : la part des passages à l'heure, moins 2 points par pourcent d'arrêts "
-                           "non desservis."),
+    ("À l'heure (ponctualité)", "Un passage est à l'heure s'il part entre 1 minute d'avance et 5 minutes de "
+                                "retard sur l'horaire prévu. Partir plus tôt fait manquer le bus à ceux qui "
+                                "arrivent à l'heure : ce n'est pas être à l'heure."),
+    ("Score de fiabilité", "Note sur 100 : sur 100 passages prévus, le nombre de passages assurés (arrêt "
+                           "desservi, course non supprimée) et à l'heure. C'est le service assuré multiplié "
+                           "par la part des passages à l'heure."),
+    ("Service assuré", "La part des passages prévus qui ont bien eu lieu : ni arrêt non desservi, ni course "
+                       "supprimée (une course supprimée puis remplacée le même jour ne compte pas)."),
     ("Fiable, à surveiller, problématique", "État d'un arrêt, d'une ligne ou d'une commune selon son score : "
                                              "fiable à partir de 80, à surveiller de 50 à 80, problématique sous "
                                              "50."),
     ("Arrêt non desservi", "Le véhicule passe sans s'arrêter alors que l'arrêt était prévu (le flux de données "
                            "le signale « SKIPPED »)."),
-    ("Course supprimée", "Une course prévue qui n'a pas circulé du tout."),
+    ("Course supprimée", "Une course prévue qui n'a pas circulé du tout. Si une course de remplacement est "
+                         "ajoutée le même jour sur la ligne, elle compense la suppression dans le score."),
     ("Retard moyen", "L'écart moyen entre l'heure de départ réelle et l'heure prévue, sur tous les passages. "
                      "Un départ en avance compte comme un retard négatif."),
     ("Retards de plus de 5 min", "La part des passages partis avec plus de 5 minutes de retard sur l'horaire "
@@ -1833,8 +1886,11 @@ LEXIQUE = [
     ("Jour dégradé", "Un jour où au moins 15 % des passages ont plus de 5 minutes de retard."),
     ("Retard médian", "Le retard « du milieu » : la moitié des passages ont moins de retard, l'autre moitié "
                       "plus. Moins sensible qu'une moyenne à quelques très gros retards."),
-    ("Score 2.0 (en test)", "Mesure plus exigeante, calculée à côté du score : un départ en avance de plus d'une "
-                            "minute n'est pas à l'heure et les courses supprimées comptent. Voir « Méthode »."),
+    ("Jours et lignes écartés", "Les jours où la collecte des données est incomplète et les lignes dont le "
+                                "temps réel est douteux (au moins un quart des retards exactement nuls) ne sont "
+                                "comptés dans aucun chiffre de la période. « Méthode » en donne la liste."),
+    ("Marge (±)", "L'incertitude d'un score, due aux écarts d'un jour à l'autre : le vrai niveau a 95 chances "
+                  "sur 100 d'être dans la fourchette."),
     ("Observation", "Une ligne reçue du flux de données en temps réel de TBM. Sert à suivre le volume de la "
                     "collecte ; un même passage est observé plusieurs fois avant son départ."),
 ]
@@ -2138,14 +2194,9 @@ def stop_labels(territorial: pd.DataFrame) -> dict:
 
 
 def network_score(ranking: pd.DataFrame) -> float:
-    """Score de fiabilité de l'ensemble des lignes (totaux pondérés par les passages)."""
-    obs = float(ranking["observations"].sum())
-    eligible = float(ranking["eligible"].sum())
-    if obs <= 0:
-        return 0.0
-    on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum()) / obs
-    skip = float(ranking["skipped"].sum()) / eligible * 100 if eligible else 0.0
-    return reliability_score(on_time, skip)
+    """Score de fiabilité de l'ensemble des lignes : composantes du score sommées sur toutes les lignes."""
+    score = ind.score_of(float(ranking["assured_on_time"].sum()), float(ranking["expected"].sum()))
+    return 0.0 if pd.isna(score) else float(score)
 
 
 def _delta_polarity(delta: float | None) -> str:
@@ -2337,10 +2388,9 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     eligible = int(lines["eligible"].sum())
     skipped = int(lines["skipped"].sum())
     cnt_gt300 = int(lines["cnt_gt300"].sum())
-    pct_ok = float(daily["cnt_le300"].sum()) / max(obs, 1) * 100
     pct_gt300 = cnt_gt300 / max(obs, 1) * 100
     pct_skip = skipped / eligible * 100 if eligible else 0.0
-    score = reliability_score(pct_ok, pct_skip)
+    score = dg.period_score(daily) or 0.0
     median = _median_from_hists(list(daily["hist"]))
     days = int(daily["date_service"].nunique())
 
@@ -2536,16 +2586,28 @@ def _render_line_when(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
             hc_render(daily_status_chart(core, RISK_PCT_GT300), height=240)
 
 
+def excluded_line_message(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str) -> str | None:
+    """Phrase expliquant qu'une ligne est écartée de la période (temps réel douteux), sinon None."""
+    since_day, end_day = _day_bounds(since_ts, end_ts, cutoff)
+    if route_id not in load_exclusions(conn, since_day, end_day).lignes:
+        return None
+    share = ind.doubtful_routes(conn, since_day, end_day).get(route_id)
+    detail = f" ({share:.0f} % de retards exactement nuls)" if share is not None else ""
+    return (f"Ligne écartée sur la période : son temps réel est douteux{detail}, ses chiffres ne seraient pas "
+            "fiables. Voir « Données & méthode ».")
+
+
 def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
                       ranking_net: pd.DataFrame, disturbed: set, commune: str | None = None,
                       prev: tuple = (None, None, None), detailed: bool = True) -> None:
     """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
     row = ranking_net[ranking_net["route_id"] == route_id]
     if row.empty:
-        st.info("Aucun passage analysé pour cette ligne sur la période.")
+        st.info(excluded_line_message(conn, cutoff, since_ts, end_ts, route_id)
+                or "Aucun passage analysé pour cette ligne sur la période.")
         return
     line = row.iloc[0]
-    breakdown = dg.score_breakdown(line["pct_a_l_heure"], line["pct_arrets_sautes"])
+    breakdown = dg.score_breakdown(line["score_fiabilite"], line["pct_service"])
     same_mode = ranking_net[(ranking_net["route_type"] == line["route_type"])
                             & (ranking_net["observations"] >= MIN_OBSERVATIONS)]
     mode_median = float(same_mode["score_fiabilite"].median()) if not same_mode.empty else None
@@ -2614,7 +2676,7 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         render_kpis([
             status_kpi(line["score_fiabilite"], ref),
             _evolution_kpi(change, prev_label),
-            ("À l'heure", f"{line['pct_a_l_heure']:.0f} %", "des passages, moins de 5 min de retard",
+            ("À l'heure", f"{line['pct_a_l_heure']:.0f} %", "des passages, de 1 min d'avance à 5 min de retard",
              palette_kpi_tier({"ponctualite": line["pct_a_l_heure"]}, "ponctualite"), HELP_TEXTS["ponctualite"]),
             ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "), "neutral"),
         ])
@@ -2625,11 +2687,12 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     render_kpis([
         status_kpi(line["score_fiabilite"], ref),
         _evolution_kpi(change, prev_label),
-        ("Points perdus : retards", f"{breakdown['lost_delay']:.0f}",
-         f"{format_number(line['pct_retard_5min'], 1)} % de passages à plus de 5 min",
+        ("Points perdus : horaires", f"{breakdown['lost_delay']:.0f}",
+         f"{format_number(line['pct_retard_5min'], 1)} % de passages à plus de 5 min, "
+         f"{format_number(line['pct_avance_1min'], 1)} % en avance",
          palette_kpi_tier({"retard_5min": line["pct_retard_5min"]}, "retard_5min")),
-        ("Points perdus : arrêts non desservis", f"{breakdown['lost_skip']:.0f}",
-         f"{format_number(line['pct_arrets_sautes'], 1)} % d'arrêts non desservis",
+        ("Points perdus : service non rendu", f"{breakdown['lost_service']:.0f}",
+         f"{format_number(line['pct_arrets_sautes'], 1)} % d'arrêts non desservis, courses supprimées",
          palette_kpi_tier({"skip_rate": line["pct_arrets_sautes"]}, "skip_rate")),
         ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "),
          "neutral"),
@@ -2867,11 +2930,11 @@ def render_page_territory(c: PageContext) -> None:
                 with right:
                     table = communes[["commune", "score_fiabilite", "pct_a_l_heure", "pct_retard_5min",
                                       "retard_moyen_s", "pct_arrets_sautes", "n_lignes", "observations"]].copy()
-                    table.columns = ["Commune", "Score / 100", "Ponctualité ≤ 5 min", "Retards > 5 min",
+                    table.columns = ["Commune", "Score / 100", "À l'heure", "Retards > 5 min",
                                      "Retard moyen", "Arrêts non desservis", "Lignes", "Passages"]
                     st.dataframe(
                         table.style.map(_score_tier_style, subset=["Score / 100"]).format({
-                            "Score / 100": number_formatter(1), "Ponctualité ≤ 5 min": number_formatter(1, " %"),
+                            "Score / 100": number_formatter(1), "À l'heure": number_formatter(1, " %"),
                             "Retards > 5 min": number_formatter(1, " %"), "Retard moyen": lambda x: format_seconds(x),
                             "Arrêts non desservis": number_formatter(2, " %"), "Lignes": "{:.0f}", "Passages": fmt_int}),
                         width="stretch", hide_index=True, height=460)
@@ -3019,10 +3082,10 @@ def _when_by_slot(c: PageContext) -> None:
             display = lines[["ligne", "mode", "observations", "pct_a_l_heure", "pct_retard_5min",
                              "retard_moyen_s"]].copy()
             display["ligne"] = [f"{mode_glyph(rt)} {l}" for rt, l in zip(lines["route_type"], lines["ligne"])]
-            display.columns = ["Ligne", "Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min",
+            display.columns = ["Ligne", "Mode", "Passages", "À l'heure", "Retards > 5 min",
                                "Retard moyen"]
-            st.dataframe(display.style.map(_score_tier_style, subset=["Ponctualité ≤ 5 min"]).format({
-                "Passages": fmt_int, "Ponctualité ≤ 5 min": number_formatter(1, " %"),
+            st.dataframe(display.style.map(_score_tier_style, subset=["À l'heure"]).format({
+                "Passages": fmt_int, "À l'heure": number_formatter(1, " %"),
                 "Retards > 5 min": number_formatter(1, " %"), "Retard moyen": lambda x: format_seconds(x)}),
                 width="stretch", hide_index=True, height=320)
 
@@ -3135,20 +3198,20 @@ def render_page_network(c: PageContext) -> None:
                                      "observations"]].copy()
         display["ligne"] = [f"⚠ {l}" if rid in c.disturbed else l
                             for l, rid in zip(display["ligne"], c.visible_ranking["route_id"])]
-        display.columns = ["Ligne", "Mode", "Score / 100", "Ponctualité ≤ 5 min", "Retard moyen (s)",
+        display.columns = ["Ligne", "Mode", "Score / 100", "À l'heure", "Retard moyen (s)",
                            "Retard médian (s)", "Retards > 5 min", "Arrêts non desservis", "Passages"]
         st.dataframe(display.style.map(_score_tier_style, subset=["Score / 100"]).format({
-            "Score / 100": number_formatter(1), "Ponctualité ≤ 5 min": number_formatter(1, " %"),
+            "Score / 100": number_formatter(1), "À l'heure": number_formatter(1, " %"),
             "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}", "Retards > 5 min": number_formatter(1, " %"),
             "Arrêts non desservis": number_formatter(2, " %"), "Passages": fmt_int}),
             width="stretch", hide_index=True, height=330)
     with st.expander("Tableau par mode"):
         table = mode_stats[["mode", "observations", "pct_a_l_heure", "pct_retard_5min", "pct_avance_1min",
                             "retard_moyen_s", "retard_median_s", "pct_arrets_sautes"]].copy()
-        table.columns = ["Mode", "Passages", "Ponctualité ≤ 5 min", "Retards > 5 min", "En avance > 1 min",
+        table.columns = ["Mode", "Passages", "À l'heure", "Retards > 5 min", "En avance > 1 min",
                          "Retard moyen (s)", "Retard médian (s)", "Arrêts non desservis"]
         st.dataframe(table.style.format({
-            "Passages": fmt_int, "Ponctualité ≤ 5 min": number_formatter(1, " %"),
+            "Passages": fmt_int, "À l'heure": number_formatter(1, " %"),
             "Retards > 5 min": number_formatter(1, " %"), "En avance > 1 min": number_formatter(1, " %"),
             "Retard moyen (s)": "{:.0f}", "Retard médian (s)": "{:.0f}",
             "Arrêts non desservis": number_formatter(2, " %")}), width="stretch", hide_index=True, height=220)
@@ -3215,33 +3278,24 @@ def render_page_perturbations(c: PageContext) -> None:
 
 
 def _render_method_v2(c: PageContext) -> None:
-    st.markdown("#### Méthode 2.0 (en test)")
-    st.markdown(
-        "Une mesure plus exigeante est calculée en parallèle du score de fiabilité, sans le remplacer : "
-        "un passage n'est **à l'heure** qu'entre 1 min d'avance et 5 min de retard, les **courses "
-        "supprimées** (nettes des courses ajoutées le même jour sur la ligne) comptent comme des passages "
-        "non assurés, et chaque résultat a une **marge** à 95 % (variabilité d'un jour à l'autre). Les jours "
-        "où la collecte est incomplète et les lignes au temps réel douteux sont écartés. Les rapports "
-        "mensuels l'affichent à côté du score actuel ; le choix de la méthode de référence viendra après "
-        "plusieurs mois de comparaison."
-    )
+    st.markdown("#### Le score de fiabilité de la période")
     v2 = load_method_v2(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
     if not v2["disponible"]:
-        st.info("Indicateurs 2.0 indisponibles pour cette période (historique en cours de calcul ou aucun "
-                "jour complet).")
+        st.info("Score indisponible pour cette période (historique en cours de calcul ou aucun jour complet).")
         return
     render_kpis([
-        ("Score 2.0 (test)", _with_margin(v2["score"], v2["marge"]), "assurés et à l'heure / attendus",
+        ("Score de fiabilité", _with_margin(v2["score"], v2["marge"]), "assurés et à l'heure / prévus",
          palette_kpi_tier({"fiability": v2["score"]}, "fiability")),
-        ("Ponctualité stricte", f"{_with_margin(v2['ponctualite'], v2['marge_ponctualite'])} %",
-         "de −1 à +5 min", palette_kpi_tier({"ponctualite": v2["ponctualite"]}, "ponctualite")),
+        ("À l'heure", f"{_with_margin(v2['ponctualite'], v2['marge_ponctualite'])} %",
+         "de 1 min d'avance à 5 min de retard", palette_kpi_tier({"ponctualite": v2["ponctualite"]}, "ponctualite")),
         ("Service assuré", f"{format_number(v2['service'], 1)} %", "ni course supprimée, ni arrêt non desservi", "neutral"),
         ("Départs en avance", f"{format_number(v2['avance'], 1)} %", "plus d'une minute", "neutral"),
     ])
     discarded = ", ".join(f"{r} ({z:.0f} % de retards nuls)" for r, z in sorted(v2["lignes_ecartees"].items()))
-    st.caption(f"{v2['jours']} jour(s) évalué(s). Jours exclus (collecte incomplète) : {_short_days(v2['jours_exclus'])}. "
+    st.caption(f"{v2['jours']} jour(s) évalué(s). Jours écartés (collecte incomplète) : {_short_days(v2['jours_exclus'])}. "
                f"Jours à collecte dégradée (conservés) : {_short_days(v2['jours_degrades'])}. "
-               f"Lignes écartées (temps réel douteux) : {discarded or 'aucune'}.")
+               f"Lignes écartées (temps réel douteux) : {discarded or 'aucune'}. La marge (±) est l'intervalle "
+               "de confiance à 95 %, calculé sur les écarts d'un jour à l'autre.")
 
 
 def _render_method(c: PageContext) -> None:
@@ -3250,11 +3304,13 @@ def _render_method(c: PageContext) -> None:
                 "stabilisée après 20 minutes hors du flux temps réel ; cela évite d'interpréter comme final un "
                 "retard qui peut encore évoluer.")
     c1, c2, c3 = st.columns(3)
-    c1.markdown("**Ponctualité**  \nUn passage est classé ponctuel lorsqu'il ne dépasse pas 5 minutes de "
-                "retard. Les passages en avance sont conservés pour montrer la distribution réelle.")
-    c2.markdown("**Arrêts non desservis**  \nLes événements `SKIPPED` sont suivis à part : ils ne gonflent pas "
-                "artificiellement le retard moyen, mais pénalisent le score de fiabilité (score = ponctualité "
-                "− 2 × taux d'arrêts non desservis).")
+    c1.markdown("**Score de fiabilité**  \nSur 100 passages prévus, le nombre de passages **assurés et à "
+                "l'heure**. Un passage est à l'heure s'il part entre 1 min d'avance et 5 min de retard ; il est "
+                "assuré si l'arrêt est desservi et la course n'est pas supprimée (une course de remplacement "
+                "ajoutée le même jour compense une suppression). Score = service assuré × part à l'heure.")
+    c2.markdown("**Jours et lignes écartés**  \nLes jours où la collecte est incomplète, les lignes au temps "
+                "réel douteux (au moins un quart des retards exactement nuls) et les lignes Flex' (à la "
+                "demande) ne sont comptés dans **aucun** chiffre du tableau de bord ni des rapports.")
     c3.markdown(f"**Seuil d'échantillon**  \nUne ligne n'apparaît dans les classements et graphiques que si "
                 f"elle totalise au moins **{MIN_OBSERVATIONS} passages** sur la période. Cela écarte les lignes "
                 f"trop peu observées, dont les chiffres ne seraient pas statistiquement fiables.")
@@ -3266,13 +3322,16 @@ def _render_method(c: PageContext) -> None:
         f"- **Jour dégradé** : jour où au moins {RISK_PCT_GT300:.0f} % des passages ont plus de 5 min de "
         "retard. Un problème est *ponctuel* s'il touche moins d'un quart des jours, *chronique* au-delà de "
         "la moitié.\n"
-        "- **Points perdus** : le score part de 100 ; les retards de plus de 5 min et les arrêts non desservis "
-        "(comptés double) en retirent. La fiche ligne dit lequel des deux pèse le plus.\n"
+        "- **Points perdus** : le score part de 100. Le service non rendu (arrêts non desservis, courses "
+        "supprimées) et les horaires non tenus (retard de plus de 5 min, avance de plus d'une minute) en "
+        "retirent ; la fiche ligne dit lequel des deux pèse le plus.\n"
         "- **Évolution** : le score de la période comparé à celui de la période précédente (le mois précédent "
         "pour un mois, la même durée juste avant pour les autres périodes).\n"
         "- **Priorités du moment** : " + PRIORITY_RULE + "\n"
-        "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions. Les courses "
-        "supprimées absentes du flux ne sont pas comptées dans le score ; la fiche ligne les montre à part."
+        "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions.\n"
+        "- **Créneaux** : les arrêts non desservis et les courses supprimées n'ont pas d'heure dans les "
+        "données ; le score d'un créneau est sa part de passages à l'heure × le service assuré de ses jours "
+        "(semaine ou week-end)."
     )
     _render_method_v2(c)
     st.markdown(
@@ -3440,7 +3499,9 @@ def render_page_reports(c: PageContext) -> None:
                           "dl_commune")
     st.caption("Les rapports sont produits automatiquement le 1er de chaque mois à partir des données TBM "
                "(Licence Ouverte 2.0). Ils peuvent être librement réutilisés en citant « Urban Vision, d'après "
-               "les données TBM ». Depuis septembre 2026, le rapport réseau présente aussi la méthode 2.0 en test.")
+               "les données TBM ». Le score de fiabilité a changé de calcul le 11/10/2026 (voir « Données & méthode ») : "
+               "les rapports antérieurs, jusqu'à celui de septembre 2026, utilisent l'ancien calcul (ponctualité "
+               "− 2 × arrêts non desservis) et ne se comparent pas directement aux suivants.")
 
 
 def render_page_about(c: PageContext) -> None:
@@ -3561,6 +3622,18 @@ def render_context_bar(conn, cutoff: int, since_ts, end_ts, commune: str | None,
                      help="Ouvre la fiche de l'arrêt sous la carte (page « Mon territoire »).")
 
 
+def exclusion_note(excl: ind.Exclusions) -> str | None:
+    """Phrase sous le bandeau : jours et lignes écartés de tous les chiffres de la période, sinon None."""
+    parts = []
+    if excl.jours:
+        parts.append(f"{len(excl.jours)} jour(s) à collecte incomplète ({_short_days(list(excl.jours))})")
+    if excl.lignes:
+        parts.append(f"{len(excl.lignes)} ligne(s) au temps réel douteux")
+    if not parts:
+        return None
+    return f"Chiffres calculés hors {' et '.join(parts)} : détail dans « Données & méthode »."
+
+
 def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, total: int, n_lines: int,
                 skipped_total: int, eligible_total: int, local: bool, detailed: bool) -> list[tuple]:
     """Cartes du bandeau : quatre repères en mots en vue rapide, les cinq mesures en vue détaillée."""
@@ -3570,14 +3643,14 @@ def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, 
     if not detailed:
         return [
             status_kpi(score, "arrêts de la commune" if local else "ensemble du réseau"),
-            ("À l'heure", f"{on_time:.0f} %", "des passages, moins de 5 min de retard", kpi_ponct,
+            ("À l'heure", f"{on_time:.0f} %", "des passages, de 1 min d'avance à 5 min de retard", kpi_ponct,
              HELP_TEXTS["ponctualite"]),
             ("Retard moyen", format_seconds(delay_s, signed=True), "par passage", kpi_retard, HELP_TEXTS["retard"]),
             ("Arrêts non desservis", f"{format_number(skip_rate, 1)} %", "des arrêts prévus", kpi_skip, HELP_TEXTS["skip"]),
         ]
     return [
         ("Passages analysés", f"{total:,}".replace(",", " "), None, "neutral", HELP_TEXTS["passage"]),
-        ("Ponctualité" if local else "Ponctualité réseau", f"{format_number(on_time, 1)} %", "≤ 5 min de retard", kpi_ponct,
+        ("Ponctualité" if local else "Ponctualité réseau", f"{format_number(on_time, 1)} %", "de −1 à +5 min", kpi_ponct,
          HELP_TEXTS["ponctualite"]),
         ("Retard moyen", format_seconds(delay_s, signed=True), None, kpi_retard, HELP_TEXTS["retard"]),
         ("Lignes suivies", f"{n_lines}", None, "neutral", None),
@@ -3652,6 +3725,9 @@ def main() -> None:
                            "depuis ≥ 20 min. **Observation** : une ligne brute du flux GTFS-RT (sert à mesurer le "
                            "volume de collecte). **Arrêts non desservis** : arrêts annoncés SKIPPED, rapportés aux "
                            "arrêts attendus (SCHEDULED + SKIPPED).")
+            note = exclusion_note(load_exclusions(conn, *_day_bounds(since_ts, end_ts, cutoff)))
+            if note:
+                st.caption(note)
 
         disturbed = load_disturbed_route_ids(conn, since_ts, end_ts, cutoff, commune=commune)
         ranking_net = ranking if commune is None else make_ranking(

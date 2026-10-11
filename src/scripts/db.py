@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     sum_delay INTEGER NOT NULL,
     cnt_le300 INTEGER NOT NULL,
     cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_service ON agg_hourly(date_service);
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS agg_hourly_stop (
     sum_delay INTEGER NOT NULL,
     cnt_le300 INTEGER NOT NULL,
     cnt_gt300 INTEGER NOT NULL,
+    cnt_lt60 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date_service, route_id, stop_id, heure)
 );
 CREATE INDEX IF NOT EXISTS idx_agg_hourly_stop_service ON agg_hourly_stop(date_service);
@@ -213,6 +215,19 @@ OBSERVATION_COLUMNS_ADDED = (
 )
 
 
+AGG_COLUMNS_ADDED = (
+    ("agg_hourly", "cnt_lt60", "INTEGER NOT NULL DEFAULT 0"),
+    ("agg_hourly_stop", "cnt_lt60", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def migrate_agg_columns(conn) -> None:
+    for table, name, sql_type in AGG_COLUMNS_ADDED:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if existing and name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
+
 def init_db(conn) -> None:
     """Migre les colonnes ajoutées depuis, applique le schéma complet (idempotent), puis valide."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(observations)")}
@@ -220,6 +235,7 @@ def init_db(conn) -> None:
         for name, sql_type in OBSERVATION_COLUMNS_ADDED:
             if name not in columns:
                 conn.execute(f"ALTER TABLE observations ADD COLUMN {name} {sql_type}")
+    migrate_agg_columns(conn)
     conn.executescript(SCHEMA_DDL)
     conn.commit()
 
@@ -288,14 +304,15 @@ GROUP BY ds, route_id
 
 _HOURLY_SQL = """
 INSERT OR REPLACE INTO agg_hourly
-    (date_service, route_id, heure, obs, sum_delay, cnt_le300, cnt_gt300)
+    (date_service, route_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60)
 SELECT ds,
        route_id,
        heure,
        COUNT(*) obs,
        COALESCE(SUM(departure_delay), 0) sum_delay,
        SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END) cnt_le300,
-       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300
+       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300,
+       SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END) cnt_lt60
 FROM (
     SELECT o.route_id,
            date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
@@ -366,7 +383,7 @@ GROUP BY ds, route_id, stop_id
 
 _HOURLY_STOP_SQL = """
 INSERT OR REPLACE INTO agg_hourly_stop
-    (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, cnt_gt300)
+    (date_service, route_id, stop_id, heure, obs, sum_delay, cnt_le300, cnt_gt300, cnt_lt60)
 SELECT ds,
        route_id,
        stop_id,
@@ -374,7 +391,8 @@ SELECT ds,
        COUNT(*) obs,
        COALESCE(SUM(departure_delay), 0) sum_delay,
        SUM(CASE WHEN departure_delay <= 300 THEN 1 ELSE 0 END) cnt_le300,
-       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300
+       SUM(CASE WHEN departure_delay > 300 THEN 1 ELSE 0 END) cnt_gt300,
+       SUM(CASE WHEN departure_delay < -60 THEN 1 ELSE 0 END) cnt_lt60
 FROM (
     SELECT o.route_id, o.stop_id,
            date(datetime(o.departure_time, 'unixepoch', 'localtime')) ds,
@@ -411,6 +429,14 @@ def incremental_statements(days: list[str]) -> list[tuple[str, tuple]]:
     ]
 
 
+def hourly_early_missing_days(c) -> list[str]:
+    """Jours dont les agrégats horaires n'ont pas encore les départs en avance (colonne cnt_lt60 ajoutée après coup)."""
+    return [d for (d,) in c.execute(
+        """SELECT date_service FROM agg_daily GROUP BY date_service HAVING SUM(cnt_lt60) > 0
+           EXCEPT SELECT date_service FROM agg_hourly GROUP BY date_service HAVING SUM(cnt_lt60) > 0
+           ORDER BY 1""")]
+
+
 def refresh_aggregates(c, days: list[str] | None = None) -> None:
     """Met à jour les tables d'agrégation depuis les observations.
 
@@ -418,6 +444,7 @@ def refresh_aggregates(c, days: list[str] | None = None) -> None:
     days=[...] -> ne recalcule que les dates-service listées (cheap, pour le
                   collecteur : les jours d'hier et d'aujourd'hui suffisent).
     """
+    migrate_agg_columns(c)
     c.executescript(AGG_DDL)
     if days is None:
         c.execute(_DAILY_SQL.replace("::SCHED_BOUNDS::", "").replace("::SKP_BOUNDS::", ""))
