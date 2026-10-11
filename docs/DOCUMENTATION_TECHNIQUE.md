@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 28 fichiers, 555 tests pytest
+└── tests/                          # 28 fichiers, 557 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1267,9 +1267,15 @@ exactes en Python, par paquets d'arrêts de départ (dernier chiffre de
 `from_stop_id`, `PARTITIONS`) pour limiter la mémoire ; `build_geometry`
 découpe le tracé de `route_shapes` entre les projections des deux arrêts
 (`segment_geometry`, à moins de 150 m et dans le bon ordre), sinon un segment
-droit. Mesuré en développement sur la copie de production : 5,5 s par jour,
-4 min pour 39 jours plus la carte ; `troncons_jour` compte 2,9 millions de
-lignes (35 Mo de valeurs) pour 39 jours. Échec journalisé « Tronçons : calcul
+droit. Les calculs sont faits avant d'écrire : chaque écriture est une
+transaction courte (`with conn`), le collecteur n'attend jamais un calcul.
+Mesuré en développement sur la copie de production : 5,5 s par jour, dont
+0,7 s d'écriture (verrou) ; carte 69 s et géométrie 10 s, écrites chacune en
+une transaction ; mémoire au plus 612 Mo (valeurs lues en tableaux d'entiers,
+`_int_values`) ; `troncons_jour` compte 2,9 millions de lignes (35 Mo de
+valeurs) pour 39 jours. Sur la VM, à `Nice=19` et E/S `idle`, la collecte
+(toutes les 60 s, attente du verrou jusqu'à 120 s) passe devant : impact
+attendu nul hors ces écritures d'au plus quelques secondes. Échec journalisé « Tronçons : calcul
 échoué » dans `data/collect.log` (code 1, signalé par la veille).
 
 **Couverture** (semaine type, tronçons de bus colorés) : 77 % sur la
@@ -1443,25 +1449,43 @@ lecteur qui n'est pas analyste :
    `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
 2. **Où les bus perdent du temps** (`render_page_contention`, page
    d'information : sans bandeau d'indicateurs, car elle porte sur la période
-   scolaire et non sur la période de la barre du haut) — carte des points de
-   contention (section 10.5). Choix « Jour » (semaine, samedi, dimanche type)
-   et « Heure » (0 h à 23 h, ou toute la journée) ; à l'ouverture, l'heure où le
-   plus de tronçons perdent beaucoup de temps (`worst_slot`). Composant
-   `dashboard/carte_troncons.py` + `carte_troncons.js` (deck.gl, fond Positron) :
-   - toutes les tranches partent en une fois (`troncons_payload` : tracé décalé
-     de 7 m à droite du sens de circulation, `offset_right`, pour séparer les
-     deux sens d'une rue ; une chaîne de 25 codes par tronçon, `cell_code` ;
-     valeurs mesurées par tranche), le composant change de tranche sans
-     relancer Streamlit ;
-   - couleurs des trois paliers, gris pour « pas assez de données », « début ou
-     fin de ligne » et lignes au temps réel insuffisant ; bus en trait plein,
-     ferry en tirets, tram en gris hachuré (« mesure par tronçon indisponible
-     pour le tram ») ; le vert est plus fin et plus clair, les tronçons qui
-     perdent du temps sont dessinés par-dessus ;
-   - légende en barre sur la carte, infobulle au survol (lignes, temps perdu
-     et part du temps prévu, nombre de passages, ou raison du gris) ;
-   - commune choisie : la carte se cadre sur ses tronçons, les autres sont
-     estompés ; une phrase sous la carte donne le nombre de tronçons mesurés.
+   scolaire et non sur la période de la barre du haut ; sur cette page, le
+   choix « Période » est grisé, « Période scolaire », avec la raison en aide :
+   `period_picker(locked=True)`) — carte des points de contention
+   (section 10.5). Choix « Jour » (semaine, samedi, dimanche type) dans
+   Streamlit ; tout le reste se passe dans le navigateur, sans relancer
+   Streamlit (`dashboard/carte_troncons.py` + `carte_troncons.js`, deck.gl sur
+   fond Positron) :
+   - **données** (`troncons_payload`) : toutes les tranches partent en une
+     fois, avec pour chaque tronçon son tracé décalé de 7 m à droite du sens de
+     circulation (`offset_right`, pour séparer les deux sens d'une rue), une
+     chaîne de 25 codes (`cell_code` : 24 heures puis la journée) et les valeurs
+     mesurées (temps perdu, part du temps prévu, passages, part des passages
+     qui perdent plus de 2 min) ;
+   - **curseur horaire** (0 h à 23 h) et bouton « Toute la journée » dans un
+     bandeau sous la carte, avec l'heure en grand et la légende en barre ;
+     ouverture sur l'heure où le plus de tronçons perdent beaucoup de temps dans
+     le périmètre (`worst_slot`) ;
+   - **verdict** en haut à gauche, recalculé à chaque cran : « À 17 h,
+     17 tronçons ralentissent nettement les bus à Mérignac, et 20 un peu. »,
+     puis le nombre de tronçons mesurés ; le nom du périmètre est écrit au-dessus ;
+   - **panneau au clic** sur un tronçon : lignes qui l'empruntent, temps perdu
+     et part du temps prévu à l'heure choisie, part des passages qui perdent plus
+     de 2 min, « l'un des endroits où le retard des bus se crée », heure où les
+     bus y perdent le plus, frise des 24 heures ; pour un tronçon gris, la
+     raison : service très peu fréquent, temps réel non fiable sur la ligne,
+     début ou fin de ligne, ou aucun passage ;
+   - **dessin** : couleurs des trois paliers, gris pour le non mesuré ; bus en
+     trait plein, ferry en tirets, tram en gris hachuré (« mesure par tronçon
+     indisponible pour le tram ») ; le vert est fin et clair, les tronçons qui
+     perdent du temps sont épais, liserés de blanc et dessinés par-dessus ;
+   - **fil d'Ariane** (`contention_scope`, `in_scope`) : la commune, la ligne et
+     l'arrêt de la barre de contexte définissent le périmètre (tronçons dont
+     l'un des arrêts est dans la commune, qu'emprunte la ligne, qui touchent
+     l'arrêt) ; les autres sont estompés, le verdict dit « à Mérignac », « sur
+     la ligne 23 », « autour de l'arrêt … » ; la carte se cadre sur les arrêts du
+     périmètre avec une marge pour la légende. Sur cette page, choisir une ligne
+     ou un arrêt dans la barre ne change pas de page.
 3. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour
    analyser cette ligne ↓ » et un clic sur une barre ouvre la fiche,
@@ -2038,8 +2062,8 @@ Réglages communs : `User=ubuntu`, `WorkingDirectory=/home/ubuntu/Urban-Vision`,
 interroger systemd ; l'unité des rapports n'a pas de restriction réseau). Les
 services continus redémarrent seuls (`Restart=always`, `RestartSec=10`). Les
 tâches lourdes tournent en basse priorité : recalcul `Nice=5`, sauvegarde et
-archive et tronçons `Nice=10` (sauvegarde en E/S `idle`), rapports `Nice=19` et E/S
-`idle`. Secrets : la veille charge `/etc/urban-vision/alertes.env`
+archive `Nice=10` (sauvegarde en E/S `idle`), rapports et tronçons `Nice=19` et E/S
+`idle` (tronçons : `MemoryHigh=900M`, la mémoire est freinée au-delà plutôt que d'être prise à la collecte). Secrets : la veille charge `/etc/urban-vision/alertes.env`
 (section 6.5), la sauvegarde `/etc/urban-vision/sauvegarde.env` s'il existe
 (section 6.6).
 
@@ -2703,7 +2727,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 555, isolés (suite `pytest` complète : 555 passed), flux synthétiques
+- Tests : 557, isolés (suite `pytest` complète : 557 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -2810,7 +2834,12 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    ponctualité surestimée de 0,6 à 1,9 point (ligne A : 81,3 % au lieu de
    79,4 %), retard moyen sous-estimé de 6 à 16 s ; réseau : 0,4 point de
    ponctualité, 0,3 point de score. La base de développement en compte bien
-   plus (25 à 33 % pour le tram) : ne pas en tirer de conclusion.
+   plus (25 à 33 % pour le tram) : ne pas en tirer de conclusion. Deux règles
+   comparées sur la ponctualité de septembre : (a) retirer chaque retard nul :
+   réseau −0,37 point, tram −0,95, ligne A −1,90 ; (b) retirer seulement les
+   trajets entièrement à zéro (sans temps réel) et garder les zéros isolés :
+   réseau −0,21, bus −0,03, tram −0,77, ligne A −1,70. 82 % des zéros du tram
+   sont dans des trajets entiers, 16 % de ceux des bus.
 2. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
    et analyse (définition unique, désormais mesurable par `collection_runs`) ou
    documenter explicitement la divergence (déjà décrite en 7.3/23.2).

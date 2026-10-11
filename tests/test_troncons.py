@@ -150,22 +150,51 @@ class TestComposant:
         assert ct.worst_slot(codes) == 8
         assert ct.worst_slot(["v" * 25]) is None
 
-    def test_donnees_du_composant(self):
+    def _geo_cells(self):
         geo = pd.DataFrame({"from_stop_id": ["a", "c"], "to_stop_id": ["b", "d"], "route_type": [3, 4],
                             "coords": [[[-0.60, 44.84], [-0.59, 44.84]], [[-0.50, 44.90], [-0.49, 44.90]]]})
-        cells = pd.DataFrame({"heure": [8, -1, 8], "from_stop_id": ["a", "a", "c"], "to_stop_id": ["b", "b", "d"],
-                              "statut": ["mesure", "mesure", "peu"], "palier": [NEGATIVE, MEDIUM, None],
-                              "mediane_s": [60.0, 20.0, None], "mediane_pct": [67.0, 30.0, None],
-                              "passages": [24, 300, 3]})
+        cells = pd.DataFrame({"heure": [8, -1, 8, 17], "from_stop_id": ["a", "a", "c", "a"],
+                              "to_stop_id": ["b", "b", "d", "b"], "statut": ["mesure", "mesure", "peu", "mesure"],
+                              "palier": [NEGATIVE, MEDIUM, None, POSITIVE], "mediane_s": [60.0, 20.0, None, 3.0],
+                              "mediane_pct": [67.0, 30.0, None, 4.0], "passages": [24, 300, 3, 30],
+                              "part_2min": [12.4, 5.0, None, 0.0]})
+        return geo, cells
+
+    def test_donnees_du_composant(self):
+        geo, cells = self._geo_cells()
+        scope = {"commune": "Mérignac", "place": "à Mérignac", "label": "Mérignac"}
         payload = ct.troncons_payload(geo, cells, {("a", "b"): "1, 16"}, {"a": "Gare", "b": "Parc"},
-                                      {"a": "Mérignac"}, [], "Mérignac", 8)
+                                      {"a": "Mérignac"}, [], scope, {("a", "b"): ["01", "16"]})
         first, second = payload["segments"]
         assert first["t"][8] == "c" and first["t"][ct.WHOLE_DAY_SLOT] == "o" and len(first["t"]) == ct.SLOTS
-        assert first["v"] == {8: [60, 67, 24], ct.WHOLE_DAY_SLOT: [20, 30, 300]}
+        assert first["v"][8] == [60, 67, 24, 12] and first["v"][ct.WHOLE_DAY_SLOT] == [20, 30, 300, 5]
         assert (first["n"], first["l"], first["c"], first["m"]) == ("Gare vers Parc", "1, 16", 1, 3)
-        assert second["t"][8] == "p" and second["c"] == 0 and second["m"] == 4
-        assert payload["bounds"] == [[-0.60, 44.84], [-0.59, 44.84]]
-        assert payload["view_key"] == "Mérignac"
+        assert second["t"][8] == "p" and second["v"][8] == [None, None, 3, None]
+        assert second["c"] == 0 and second["m"] == 4
+        assert payload["bounds"] == [[-0.60, 44.84], [-0.60, 44.84]]
+        assert payload["slot"] == 8 and payload["place"] == "à Mérignac" and payload["label"] == "Mérignac"
+
+    def test_perimetre_ligne_et_arret(self):
+        communes = {"a": "Mérignac", "c": "Pessac"}
+        assert ct.in_scope("a", "b", ["01"], communes, {"route_id": "01"})
+        assert not ct.in_scope("c", "d", ["02"], communes, {"route_id": "01"})
+        assert ct.in_scope("c", "d", [], communes, {"stop_id": "d"})
+        assert not ct.in_scope("a", "b", ["01"], communes, {"commune": "Pessac", "route_id": "01"})
+        geo, cells = self._geo_cells()
+        payload = ct.troncons_payload(geo, cells, {}, {}, communes, [], {"stop_id": "c"}, {})
+        assert [s["c"] for s in payload["segments"]] == [0, 1]
+        assert payload["slot"] == ct.WHOLE_DAY_SLOT
+        assert payload["view_key"] == "||c"
+
+
+def test_textes_du_perimetre():
+    import app as app_mod
+    assert app_mod.contention_scope(None, None, None, None, None) == {
+        "commune": None, "route_id": None, "stop_id": None, "place": "sur le réseau", "label": ""}
+    s = app_mod.contention_scope("Mérignac", "23", "23", None, None)
+    assert (s["place"], s["label"]) == ("sur la ligne 23 à Mérignac", "Ligne 23")
+    s = app_mod.contention_scope(None, "23", "23", "s9", "Gare")
+    assert (s["place"], s["label"]) == ("autour de l'arrêt Gare", "Gare")
 
 
 def test_le_service_nocturne_est_surveille():

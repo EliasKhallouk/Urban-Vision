@@ -128,14 +128,14 @@ def refresh_day(conn, day: str) -> int:
     start, end = day_bounds(day)
     rows = pd.read_sql_query(DAY_SQL, conn, params=(start - LOOKBACK_SECONDS, end))
     out = day_rows(passages_frame(rows), day)
-    conn.execute("DELETE FROM troncons_jour WHERE date_service = ?", (day,))
-    conn.executemany(
-        "INSERT INTO troncons_jour (date_service, from_stop_id, to_stop_id, route_id, heure, n, n_zero, "
-        "n_terminus, n_plateau, gains, pcts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        out.itertuples(index=False, name=None))
     kept = int(out["n"].sum()) if not out.empty else 0
-    conn.execute("INSERT OR REPLACE INTO troncons_jours_faits VALUES (?, ?, ?)", (day, kept, int(time.time())))
-    conn.commit()
+    with conn:
+        conn.execute("DELETE FROM troncons_jour WHERE date_service = ?", (day,))
+        conn.executemany(
+            "INSERT INTO troncons_jour (date_service, from_stop_id, to_stop_id, route_id, heure, n, n_zero, "
+            "n_terminus, n_plateau, gains, pcts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            out.itertuples(index=False, name=None))
+        conn.execute("INSERT OR REPLACE INTO troncons_jours_faits VALUES (?, ?, ?)", (day, kept, int(time.time())))
     return kept
 
 
@@ -172,38 +172,56 @@ def line_quality(conn, since: str, end: str) -> dict:
     return out
 
 
-def _values(column: pd.Series) -> pd.Series:
-    return column.str.split().explode().dropna().astype(int)
+def _int_values(column: pd.Series) -> np.ndarray:
+    """Toutes les valeurs d'une colonne de texte (« 12 -3 45 »), à la suite, en entiers."""
+    return np.array(" ".join(column).split(), dtype=np.int32)
+
+
+def _cell_stats(vals: pd.DataFrame, keys: list) -> pd.DataFrame:
+    g = vals.groupby(keys)
+    return pd.DataFrame({"mediane_s": g["gain"].median(), "mediane_pct": g["pct"].median(),
+                         "passages": g["gain"].size(), "part_2min": g["big"].mean() * 100,
+                         "jours": g["date_service"].nunique()})
 
 
 def summarize_cells(rows: pd.DataFrame, good_routes: set) -> pd.DataFrame:
     """Statut et médianes de chaque case (jour type, heure, tronçon), plus la journée entière (heure = -1).
 
     `rows` : lignes de `troncons_jour` (avec jour_type). Les lignes hors `good_routes` ne comptent
-    que pour signaler un tronçon « douteux » quand elles sont seules à le parcourir.
+    que pour signaler un tronçon « douteux » quand elles sont seules à le parcourir. Les valeurs sont
+    lues en tableaux d'entiers (pas d'objets pandas) pour limiter la mémoire.
     """
     cols = ["jour_type", "heure", "from_stop_id", "to_stop_id", "statut", "palier", "mediane_s", "mediane_pct",
             "passages", "part_2min", "jours"]
     if rows.empty:
         return pd.DataFrame(columns=cols)
-    rows = pd.concat([rows, rows.assign(heure=WHOLE_DAY)], ignore_index=True)
-    keys = ["jour_type", "heure", "from_stop_id", "to_stop_id"]
+    hour_keys = ["jour_type", "heure", "from_stop_id", "to_stop_id"]
+    day_keys = ["jour_type", "from_stop_id", "to_stop_id"]
     good = rows["route_id"].isin(good_routes)
-    presence = rows.assign(good_rows=good, term=rows["n_terminus"]).groupby(keys).agg(
-        any_good=("good_rows", "any"), terminus=("term", "sum"), measurable=("n", "sum"))
+    flags = rows.assign(good_rows=good)
+    presence = []
+    for keys in (hour_keys, day_keys):
+        pr = flags.groupby(keys).agg(any_good=("good_rows", "any"), terminus=("n_terminus", "sum"),
+                                     measurable=("n", "sum"))
+        presence.append(pr)
     measured = rows[good & (rows["n"] > 0)]
-    if measured.empty:
-        stats = pd.DataFrame(index=presence.index, columns=["mediane_s", "mediane_pct", "passages", "part_2min", "jours"],
-                             dtype=float)
-    else:
-        vals = pd.DataFrame({"gain": _values(measured["gains"]), "pct": _values(measured["pcts"])})
-        vals = vals.join(measured[keys + ["date_service"]])
-        g = vals.groupby(keys)
-        stats = pd.DataFrame({"mediane_s": g["gain"].median(), "mediane_pct": g["pct"].median(),
-                              "passages": g["gain"].size(),
-                              "part_2min": g["gain"].apply(lambda v: float((v > BIG_LOSS_SECONDS).mean() * 100)),
-                              "jours": g["date_service"].nunique()})
-    out = presence.join(stats).reset_index()
+    stats = [pd.DataFrame(index=pr.index, columns=["mediane_s", "mediane_pct", "passages", "part_2min", "jours"],
+                          dtype=float) for pr in presence]
+    if not measured.empty:
+        idx = np.repeat(np.arange(len(measured)), measured["n"].to_numpy())
+        gains, pcts = _int_values(measured["gains"]), _int_values(measured["pcts"])
+        if len(gains) != len(idx) or len(pcts) != len(idx):
+            raise ValueError("troncons_jour incohérent : nombre de valeurs différent de n")
+        base = measured[["jour_type", "heure", "from_stop_id", "to_stop_id", "date_service"]].iloc[idx]
+        vals = base.reset_index(drop=True).assign(gain=gains, pct=pcts, big=gains > BIG_LOSS_SECONDS)
+        stats = [_cell_stats(vals, hour_keys), _cell_stats(vals, day_keys)]
+    frames = []
+    for pr, st in zip(presence, stats):
+        frame = pr.join(st).reset_index()
+        if "heure" not in frame:
+            frame["heure"] = WHOLE_DAY
+        frames.append(frame)
+    out = pd.concat(frames, ignore_index=True)
     out["passages"] = out["passages"].fillna(0).astype(int)
     out["jours"] = out["jours"].fillna(0).astype(int)
     enough = (out["passages"] >= MIN_PASSAGES) & (out["jours"] >= MIN_DAYS)
@@ -216,12 +234,15 @@ def summarize_cells(rows: pd.DataFrame, good_routes: set) -> pd.DataFrame:
 
 
 def build_map(conn, since: str, end: str) -> dict:
-    """Recalcule `troncons_carte`, `troncons_lignes` et la qualité des lignes (`troncons_meta`)."""
+    """Recalcule `troncons_carte`, `troncons_lignes` et la qualité des lignes (`troncons_meta`).
+
+    Tout est calculé avant d'écrire : la transaction d'écriture ne dure que le temps des insertions,
+    le collecteur n'attend pas le calcul.
+    """
     excluded = set(ind.excluded_days(conn, since, end))
     quality = line_quality(conn, since, end)
     good = {r for r, q in quality.items() if q["ok"]}
-    conn.execute("DELETE FROM troncons_carte")
-    conn.execute("DELETE FROM troncons_lignes")
+    all_cells, all_lines = [], []
     for part in PARTITIONS:
         rows = pd.read_sql_query(
             f"SELECT date_service, from_stop_id, to_stop_id, route_id, heure, n, n_terminus, gains, pcts "
@@ -232,17 +253,19 @@ def build_map(conn, since: str, end: str) -> dict:
             continue
         rows["jour_type"] = pd.to_datetime(rows["date_service"]).dt.weekday.map(DAY_TYPES)
         cells = summarize_cells(rows, good)
-        conn.executemany(
-            "INSERT INTO troncons_carte VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [tuple(None if (isinstance(v, float) and math.isnan(v)) else v for v in r)
-             for r in cells.itertuples(index=False, name=None)])
+        all_cells += [tuple(None if (isinstance(v, float) and math.isnan(v)) else v for v in r)
+                      for r in cells.itertuples(index=False, name=None)]
         lines = rows.groupby(["from_stop_id", "to_stop_id", "route_id"])["n"].sum().reset_index()
-        conn.executemany("INSERT INTO troncons_lignes VALUES (?, ?, ?, ?)", lines.itertuples(index=False, name=None))
+        all_lines += [(a, b, r, int(n)) for a, b, r, n in lines.itertuples(index=False, name=None)]
     meta = {"depuis": since, "jusqu_a": end, "calcule_le": int(time.time()), "jours_exclus": sorted(excluded),
             "lignes": quality}
-    conn.executemany("INSERT OR REPLACE INTO troncons_meta VALUES (?, ?)",
-                     [(k, json.dumps(v, ensure_ascii=False)) for k, v in meta.items()])
-    conn.commit()
+    with conn:
+        conn.execute("DELETE FROM troncons_carte")
+        conn.execute("DELETE FROM troncons_lignes")
+        conn.executemany("INSERT INTO troncons_carte VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", all_cells)
+        conn.executemany("INSERT INTO troncons_lignes VALUES (?, ?, ?, ?)", all_lines)
+        conn.executemany("INSERT OR REPLACE INTO troncons_meta VALUES (?, ?)",
+                         [(k, json.dumps(v, ensure_ascii=False)) for k, v in meta.items()])
     return meta
 
 
@@ -312,10 +335,6 @@ def build_geometry(conn) -> int:
     route_types = dict(conn.execute("SELECT route_id, route_type FROM routes"))
     main = pd.read_sql_query(
         "SELECT from_stop_id, to_stop_id, route_id, passages FROM troncons_lignes", conn)
-    conn.execute("DELETE FROM troncons_geo")
-    if main.empty:
-        conn.commit()
-        return 0
     main = main.sort_values("passages", ascending=False)
     rows = []
     for (a, b), sub in main.groupby(["from_stop_id", "to_stop_id"], sort=False):
@@ -325,8 +344,9 @@ def build_geometry(conn) -> int:
         candidate = [pts for r in routes for pts in shapes.get(r, [])]
         rows.append((a, b, int(route_types.get(routes[0], 3)),
                      json.dumps(segment_geometry(candidate, stops[a], stops[b]), separators=(",", ":"))))
-    conn.executemany("INSERT INTO troncons_geo VALUES (?, ?, ?, ?)", rows)
-    conn.commit()
+    with conn:
+        conn.execute("DELETE FROM troncons_geo")
+        conn.executemany("INSERT INTO troncons_geo VALUES (?, ?, ?, ?)", rows)
     return len(rows)
 
 

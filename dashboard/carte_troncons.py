@@ -14,7 +14,6 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from highcharts import CHART_FONT_CSS
 
 _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
@@ -43,32 +42,60 @@ COLORS = {"v": OLIVE_LEAF, "o": SUNLIT_CLAY, "c": COPPERWOOD, "grey": NO_DATA}
 
 _JS = Path(__file__).with_name("carte_troncons.js").read_text(encoding="utf-8")
 _CSS = f"""
-@import url("{CHART_FONT_CSS}/400.css");
-@import url("{CHART_FONT_CSS}/600.css");
-@import url("{CHART_FONT_CSS}/700.css");
 .uvt {{ position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #F2F2EE;
-       border: 1px solid rgba(40, 54, 24, .18); font-family: 'Source Sans 3', 'Segoe UI', sans-serif; color: {BLACK_FOREST}; }}
+       border: 1px solid rgba(40, 54, 24, .18); font-family: 'Source Sans', 'Source Sans 3', sans-serif; color: {BLACK_FOREST}; }}
 .uvt-canvas {{ position: absolute !important; inset: 0; }}
 .uvt canvas {{ outline: none; }}
-.uvt-tip {{ position: absolute; z-index: 4; display: none; pointer-events: none; max-width: 320px; background: #FFFFFF;
-           border: 1px solid rgba(40, 54, 24, .2); border-radius: 10px; padding: 10px 12px;
-           box-shadow: 0 8px 22px rgba(40, 54, 24, .16); font-size: 13px; line-height: 1.45; }}
-.uvt-tip b {{ display: block; font-size: 15px; margin-bottom: 2px; }}
-.uvt-tip .l {{ color: #606c38; font-size: 12px; margin-bottom: 6px; }}
-.uvt-tip .v {{ font-size: 14px; }}
-.uvt-tip .v strong {{ font-size: 18px; }}
-.uvt-tip .m {{ color: #606c38; font-size: 12px; margin-top: 4px; }}
-.uvt-legend {{ position: absolute; z-index: 3; left: 12px; bottom: 12px; right: 12px; display: flex; flex-wrap: wrap;
-              align-items: center; gap: 8px 18px; background: rgba(255, 255, 255, .94); border-radius: 10px;
-              padding: 9px 14px; box-shadow: 0 2px 10px rgba(40, 54, 24, .12); font-size: 13px; }}
-.uvt-bar {{ display: flex; align-items: stretch; border-radius: 6px; overflow: hidden; min-width: 300px; }}
-.uvt-bar span {{ flex: 1; padding: 4px 8px; color: #FFFFFF; font-weight: 600; white-space: nowrap; text-align: center; }}
+.uvt-head {{ position: absolute; z-index: 3; top: 12px; left: 12px; max-width: min(440px, calc(100% - 90px));
+            background: rgba(255, 255, 255, .95); border-radius: 10px; padding: 11px 14px 10px;
+            box-shadow: 0 2px 10px rgba(40, 54, 24, .12); }}
+.uvt-label {{ font-size: 22px; font-weight: 700; line-height: 1.15; margin-bottom: 4px; letter-spacing: -.01em; }}
+.uvt-verdict {{ font-size: 16px; font-weight: 600; line-height: 1.35; }}
+.uvt-sub {{ color: #606c38; font-size: 12.5px; margin-top: 4px; }}
+.uvt-bottom {{ position: absolute; z-index: 3; left: 12px; right: 12px; bottom: 12px; background: rgba(255, 255, 255, .96);
+              border-radius: 10px; padding: 10px 14px 9px; box-shadow: 0 2px 10px rgba(40, 54, 24, .12); }}
+.uvt-controls {{ display: flex; align-items: center; gap: 16px; }}
+.uvt-clock {{ min-width: 128px; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }}
+.uvt-range-box {{ flex: 1; }}
+.uvt-range {{ width: 100%; accent-color: {BLACK_FOREST}; cursor: pointer; margin: 0; }}
+.uvt-range.off {{ opacity: .4; }}
+.uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
+.uvt-ticks {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
+.uvt-allday {{ flex: none; border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; background: #FFFFFF; color: {BLACK_FOREST};
+              padding: 6px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }}
+.uvt-allday[aria-pressed="true"] {{ background: {BLACK_FOREST}; color: #FEFAE0; }}
+.uvt-legend {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; padding-top: 8px;
+              border-top: 1px solid rgba(40, 54, 24, .12); font-size: 12.5px; }}
+.uvt-bar {{ display: flex; align-items: stretch; border-radius: 6px; overflow: hidden; }}
+.uvt-bar span {{ padding: 3px 9px; color: #FFFFFF; font-weight: 600; white-space: nowrap; }}
 .uvt-bar span.o {{ color: {BLACK_FOREST}; }}
-.uvt-grey {{ display: inline-flex; align-items: center; gap: 6px; color: #606c38; }}
-.uvt-swatch {{ display: inline-block; width: 26px; height: 0; border-top: 4px solid {NO_DATA}; }}
+.uvt-key {{ display: inline-flex; align-items: center; gap: 6px; color: #606c38; }}
+.uvt-swatch {{ display: inline-block; width: 24px; height: 0; border-top: 4px solid {NO_DATA}; }}
 .uvt-swatch.ferry {{ border-top: 4px dashed {BLACK_FOREST}; }}
-.uvt-swatch.bus {{ border-top: 4px solid {BLACK_FOREST}; }}
-.uvt-swatch.tram {{ border-top: 7px dotted #A9A9A0; }}
+.uvt-swatch.bus {{ border-top: 3px solid {BLACK_FOREST}; }}
+.uvt-swatch.tram {{ border-top: 6px dotted #A9A9A0; }}
+.uvt-tip {{ position: absolute; z-index: 5; display: none; pointer-events: none; max-width: 300px; background: #FFFFFF;
+           border: 1px solid rgba(40, 54, 24, .2); border-radius: 10px; padding: 9px 11px;
+           box-shadow: 0 8px 22px rgba(40, 54, 24, .16); font-size: 13px; line-height: 1.4; }}
+.uvt-tip b {{ display: block; font-size: 14px; }}
+.uvt-tip .l {{ color: #606c38; font-size: 12px; margin-bottom: 4px; }}
+.uvt-tip .m {{ color: #606c38; font-size: 12px; margin-top: 4px; }}
+.uvt-panel {{ position: absolute; z-index: 4; display: none; top: 12px; right: 56px; width: 330px;
+             max-height: calc(100% - 175px); overflow: auto; background: #FFFFFF; border-radius: 12px; padding: 14px 16px 12px;
+             border: 1px solid rgba(40, 54, 24, .2); box-shadow: 0 10px 28px rgba(40, 54, 24, .2); font-size: 13.5px; line-height: 1.45; }}
+.uvt-panel h3 {{ margin: 0 26px 2px 0; font-size: 16px; line-height: 1.25; }}
+.uvt-panel p {{ margin: 6px 0; }}
+.uvt-lines {{ color: #606c38; font-size: 12.5px; }}
+.uvt-figure {{ margin-top: 10px; font-size: 28px; font-weight: 700; line-height: 1.1; color: {COPPERWOOD}; }}
+.uvt-figure.ok {{ font-size: 20px; color: {OLIVE_LEAF}; }}
+.uvt-grey-reason {{ margin-top: 10px !important; font-weight: 600; }}
+.uvt-foot {{ color: #606c38; font-size: 12px; }}
+.uvt-close {{ position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 50%;
+             background: #F2F2EE; color: {BLACK_FOREST}; font-size: 18px; line-height: 1; cursor: pointer; }}
+.uvt-strip {{ display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin-top: 10px; }}
+.uvt-strip span {{ height: 16px; border-radius: 2px; }}
+.uvt-strip span.now {{ outline: 2px solid {BLACK_FOREST}; outline-offset: 1px; }}
+.uvt-strip-axis {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11px; margin-top: 3px; }}
 .uvt-error {{ padding: 24px; font-size: 14px; }}
 """
 
@@ -129,33 +156,57 @@ def worst_slot(codes: list[str]) -> int | None:
     return best
 
 
+def in_scope(seg_from: str, seg_to: str, routes: list, communes: dict, scope: dict) -> bool:
+    """Vrai si le tronçon appartient au périmètre du fil d'Ariane : commune (l'un des deux arrêts),
+    ligne (parmi celles qui l'empruntent) et arrêt (l'une des deux extrémités)."""
+    if scope.get("commune") and scope["commune"] not in (communes.get(seg_from), communes.get(seg_to)):
+        return False
+    if scope.get("route_id") and scope["route_id"] not in routes:
+        return False
+    if scope.get("stop_id") and scope["stop_id"] not in (seg_from, seg_to):
+        return False
+    return True
+
+
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
-                     tram_paths: list, commune: str | None, slot: int) -> dict:
-    """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées),
-    tracés du tram, vue de départ et tranche affichée.
+                     tram_paths: list, scope: dict | None = None, route_ids: dict | None = None) -> dict:
+    """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
+    appartenance au périmètre), tracés du tram, cadrage, tranche d'ouverture et textes du périmètre.
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
-    to_stop_id, statut, palier, mediane_s, mediane_pct, passages ; `lines` : (de, vers) -> « 1, 16 » ;
-    `communes` : stop_id -> commune.
+    to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
+    « 1, 16 » ; `route_ids` : (de, vers) -> identifiants des lignes ; `communes` : stop_id -> commune ;
+    `scope` : commune, route_id, stop_id, place (« à Mérignac »), label (nom affiché sur la carte).
     """
+    scope = scope or {}
+    route_ids = route_ids or {}
     by_seg: dict = {}
     for r in cells.itertuples(index=False):
         seg = by_seg.setdefault((r.from_stop_id, r.to_stop_id), {"codes": [ABSENT] * SLOTS, "values": {}})
         i = slot_index(r.heure)
         seg["codes"][i] = cell_code(r.statut, r.palier)
         if r.statut == "mesure":
-            seg["values"][i] = [int(round(r.mediane_s)), int(round(r.mediane_pct)), int(r.passages)]
+            part = getattr(r, "part_2min", None)
+            seg["values"][i] = [int(round(r.mediane_s)), int(round(r.mediane_pct)), int(r.passages),
+                                int(round(part)) if part is not None and part == part else 0]
+        elif r.statut == "peu":
+            seg["values"][i] = [None, None, int(r.passages), None]
     segments, lons, lats, all_lons, all_lats = [], [], [], [], []
+    focused = any(scope.get(k) for k in ("commune", "route_id", "stop_id"))
     for g in geo.itertuples(index=False):
         seg = by_seg.get((g.from_stop_id, g.to_stop_id))
         if seg is None:
             continue
-        inside = commune is None or commune in (communes.get(g.from_stop_id), communes.get(g.to_stop_id))
+        routes = route_ids.get((g.from_stop_id, g.to_stop_id), [])
+        inside = in_scope(g.from_stop_id, g.to_stop_id, routes, communes, scope)
         all_lons += [p[0] for p in g.coords]
         all_lats += [p[1] for p in g.coords]
-        if commune is not None and inside:
-            lons += [p[0] for p in g.coords]
-            lats += [p[1] for p in g.coords]
+        if focused and inside:
+            ends = [(g.from_stop_id, g.coords[0]), (g.to_stop_id, g.coords[-1])]
+            points = ([pt for sid, pt in ends if communes.get(sid) == scope["commune"]]
+                      if scope.get("commune") and not (scope.get("route_id") or scope.get("stop_id")) else g.coords)
+            lons += [pt[0] for pt in points]
+            lats += [pt[1] for pt in points]
         segments.append({
             "p": offset_right(g.coords), "m": int(g.route_type), "t": "".join(seg["codes"]), "v": seg["values"],
             "n": f"{names.get(g.from_stop_id, g.from_stop_id)} vers {names.get(g.to_stop_id, g.to_stop_id)}",
@@ -165,13 +216,17 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
     box_lons, box_lats = (lons, lats) if lons else (all_lons, all_lats)
     bounds = None
     if box_lons:
-        lo_x, hi_x = _trimmed(box_lons)
-        lo_y, hi_y = _trimmed(box_lats)
+        lo_x, hi_x = _trimmed(box_lons, 0.02 if focused else 0.01)
+        lo_y, hi_y = _trimmed(box_lats, 0.02 if focused else 0.01)
         bounds = [[lo_x, lo_y], [hi_x, hi_y]]
         view = {"longitude": (lo_x + hi_x) / 2, "latitude": (lo_y + hi_y) / 2,
                 "zoom": COMMUNE_ZOOM if lons else NETWORK_VIEW["zoom"]}
-    return {"segments": segments, "tram": tram_paths, "slot": int(slot), "view": view, "bounds": bounds,
-            "view_key": commune or "__reseau__", "colors": COLORS, "height": MAP_HEIGHT}
+    default = worst_slot([s["t"] for s in segments if s["c"]])
+    return {"segments": segments, "tram": tram_paths, "slot": WHOLE_DAY_SLOT if default is None else default,
+            "view": view, "bounds": bounds,
+            "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
+            "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "",
+            "colors": COLORS, "height": MAP_HEIGHT}
 
 
 def carte_troncons(payload: dict, key: str) -> None:

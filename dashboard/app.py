@@ -33,7 +33,7 @@ import pandas as pd
 import streamlit as st
 
 from carte import carte_arrets, map_payload
-from carte_troncons import WHOLE_DAY_SLOT, carte_troncons, troncons_payload, worst_slot
+from carte_troncons import carte_troncons, troncons_payload
 from graphique import graphique_cliquable
 
 import diagnostic as dg
@@ -423,12 +423,22 @@ def load_service_days(_conn, cutoff_ts: int) -> tuple[date, date]:
     return min(first_day, last_day), last_day
 
 
-def period_picker(conn, cutoff_ts: int) -> Period:
-    """Choix de la période : un mois complet par défaut, ou une autre période."""
+def period_picker(conn, cutoff_ts: int, locked: bool = False) -> Period:
+    """Choix de la période : un mois complet par défaut, ou une autre période.
+
+    `locked` : la page affichée a sa propre période (carte des tronçons) ; le choix est montré grisé,
+    avec la raison, et la période choisie ailleurs est conservée pour les autres pages.
+    """
     first_day, last_day = load_service_days(conn, cutoff_ts)
     options = period_options(first_day, last_day)
     if st.session_state.get("period_choice") not in options:
         st.session_state["period_choice"] = default_period_choice(first_day, last_day)
+    if locked:
+        st.selectbox("Période", ["Période scolaire"], key="period_locked", disabled=True,
+                     help="Sans effet sur cette page : la carte des tronçons porte sur la période scolaire, "
+                          "depuis la rentrée, recalculée chaque nuit.")
+        return resolve_period(st.session_state["period_choice"], first_day, last_day,
+                              st.session_state.get("_period_custom"))
     choice = st.selectbox("Période", options, key="period_choice",
                           format_func=lambda c: period_choice_label(c, last_day),
                           help="Un mois complet est comparé au mois précédent ; les autres périodes, à la "
@@ -439,6 +449,7 @@ def period_picker(conn, cutoff_ts: int) -> Period:
                                min_value=first_day, max_value=last_day, format="DD/MM/YYYY", key="period_dates")
         picked = picked if isinstance(picked, (list, tuple)) else (picked,)
         custom = (picked[0], picked[-1]) if picked else None
+    st.session_state["_period_custom"] = custom
     return resolve_period(choice, first_day, last_day, custom)
 
 
@@ -2167,6 +2178,11 @@ def _on_ctx_line() -> None:
         remember()
         st.session_state["line_id"] = None
         return
+    if st.session_state.get("sidebar_nav") == PAGE_CONTENTION:
+        remember()
+        st.session_state["line_id"] = chosen
+        st.session_state["stop_id"] = None
+        return
     open_line(chosen)
     st.session_state["stop_id"] = None
 
@@ -2176,6 +2192,10 @@ def _on_ctx_stop() -> None:
     if chosen in (None, ALL):
         remember()
         st.session_state["stop_id"] = None
+        return
+    if st.session_state.get("sidebar_nav") == PAGE_CONTENTION:
+        remember()
+        st.session_state["stop_id"] = chosen
         return
     open_stop(chosen)
 
@@ -3544,7 +3564,6 @@ def _download_pdf(label: str, path: Path, key: str) -> None:
 
 
 CONTENTION_DAYS = {"semaine": "Semaine type", "samedi": "Samedi type", "dimanche": "Dimanche type"}
-CONTENTION_SLOTS = list(range(24)) + [WHOLE_DAY_SLOT]
 
 
 @st.cache_data(ttl=3600)
@@ -3562,23 +3581,41 @@ def load_troncons(_conn, jour_type: str, computed_at: int) -> dict:
     geo = pd.read_sql_query("SELECT from_stop_id, to_stop_id, route_type, coords FROM troncons_geo", _conn)
     geo["coords"] = geo["coords"].map(json.loads)
     cells = pd.read_sql_query(
-        "SELECT heure, from_stop_id, to_stop_id, statut, palier, mediane_s, mediane_pct, passages "
+        "SELECT heure, from_stop_id, to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min "
         "FROM troncons_carte WHERE jour_type = ?", _conn, params=(jour_type,))
     lines: dict = {}
-    for a, b, name in _conn.execute(
-            "SELECT t.from_stop_id, t.to_stop_id, COALESCE(r.route_short_name, t.route_id) FROM troncons_lignes t "
-            "LEFT JOIN routes r ON r.route_id = t.route_id ORDER BY t.passages DESC"):
+    route_ids: dict = {}
+    for a, b, route_id, name in _conn.execute(
+            "SELECT t.from_stop_id, t.to_stop_id, t.route_id, COALESCE(r.route_short_name, t.route_id) "
+            "FROM troncons_lignes t LEFT JOIN routes r ON r.route_id = t.route_id ORDER BY t.passages DESC"):
         lines.setdefault((a, b), []).append(str(name))
+        route_ids.setdefault((a, b), []).append(route_id)
     tram = [json.loads(c) for (c,) in _conn.execute(
         "SELECT s.coords FROM route_shapes s JOIN routes r ON r.route_id = s.route_id WHERE r.route_type = 0")]
     return {"geo": geo, "cells": cells, "lines": {k: ", ".join(dict.fromkeys(v)) for k, v in lines.items()},
+            "route_ids": route_ids,
             "names": dict(_conn.execute("SELECT stop_id, stop_name FROM stops")),
             "communes": dict(_conn.execute("SELECT stop_id, commune_name FROM stop_municipalities")),
             "tram": tram}
 
 
-def _slot_label(slot: int) -> str:
-    return "Toute la journée" if slot == WHOLE_DAY_SLOT else f"{slot} h"
+def contention_scope(commune: str | None, route_id: str | None, line_name: str | None, stop_id: str | None,
+                     stop_name: str | None) -> dict:
+    """Périmètre de la carte des tronçons d'après le fil d'Ariane, avec ses textes.
+
+    `place` complète le verdict (« à Mérignac », « sur la ligne 23 à Mérignac », « autour de l'arrêt
+    Gare ») ; `label` est le nom affiché sur la carte, le plus précis des trois.
+    """
+    parts = []
+    if stop_id:
+        parts.append(f"autour de l'arrêt {stop_name or stop_id}")
+    elif route_id:
+        parts.append(f"sur la ligne {line_name or route_id}")
+    if commune:
+        parts.append(f"à {commune}")
+    label = stop_name if stop_id else (f"Ligne {line_name or route_id}" if route_id else commune)
+    return {"commune": commune, "route_id": route_id, "stop_id": stop_id,
+            "place": " ".join(parts) or "sur le réseau", "label": label or ""}
 
 
 def render_page_contention(c: PageContext) -> None:
@@ -3592,25 +3629,22 @@ def render_page_contention(c: PageContext) -> None:
     st.markdown(
         '<div class="section-note">Chaque tronçon entre deux arrêts est colorié selon le temps que les bus y perdent '
         "(circulation, feux ou montée des voyageurs). Ce sont les valeurs habituelles de la période scolaire, du "
-        f"{since:%d/%m/%Y} au {until:%d/%m/%Y}, recalculées chaque nuit.</div>", unsafe_allow_html=True)
-    left, right = st.columns([0.28, 0.72], gap="large")
+        f"{since:%d/%m/%Y} au {until:%d/%m/%Y}, recalculées chaque nuit. Faites glisser le curseur sous la carte "
+        "pour voir chaque heure ; cliquez sur un tronçon pour le détail.</div>", unsafe_allow_html=True)
+    left, _ = st.columns([0.3, 0.7])
     with left:
         jour = st.selectbox("Jour", list(CONTENTION_DAYS), format_func=CONTENTION_DAYS.get, key="contention_jour")
     data = load_troncons(c.conn, jour, int(meta["calcule_le"]))
+    route_id, stop_id = st.session_state.get("line_id"), st.session_state.get("stop_id")
+    line_name = None
+    if route_id:
+        row = c.conn.execute("SELECT COALESCE(route_short_name, route_id) FROM routes WHERE route_id = ?",
+                             (route_id,)).fetchone()
+        line_name = row[0] if row else route_id
+    scope = contention_scope(c.commune, route_id, line_name, stop_id, data["names"].get(stop_id) if stop_id else None)
     payload = troncons_payload(data["geo"], data["cells"], data["lines"], data["names"], data["communes"],
-                               data["tram"], c.commune, WHOLE_DAY_SLOT)
-    scope = [s["t"] for s in payload["segments"] if s["c"]]
-    if st.session_state.get("contention_slot_for") != (jour, c.commune):
-        st.session_state["contention_slot_for"] = (jour, c.commune)
-        st.session_state["contention_slot"] = worst_slot(scope) if worst_slot(scope) is not None else WHOLE_DAY_SLOT
-    with right:
-        slot = st.select_slider("Heure", CONTENTION_SLOTS, key="contention_slot", format_func=_slot_label)
-    payload["slot"] = int(slot)
+                               data["tram"], scope, data["route_ids"])
     carte_troncons(payload, key="carte_troncons")
-    codes = [t[slot] for t in scope]
-    measured = sum(code in "voc" for code in codes)
-    st.caption(f"{_slot_label(slot)} : {measured} tronçons de bus mesurés sur {len(codes)} "
-               f"{'dans la commune' if c.commune else 'sur le réseau'} ; les autres sont en gris.")
 
 
 def render_page_reports(c: PageContext) -> None:
@@ -3837,7 +3871,7 @@ def main() -> None:
         st.session_state["commune_idx"] = int(st.session_state.get("commune_topbar") or 0)
         commune = communes[st.session_state["commune_idx"] - 1] if st.session_state["commune_idx"] else None
         with cols[4]:
-            period = period_picker(conn, cutoff)
+            period = period_picker(conn, cutoff, locked=page == PAGE_CONTENTION)
         since_ts, end_ts = _ts(period.start), _ts(period.end)
 
         scheduled, skipped = load_network_data(conn, cutoff, since_ts, end_ts, commune=commune)
