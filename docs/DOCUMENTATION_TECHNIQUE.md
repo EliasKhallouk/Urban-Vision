@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 587 tests pytest
+└── tests/                          # 29 fichiers, 583 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1398,8 +1398,9 @@ cases tronçon × heure des bus mesurés : 90 % vert, 8 % ocre, 1,4 % cuivre ;
 95 % des cases gardent leur palier entre jours pairs et impairs. Bruit :
 écart d'un jour à l'autre de la médiane de 3 s (7 s au 90e centile).
 
-**Assez de données** : au moins 20 passages (`MIN_PASSAGES`) sur au moins
-3 jours (`MIN_DAYS`) par tronçon et par heure (ou journée). Sinon gris « pas
+**Assez de données** : au moins 15 passages (`MIN_PASSAGES`) sur au moins
+3 jours (`MIN_DAYS`) par tronçon et par heure (ou journée), pour les trois
+jours types. Sinon gris « pas
 assez de données ». Un trou de collecte ne donne aucun passage, donc du gris,
 jamais du vert. Jours `incomplet` et lignes Flex' exclus ; jours types
 séparés (semaine, samedi, dimanche).
@@ -1424,36 +1425,30 @@ valeurs) pour 39 jours. Sur la VM, à `Nice=19` et E/S `idle`, la collecte
 attendu nul hors ces écritures d'au plus quelques secondes. Échec journalisé « Tronçons : calcul
 échoué » dans `data/collect.log` (code 1, signalé par la veille).
 
-**Créneaux des jours types** (`TYPE_SLOT_HOURS`, `slot_start`) : 1 h en
-semaine, 4 h le samedi et le dimanche (carte et tram de bout en bout). Une
-case de jour type demande 20 passages sur 3 jours ; or la période scolaire
-du 01/09 au 10/10/2026 ne compte que 6 samedis et 5 dimanches : une ligne qui
-passe toutes les 20 min le samedi fait 3 passages à l'heure, 18 sur la
-période, sous le seuil. À l'heure, le samedi type ne mesurait que 441
-portions à 8 h et 1 018 à 17 h (médiane des cases grises : 8 passages), le
-dimanche type 80 et 315 (médiane 5 à 6). En créneaux de 4 h, au même seuil :
-samedi 2 923 à 8-12 h et 2 982 à 16-20 h, dimanche 1 756 et 2 072 (copie de
-production du 11/10/2026). Le curseur des week-ends types a 6 crans et la
-mention « Créneaux de 4 h : peu de bus circulent le samedi » (ou « le
-dimanche »).
+**Week-ends types** : la période scolaire du 01/09 au 11/10/2026 ne compte
+que 6 samedis et 6 dimanches ; une ligne qui passe toutes les 20 min le samedi
+fait 3 passages à l'heure, 18 sur la période. Au seuil de 15 (20 auparavant),
+samedi type : 928 portions mesurées à 8 h et 1 298 à 17 h (441 et 1 018 au
+seuil de 20) ; dimanche type : 210 et 637 (80 et 315) ; semaine type : 3 400
+et 3 480. La période s'allonge chaque jour (`PERIOD_START` fixe, fin =
+aujourd'hui) : chaque nouveau samedi ajoute ses passages et la couverture
+monte d'elle-même (estimation pour 8 samedis : environ 1 450 à 8 h et 1 830 à
+17 h).
 
 **Date précise** (`date_cells`, calcul à la demande, rien n'est écrit) : les
-lignes de `troncons_jour` d'une date sont regroupées en créneaux de 2 h
-(`DATE_SLOT_HOURS`, heure = début du créneau : 0, 2, … 22) et sur la journée,
-avec `summarize_cells` et un seuil de `DATE_MIN_PASSAGES` = 8 passages ce
-jour-là (au lieu de 20 passages sur 3 jours pour un jour type) ; mêmes paliers
-et mêmes lignes exploitables que les jours types. Mesuré sur la copie de
-production : 0,3 à 0,5 s et 3 à 4 Mo par date. Couverture (portions de bus
-mesurées sur 4 932) : mercredi 07/10/2026, 1 244 à 8-10 h et 1 243 à
-16-18 h ; samedi 10/10, 365 et 874 ; dimanche 04/10, 92 et 310. Les jours de
-peu de service passent donc en créneaux de 4 h (`DATE_SLOT_HOURS_LOW`, même
-seuil de 8 passages ; option `slot_hours` de `date_cells`) : jours fériés
-nationaux (`indicateurs.public_holiday`, dates fixes et fêtes mobiles calculées
-depuis Pâques, `easter`), samedis, dimanches, et jours de semaine sous 70 % des
-passages d'un jour de semaine médian. Dimanche 04/10 en 4 h : 692 portions
-mesurées à 8-12 h, 1 140 à 16-20 h ; samedi 10/10 : 1 437 et 1 944. Aucun jour
-férié dans la période du 01/09 au 10/10/2026 (le premier est le 1er novembre) :
-la règle des jours fériés n'est vérifiée que par les tests.
+lignes de `troncons_jour` d'une date, heure par heure et sur la journée, avec
+`summarize_cells` et sans seuil (`DATE_MIN_PASSAGES` = 1 passage, 1 jour) ;
+mêmes paliers et mêmes lignes exploitables que les jours types. Une portion
+peut donc être colorée sur 1 ou 2 passages : la page le dit et chaque bulle
+donne le nombre de passages analysés. Mesuré sur la copie de production :
+0,3 à 0,5 s et 3 à 4 Mo par date ; dimanche 04/10/2026 à 8 h, 2 183 portions
+mesurées sur 4 932. La raison d'un jour de peu de service
+(`date_coverage_reason`) complète l'avertissement : jour férié national
+(`indicateurs.public_holiday`, dates fixes et fêtes mobiles calculées depuis
+Pâques, `easter`), samedi, dimanche, ou jour de semaine sous 70 % des passages
+d'un jour de semaine médian hors fériés (`CONTENTION_LOW_SERVICE`). Aucun jour
+férié dans la période du 01/09 au 11/10/2026 : cette règle n'est vérifiée que
+par les tests.
 
 **Tram de bout en bout** (`build_tram`, table `troncons_tram`, même nuit,
 même période et mêmes jours exclus). Pour chaque course de tram : temps
@@ -1463,7 +1458,7 @@ requêtes groupées par course : `TRAM_FIRST_SQL`, `TRAM_LAST_SQL`). Sont
 écartées les courses sans temps réel (section 7.4), celles observées sur
 moins de 80 % de leurs arrêts (`TRAM_MIN_COVERAGE`) et les valeurs au-delà
 de ±30 min (`TRAM_OUTLIER_SECONDS`). Médianes par jour type, ligne, terminus
-et heure de départ (`summarize_tram`), au moins 20 courses sur 3 jours ;
+et heure de départ (`summarize_tram`), au moins 15 courses sur 3 jours ;
 seuls les terminus principaux de chaque sens sont gardés (au moins 15 % des
 courses du sens et 60 % de la plus longue durée prévue : `TRAM_MAIN_SHARE`,
 `TRAM_MAIN_DURATION`), ce qui écarte services partiels et trajets de dépôt.
@@ -1668,9 +1663,7 @@ lecteur qui n'est pas analyste :
      chaîne de 25 codes (`cell_code` : 24 heures puis la journée) et les valeurs
      mesurées (temps perdu, part du temps prévu, passages, part des passages
      qui perdent plus de 2 min) ;
-   - **curseur horaire** (0 h à 23 h en semaine type, créneaux de 4 h le
-     samedi et le dimanche types, section 10.5 ; graduations et mention sous le
-     curseur, `slot_note`, suivent la largeur des créneaux) et bouton « Toute la journée » dans un
+   - **curseur horaire** (0 h à 23 h) et bouton « Toute la journée » dans un
      bandeau sous la carte, avec l'heure en grand et la légende en barre ;
      ouverture sur l'heure où le plus de tronçons perdent beaucoup de temps dans
      le périmètre (`worst_slot`) ;
@@ -1685,28 +1678,24 @@ lecteur qui n'est pas analyste :
      scolaire (`troncons_jours_faits`, `contention_dates`), hors jours exclus ;
      un jour exclu ou non calculé est refusé avec sa raison. Les cases viennent
      de `troncons.date_cells` (`load_troncons_date`, cache 1 h, 20 dates au
-     plus) ; le curseur passe en créneaux de 2 h (« 8-10 h », données `step` =
-     2), ou de 4 h les jours de peu de service (`date_slot_hours` : jour férié,
-     week-end ou service faible ; « 8-12 h », `step` = 4, 6 crans, graduations
-     0 h à 20 h, et sous le curseur « Créneaux de 4 h : peu de bus circulent ce
-     jour-là ») ; toutes les portions de bus sont dessinées, en gris « aucun passage »
-     faute de passage ce jour-là. Le verdict dit « Entre 8 h et 10 h, … » et sa
-     seconde phrase « Ce jour-là, 1233 portions sur 4932 ont assez de passages
-     pour être mesurées. Les autres sont grises. » ; un jour de peu de service,
-     « … pour être mesurées en créneaux de 4 h, car peu de bus circulent ce
-     jour-là. Les autres sont grises. » suivie de la raison
-     (`date_coverage_reason`) : « C'est un jour férié (armistice). », « C'est un
-     dimanche. » ou « Le service était plus faible qu'un jour de semaine
-     habituel (N % des passages). » (moins de 70 % des passages d'un jour de
-     semaine médian hors fériés, `CONTENTION_LOW_SERVICE`). En créneaux de 4 h,
-     la lecture part du créneau qui contient 5 h (4-8 h). Le panneau parle au
-     passé (« temps médian que les bus ont perdu ici ce jour-là », « Médiane de
-     N passages ce jour-là ») ; une portion grise dit « Moins de 8 passages sur
-     ce créneau ce jour-là ». Le tram de bout en bout n'existe que pour les
+     plus), heure par heure et sans seuil de passages ; toutes les portions de
+     bus sont dessinées, en gris « aucun passage » faute de passage ce jour-là.
+     Sous le verdict : « 2183 portions mesurées sur 4932. Valeurs d'une seule
+     journée : certaines portions n'ont que quelques passages, à prendre avec
+     précaution. », suivi de la raison d'un jour de peu de service (« C'est un
+     dimanche : peu de bus circulent. », « C'est un jour férié (armistice) :
+     peu de bus circulent. », « Le service était plus faible qu'un jour de
+     semaine habituel (N % des passages). »). Le panneau parle au passé
+     (« temps médian que les bus ont perdu ici ce jour-là », « Médiane de N
+     passages ce jour-là »). Le tram de bout en bout n'existe que pour les
      jours types : une ligne de tram choisie affiche « Le temps perdu de bout en
      bout du tram n'est calculé que pour les jours types ». Données envoyées :
      2,4 Mo pour une date contre 3,1 Mo pour un jour type, construites en
      0,5 s ;
+   - **bulle au survol** d'une portion : nom, lignes mesurées, temps perdu à
+     l'heure choisie et nombre de passages analysés (« 25 passages analysés sur
+     la période scolaire, entre 17 h et 18 h », « 2 passages analysés ce
+     jour-là, … ») ; sur un tracé de tram, le nombre de trajets analysés ;
    - **verdict** en haut à gauche, recalculé à chaque cran : « À 17 h,
      17 portions entre deux arrêts ralentissent nettement les bus à Mérignac, et
      20 un peu. », puis le nombre de portions mesurées ; le nom du périmètre est
@@ -3020,9 +3009,13 @@ cycle (dernière valeur gagne). La rétention long terme passe par les agrégats
 16. **Vue rapide non éprouvée** : la vue rapide, le guide et le lexique
     (section 11.3) n'ont pas encore été testés auprès de lecteurs non
     analystes ; seuls ces tests diront où un élu ou un agent bloque encore.
-17. **Carte d'une date le week-end** : même en créneaux de 4 h, un dimanche ne
-    colore que 14 à 23 % des portions de bus (section 10.5) ; la phrase de
-    couverture le dit.
+17. **Carte d'une date** : sans seuil, une portion peut être colorée sur un
+    ou deux passages ; la page le signale et chaque bulle donne le nombre de
+    passages (section 10.5).
+18. **Période scolaire sans fin ni vacances** : la carte des jours types
+    couvre `PERIOD_START` jusqu'à la veille, sans retirer les vacances
+    scolaires ; à partir des vacances de la Toussaint (samedi 17/10/2026),
+    leurs jours entreront dans les jours types.
 
 ---
 
@@ -3102,7 +3095,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 587, isolés (suite `pytest` complète : 587 passed), flux synthétiques
+- Tests : 583, isolés (suite `pytest` complète : 583 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

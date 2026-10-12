@@ -6,7 +6,6 @@ const ORDER = { "-": 0, d: 1, t: 1, p: 1, v: 2, o: 3, c: 4 };
 const FERRY = 4;
 const WHOLE_DAY = 24;
 const PLAY_MS = 1000;
-let STEP = 1;
 let DATE = null;
 
 function loadScript(url, globalName) {
@@ -42,7 +41,7 @@ function seconds(s) {
 }
 
 function slotEnd(slot) {
-  return slot + STEP >= 24 ? "minuit" : `${slot + STEP} h`;
+  return slot === 23 ? "minuit" : `${slot + 1} h`;
 }
 
 function when(slot) {
@@ -51,7 +50,7 @@ function when(slot) {
 
 function clockText(slot) {
   if (slot === WHOLE_DAY) return "Toute la journée";
-  return STEP === 1 ? `${slot} h` : `${slot}-${slot + STEP} h`;
+  return `${slot} h`;
 }
 
 function plural(n, one, many) {
@@ -77,22 +76,10 @@ function tramVerdict(line, slot) {
   return { text, sub: TRAM_NOTE };
 }
 
-const TICKS = { 1: [0, 6, 12, 18, 23], 2: [0, 6, 12, 18, 22], 4: [0, 4, 8, 12, 16, 20] };
+const DATE_NOTE = "Valeurs d'une seule journée : certaines portions n'ont que quelques passages, à prendre avec précaution.";
 
-function coverageText(measured, total) {
-  const wide = STEP === 4 ? " en créneaux de 4 h, car peu de bus circulent ce jour-là" : "";
-  const reason = DATE && DATE.reason ? ` ${DATE.reason}` : "";
-  return `Ce jour-là, ${measured} ${plural(measured, "portion", "portions")} sur ${total} `
-    + `${plural(measured, "a", "ont")} assez de passages pour être mesurées${wide}. Les autres sont grises.${reason}`;
-}
-
-function ticksHtml() {
-  const values = TICKS[STEP] || TICKS[1];
-  const max = 24 - STEP;
-  return values.map((v, i) => {
-    const shift = i === 0 ? "0" : (i === values.length - 1 ? "-100%" : "-50%");
-    return `<span style="left:${(100 * v) / max}%;transform:translateX(${shift})">${v} h</span>`;
-  }).join("");
+function dateNote() {
+  return DATE && DATE.reason ? `${DATE_NOTE} ${DATE.reason}` : DATE_NOTE;
 }
 
 function verdict(data, slot) {
@@ -114,7 +101,7 @@ function verdict(data, slot) {
   const red = count("c");
   const ochre = count("o");
   const measured = red + ochre + count("v");
-  const time = slot === WHOLE_DAY ? "Sur toute la journée" : (STEP === 1 ? `À ${slot} h` : `Entre ${slot} h et ${slotEnd(slot)}`);
+  const time = slot === WHOLE_DAY ? "Sur toute la journée" : `À ${slot} h`;
   const place = data.place;
   let text;
   if (measured === 0) {
@@ -128,7 +115,7 @@ function verdict(data, slot) {
     text = `${time}, les bus ne perdent pas de temps ${place}.`;
   }
   const sub = DATE
-    ? coverageText(measured, scope.length)
+    ? `${measured} ${plural(measured, "portion mesurée", "portions mesurées")} sur ${scope.length}. ${dateNote()}`
     : `${measured} ${plural(measured, "portion mesurée", "portions mesurées")} sur ${scope.length}, les autres en gris.`;
   return { text, sub };
 }
@@ -141,7 +128,6 @@ const GREY_REASONS = {
 };
 
 function greyReason(code) {
-  if (DATE && code === "p") return "Moins de 8 passages sur ce créneau ce jour-là : pas assez pour se prononcer.";
   return GREY_REASONS[code] || GREY_REASONS["-"];
 }
 
@@ -170,9 +156,23 @@ function shortStatus(seg, slot) {
   return greyReason(seg.t[slot]);
 }
 
+function analysedText(n, slot, one, many) {
+  if (!n) return "Aucun passage analysé à ce moment.";
+  return `${n} ${plural(n, one, many)} ${DATE ? "ce jour-là" : "sur la période scolaire"}, ${when(slot)}.`;
+}
+
+function passagesText(seg, slot) {
+  const v = seg.v[slot];
+  return analysedText(v ? v[2] : 0, slot, "passage analysé", "passages analysés");
+}
+
+function tramTrips(line, slot) {
+  return line.s.reduce((n, d) => n + (d.v[slot] ? d.v[slot][2] : 0), 0);
+}
+
 function worstHour(seg) {
   let best = null;
-  for (let h = 0; h < WHOLE_DAY; h += STEP) {
+  for (let h = 0; h < WHOLE_DAY; h += 1) {
     if (!measuredAt(seg, h)) continue;
     const s = seg.v[h][0];
     if (s > 0 && (best === null || s > best.s)) best = { h, s };
@@ -182,7 +182,7 @@ function worstHour(seg) {
 
 function hourStrip(seg, slot, colors) {
   const cells = [];
-  for (let h = 0; h < WHOLE_DAY; h += STEP) {
+  for (let h = 0; h < WHOLE_DAY; h += 1) {
     const code = seg.t[h];
     const ok = measuredAt(seg, h);
     const color = ok ? colors[code] : "#E4E4DE";
@@ -190,7 +190,7 @@ function hourStrip(seg, slot, colors) {
     if (ok) label = seg.v[h][0] > 0 ? `${seconds(seg.v[h][0])} perdues` : "pas de temps perdu";
     cells.push(`<span class="${h === slot ? "now" : ""}" style="background:${color}" title="${clockText(h)} : ${label}"></span>`);
   }
-  return `<div class="uvt-strip" style="grid-template-columns:repeat(${24 / STEP},1fr)" role="img" aria-label="Temps perdu heure par heure">${cells.join("")}</div>`
+  return `<div class="uvt-strip" role="img" aria-label="Temps perdu heure par heure">${cells.join("")}</div>`
     + '<div class="uvt-strip-axis"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>';
 }
 
@@ -214,8 +214,7 @@ function panelHtml(seg, slot, colors) {
   }
   const worst = worstHour(seg);
   let worstText = "";
-  if (worst && DATE) worstText = `<p>C'est entre <b>${worst.h} h et ${slotEnd(worst.h)}</b> que les bus y ont perdu le plus de temps ce jour-là (${seconds(worst.s)}).</p>`;
-  else if (worst && STEP > 1) worstText = `<p>C'est entre <b>${worst.h} h et ${slotEnd(worst.h)}</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
+  if (worst && DATE) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y ont perdu le plus de temps ce jour-là (${seconds(worst.s)}).</p>`;
   else if (worst) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
   return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>${esc(seg.n)}</h3>`
     + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
@@ -337,17 +336,11 @@ function fitHeight(state) {
 
 function render(state) {
   const { data, slot } = state;
-  STEP = data.step || 1;
   DATE = data.date || null;
   const v = verdict(data, slot);
   state.head.innerHTML = `${data.label ? `<div class="uvt-label">${esc(data.label)}</div>` : ""}`
     + `<div class="uvt-verdict">${esc(v.text)}</div><div class="uvt-sub">${esc(v.sub)}</div>`;
   state.clock.textContent = clockText(slot);
-  state.range.max = String(24 - STEP);
-  state.ticks.innerHTML = ticksHtml();
-  state.slotNote.textContent = data.slot_note || "";
-  state.slotNote.style.display = data.slot_note ? "block" : "none";
-  state.range.step = String(STEP);
   state.range.value = String(slot === WHOLE_DAY ? state.lastHour : slot);
   state.play.setAttribute("aria-pressed", state.timer ? "true" : "false");
   state.play.textContent = state.timer ? "Pause" : "▶ Lecture";
@@ -371,8 +364,8 @@ function stopPlay(state) {
 
 function firstServedSlot(data) {
   const scope = data.segments.filter((s) => s.c);
-  for (let h = 0; h < WHOLE_DAY; h += STEP) {
-    if ((STEP === 4 ? h + STEP > 5 : h >= 5) && scope.some((s) => measuredAt(s, h))) return h;
+  for (let h = 0; h < WHOLE_DAY; h += 1) {
+    if (h >= 5 && scope.some((s) => measuredAt(s, h))) return h;
   }
   return 6;
 }
@@ -382,7 +375,7 @@ function buildControls(state) {
   bottom.className = "uvt-bottom";
   bottom.innerHTML = '<div class="uvt-controls"><div class="uvt-clock" aria-live="polite"></div>'
     + '<div class="uvt-range-box"><input class="uvt-range" type="range" min="0" max="23" step="1" aria-label="Heure de la journée">'
-    + '<div class="uvt-ticks"></div><div class="uvt-slot-note"></div></div>'
+    + '<div class="uvt-ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>23 h</span></div></div>'
     + '<button class="uvt-play" type="button" aria-pressed="false" aria-label="Lecture animée heure par heure">▶ Lecture</button>'
     + '<button class="uvt-allday" type="button" aria-pressed="false">Toute la journée</button></div>'
     + '<div class="uvt-legend"></div>';
@@ -391,8 +384,6 @@ function buildControls(state) {
   state.range = bottom.querySelector(".uvt-range");
   state.allDay = bottom.querySelector(".uvt-allday");
   state.play = bottom.querySelector(".uvt-play");
-  state.ticks = bottom.querySelector(".uvt-ticks");
-  state.slotNote = bottom.querySelector(".uvt-slot-note");
   state.legend = bottom.querySelector(".uvt-legend");
   state.range.addEventListener("input", () => {
     stopPlay(state);
@@ -411,14 +402,14 @@ function buildControls(state) {
       render(state);
       return;
     }
-    const last = 24 - STEP;
+    const last = 23;
     if (state.slot === WHOLE_DAY || state.slot >= last) state.slot = firstServedSlot(state.data);
     state.lastHour = state.slot;
     state.timer = window.setInterval(() => {
-      if (state.slot + STEP > last) {
+      if (state.slot + 1 > last) {
         stopPlay(state);
       } else {
-        state.slot += STEP;
+        state.slot += 1;
         state.lastHour = state.slot;
       }
       render(state);
@@ -457,7 +448,6 @@ export default async function (component) {
   }
   const key = `${data.view_key}|${data.mode}|${data.segments.length}|${data.slot}`;
   state.data = data;
-  STEP = data.step || 1;
   if (state.dataKey !== key) {
     stopPlay(state);
     state.dataKey = key;
@@ -500,8 +490,10 @@ export default async function (component) {
         const tramLine = info.layer.id === "tram" && state.data.tram_lines[info.object.r];
         state.tip.innerHTML = info.layer.id === "tram"
           ? `<b>Tram${tramLine ? ` ${esc(tramLine.n)}` : ""}</b><div>Mesure par portion entre deux arrêts indisponible pour le tram.</div>`
-            + (tramLine ? '<div class="m">Touchez ou cliquez pour le temps perdu de bout en bout</div>' : "")
-          : `<b>${esc(info.object.n)}</b><div class="l">${lineText(info.object)}</div><div>${shortStatus(info.object, state.slot)}</div><div class="m">Touchez ou cliquez pour le détail</div>`;
+            + (tramLine ? `<div class="n">${analysedText(tramTrips(tramLine, state.slot), state.slot, "trajet analysé", "trajets analysés")}</div>`
+              + '<div class="m">Touchez ou cliquez pour le temps perdu de bout en bout</div>' : "")
+          : `<b>${esc(info.object.n)}</b><div class="l">${lineText(info.object)}</div><div>${shortStatus(info.object, state.slot)}</div>`
+            + `<div class="n">${passagesText(info.object, state.slot)}</div><div class="m">Touchez ou cliquez pour le détail</div>`;
         state.tip.style.display = "block";
         const left = Math.min(info.x + 16, state.root.clientWidth - state.tip.offsetWidth - 8);
         const top = Math.min(info.y + 16, state.root.clientHeight - state.tip.offsetHeight - 150);

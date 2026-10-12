@@ -62,9 +62,7 @@ _CSS = f"""
 .uvt-range {{ width: 100%; accent-color: {BLACK_FOREST}; cursor: pointer; margin: 0; }}
 .uvt-range.off {{ opacity: .4; }}
 .uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-play:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
-.uvt-ticks {{ position: relative; height: 16px; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
-.uvt-ticks span {{ position: absolute; top: 0; white-space: nowrap; }}
-.uvt-slot-note {{ display: none; margin-top: 2px; color: {BLACK_FOREST}; font-size: 12.5px; font-weight: 600; }}
+.uvt-ticks {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
 .uvt-allday {{ flex: none; border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; background: #FFFFFF; color: {BLACK_FOREST};
               padding: 6px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }}
 .uvt-allday[aria-pressed="true"] {{ background: {BLACK_FOREST}; color: #FEFAE0; }}
@@ -87,6 +85,7 @@ _CSS = f"""
 .uvt-tip b {{ display: block; font-size: 14px; }}
 .uvt-tip .l {{ color: #606c38; font-size: 12px; margin-bottom: 4px; }}
 .uvt-tip .m {{ color: #606c38; font-size: 12px; margin-top: 4px; }}
+.uvt-tip .n {{ font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }}
 .uvt-panel {{ position: absolute; z-index: 4; display: none; top: 12px; right: 56px; width: 330px;
              max-height: calc(100% - 175px); overflow: auto; background: #FFFFFF; border-radius: 12px; padding: 14px 16px 12px;
              border: 1px solid rgba(40, 54, 24, .2); box-shadow: 0 10px 28px rgba(40, 54, 24, .2); font-size: 13.5px; line-height: 1.45; }}
@@ -214,14 +213,13 @@ def tram_lines_payload(rows: pd.DataFrame, line_names: dict) -> dict:
 
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
                      tram_paths: list, scope: dict | None = None, route_ids: dict | None = None,
-                     measurable: set | None = None, tram_lines: dict | None = None, step: int = 1,
-                     date_info: dict | None = None, slot_note: str = "") -> dict:
+                     measurable: set | None = None, tram_lines: dict | None = None,
+                     date_info: dict | None = None) -> dict:
     """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
     appartenance au périmètre), tracés du tram ({"r": route_id, "p": tracé}) et son temps perdu de
     bout en bout (`tram_lines`, voir `tram_lines_payload`), cadrage, tranche d'ouverture et textes.
-    `step` : largeur des créneaux en heures (1 en semaine type, 4 le samedi et le dimanche types, 2 ou 4
-    pour une date précise), les valeurs étant rangées au début du créneau ; `slot_note` : mention sous le
-    curseur ; `date_info` : day, label (« mercredi 07/10/2026 »), reason (couverture faible).
+    `date_info` : day, label (« mercredi 07/10/2026 »), reason (week-end, jour férié ou service faible),
+    pour une date précise.
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
     to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
@@ -297,7 +295,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
-            "unmeasured": bool(scope.get("unmeasured")), "step": step, "date": date_info, "slot_note": slot_note,
+            "unmeasured": bool(scope.get("unmeasured")), "date": date_info,
             "mode": date_info["day"] if date_info else "type",
             "colors": COLORS, "height": MAP_HEIGHT}
 

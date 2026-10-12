@@ -124,28 +124,8 @@ class TestCarte:
         assert cell == ("peu", None)
 
 
-class TestCreneauxDesJoursTypes:
-    def test_quatre_heures_le_week_end(self):
-        hours = pd.Series([7, 8, 11, 17, 23, 17])
-        types = pd.Series(["semaine", "samedi", "samedi", "dimanche", "dimanche", "semaine"])
-        assert list(tr.slot_start(hours, types)) == [7, 8, 8, 16, 20, 17]
-
-    def test_samedi_type_en_creneaux_de_quatre_heures(self, conn):
-        _seed(conn, days=("2026-10-03", "2026-10-10", "2026-10-17"))
-        tr.run(conn, "2026-10-01", "2026-10-18", pause=0)
-        hours = {h for (h,) in conn.execute("SELECT DISTINCT heure FROM troncons_carte WHERE jour_type = 'samedi'")}
-        assert hours == {8, tr.WHOLE_DAY}
-
-    def test_mention_sous_le_curseur(self):
-        import app as app_mod
-        assert app_mod.contention_slot_note(1, None, "semaine") == ""
-        assert app_mod.contention_slot_note(4, None, "dimanche") == "Créneaux de 4 h : peu de bus circulent le dimanche"
-        assert app_mod.contention_slot_note(4, "2026-10-04", "date") == "Créneaux de 4 h : peu de bus circulent ce jour-là"
-        assert app_mod.contention_slot_note(2, "2026-10-07", "date") == ""
-
-
 class TestDate:
-    def test_creneaux_de_deux_heures_et_seuil(self, conn):
+    def test_heure_par_heure(self, conn):
         _seed(conn)
         tr.run(conn, "2026-10-01", "2026-10-08", pause=0)
         cells = tr.date_cells(conn, "2026-10-07", {"R"})
@@ -154,11 +134,12 @@ class TestDate:
             "2026-10-07", "mesure", NEGATIVE, 8, 1)
         assert set(cells["heure"]) == {8, tr.WHOLE_DAY}
 
-    def test_moins_de_huit_passages(self, conn):
-        _seed(conn, days=("2026-10-07",), trips_per_day=7)
+    def test_sans_seuil_de_passages(self, conn):
+        _seed(conn, days=("2026-10-07",), trips_per_day=2)
         tr.run(conn, "2026-10-01", "2026-10-08", pause=0)
         cells = tr.date_cells(conn, "2026-10-07", {"R"})
-        assert set(cells[cells.from_stop_id == "s2"]["statut"]) == {"peu"}
+        cell = cells[(cells.heure == 8) & (cells.from_stop_id == "s2")].iloc[0]
+        assert (cell.statut, cell.passages) == ("mesure", 2)
 
     def test_textes_et_dates(self):
         import app as app_mod
@@ -166,19 +147,11 @@ class TestDate:
                     "2026-10-04": 80000}
         assert app_mod.contention_dates(passages, "2026-10-05", "2026-10-08", ["2026-10-06"]) == [
             "2026-10-05", "2026-10-07"]
-        assert app_mod.date_coverage_reason("2026-10-04", passages, []) == "C'est un dimanche."
+        assert app_mod.date_coverage_reason("2026-10-04", passages, []) == "C'est un dimanche : peu de bus circulent."
         assert app_mod.date_coverage_reason("2026-10-07", passages, []) is None
         assert "52 % des passages" in app_mod.date_coverage_reason("2026-10-08", passages, [])
-        assert app_mod.date_coverage_reason("2026-11-11", passages, []) == "C'est un jour férié (armistice)."
-        assert app_mod.date_slot_hours(None) == 2 and app_mod.date_slot_hours("C'est un dimanche.") == 4
+        assert app_mod.date_coverage_reason("2026-11-11", passages, []) == "C'est un jour férié (armistice) : peu de bus circulent."
         assert app_mod.date_label("2026-10-07") == "mercredi 07/10/2026"
-
-    def test_creneaux_de_quatre_heures(self, conn):
-        _seed(conn)
-        tr.run(conn, "2026-10-01", "2026-10-08", pause=0)
-        cells = tr.date_cells(conn, "2026-10-07", {"R"}, slot_hours=4)
-        assert set(cells["heure"]) == {8, tr.WHOLE_DAY}
-        assert cells[(cells.heure == 8) & (cells.from_stop_id == "s2")].iloc[0].passages == 8
 
     def test_jours_feries(self):
         import indicateurs as ind
@@ -196,11 +169,11 @@ class TestDate:
                               "palier": [NEGATIVE], "mediane_s": [60.0], "mediane_pct": [70.0], "passages": [9],
                               "part_2min": [0.0]})
         info = {"day": "2026-10-07", "label": "mercredi 07/10/2026", "reason": None}
-        payload = ct.troncons_payload(geo, cells, {}, {}, {}, [], {}, {}, None, {}, step=2, date_info=info)
+        payload = ct.troncons_payload(geo, cells, {}, {}, {}, [], {}, {}, None, {}, date_info=info)
         assert [s["t"][8] for s in payload["segments"]] == ["c", "-"]
-        assert (payload["step"], payload["mode"], payload["date"]["label"]) == (2, "2026-10-07", "mercredi 07/10/2026")
+        assert (payload["mode"], payload["date"]["label"]) == ("2026-10-07", "mercredi 07/10/2026")
         typed = ct.troncons_payload(geo, cells, {}, {}, {}, [], {}, {}, None, {})
-        assert len(typed["segments"]) == 1 and typed["step"] == 1 and typed["mode"] == "type"
+        assert len(typed["segments"]) == 1 and typed["mode"] == "type"
 
 
 class TestGeometrie:

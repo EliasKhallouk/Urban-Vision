@@ -41,12 +41,9 @@ LOOKBACK_SECONDS = 3 * 3600
 OUTLIER_SECONDS = 900
 MAX_SCHEDULED_SECONDS = 1800
 BIG_LOSS_SECONDS = 120
-MIN_PASSAGES = 20
+MIN_PASSAGES = 15
 MIN_DAYS = 3
-DATE_MIN_PASSAGES = 8
-DATE_SLOT_HOURS = 2
-DATE_SLOT_HOURS_LOW = 4
-TYPE_SLOT_HOURS = {"semaine": 1, "samedi": 4, "dimanche": 4}
+DATE_MIN_PASSAGES = 1
 MAX_ZERO_SHARE = ind.DOUBTFUL_ZERO_SHARE * 100
 MAX_PLATEAU_SHARE = 15.0
 WHOLE_DAY = -1
@@ -193,13 +190,6 @@ def _cell_stats(vals: pd.DataFrame, keys: list) -> pd.DataFrame:
                          "jours": g["date_service"].nunique()})
 
 
-def slot_start(hours: pd.Series, day_types: pd.Series) -> pd.Series:
-    """Début du créneau de chaque heure selon le jour type : 1 h en semaine, 4 h le samedi et le dimanche
-    (TYPE_SLOT_HOURS), faute de passages assez nombreux à l'heure sur les quelques week-ends de la période."""
-    width = day_types.map(TYPE_SLOT_HOURS).fillna(1).astype(int)
-    return hours // width * width
-
-
 def summarize_cells(rows: pd.DataFrame, good_routes: set, min_passages: int = MIN_PASSAGES,
                     min_days: int = MIN_DAYS) -> pd.DataFrame:
     """Statut et médianes de chaque case (jour type, heure, tronçon), plus la journée entière (heure = -1).
@@ -251,18 +241,16 @@ def summarize_cells(rows: pd.DataFrame, good_routes: set, min_passages: int = MI
     return out[cols]
 
 
-def date_cells(conn, day: str, good_routes: set, slot_hours: int = DATE_SLOT_HOURS) -> pd.DataFrame:
-    """Cases d'une date précise, calculées à la demande depuis `troncons_jour` (rien n'est écrit).
+def date_cells(conn, day: str, good_routes: set) -> pd.DataFrame:
+    """Cases d'une date précise, heure par heure, calculées à la demande depuis `troncons_jour` (rien n'est écrit).
 
-    Créneaux de `slot_hours` heures (DATE_SLOT_HOURS, ou DATE_SLOT_HOURS_LOW les jours de peu de service ;
-    heure = début du créneau : 0, 2, … 22 ou 0, 4, … 20) et journée entière
-    (heure = -1) ; une case est mesurée à partir de DATE_MIN_PASSAGES passages ce jour-là.
+    Pas de seuil de passages (DATE_MIN_PASSAGES = 1) : une portion est colorée dès qu'un passage y est
+    mesuré ce jour-là ; la page avertit que les valeurs peuvent reposer sur peu de passages.
     """
     rows = pd.read_sql_query(
         "SELECT date_service, from_stop_id, to_stop_id, route_id, heure, n, n_terminus, gains, pcts "
         "FROM troncons_jour WHERE date_service = ?", conn, params=(day,))
-    rows = rows.assign(jour_type=day, heure=rows["heure"] // slot_hours * slot_hours)
-    return summarize_cells(rows, good_routes, DATE_MIN_PASSAGES, 1)
+    return summarize_cells(rows.assign(jour_type=day), good_routes, DATE_MIN_PASSAGES, 1)
 
 
 def build_map(conn, since: str, end: str) -> dict:
@@ -284,7 +272,6 @@ def build_map(conn, since: str, end: str) -> dict:
         if rows.empty:
             continue
         rows["jour_type"] = pd.to_datetime(rows["date_service"]).dt.weekday.map(DAY_TYPES)
-        rows["heure"] = slot_start(rows["heure"], rows["jour_type"])
         cells = summarize_cells(rows, good)
         all_cells += [tuple(None if (isinstance(v, float) and math.isnan(v)) else v for v in r)
                       for r in cells.itertuples(index=False, name=None)]
@@ -353,7 +340,6 @@ def summarize_tram(trips: pd.DataFrame) -> pd.DataFrame:
     if trips.empty:
         return pd.DataFrame(columns=columns)
     trips = trips.assign(jour_type=pd.to_datetime(trips["ds"]).dt.weekday.map(DAY_TYPES))
-    trips = trips.assign(heure=slot_start(trips["heure"], trips["jour_type"]))
     keys = ["jour_type", "route_id", "terminus"]
     frames = []
     for hourly in (True, False):
