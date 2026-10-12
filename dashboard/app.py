@@ -540,6 +540,13 @@ def inject_style() -> None:
         .insight.brief li {{ margin-bottom: .3rem; line-height: var(--lh-body); }}
         .hints {{ border: 1px dashed var(--line); border-radius: 8px; padding: .7rem 1rem; color: var(--ink); margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
+        @keyframes fiche-in {{ from {{ opacity: 0; transform: translateY(18px); }} to {{ opacity: 1; transform: none; }} }}
+        @media (prefers-reduced-motion: no-preference) {{
+            [class*="st-key-fiche_"] {{ animation: fiche-in 260ms cubic-bezier(.2, .7, .2, 1) both; }}
+        }}
+        [data-testid="stHeaderActionElements"] {{ display: none; }}
+        [data-testid="stMain"] button:focus-visible, [data-testid="stSidebar"] button:focus-visible,
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:focus-visible) {{ outline: 2px solid var(--action) !important; outline-offset: 2px; }}
         .crumb-label {{ color: var(--ink-2); font-size: var(--fs-small); white-space: nowrap; }}
         .crumb-sep {{ color: var(--ink-2); font-size: var(--fs-body); }}
         .crumb-here {{ color: var(--ink); font-size: var(--fs-small); font-weight: 700; }}
@@ -568,13 +575,17 @@ def inject_style() -> None:
         .tile-detail {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin-top: .15rem; }}
         [class*="st-key-tile_btn"] button, [class*="_btn_"] button[kind="tertiary"] {{ padding: 0; min-height: 0; }}
         [class*="st-key-tile_btn"] button p, [class*="st-key-atraiter_btn"] button p, [class*="st-key-plusrates_btn"] button p {{ color: var(--action); font-weight: 600; font-size: var(--fs-small); }}
-        .sr {{ border-bottom: 1px solid var(--line); padding: .55rem 0; display: grid; grid-template-columns: 2.4rem minmax(9rem, 1.2fr) minmax(4rem, 1fr) auto; align-items: center; gap: .3rem .8rem; }}
-        .sr-score {{ display: inline-flex; justify-content: center; border-radius: 6px; padding: .12rem 0; font-size: var(--fs-small); font-weight: 700; font-variant-numeric: tabular-nums; }}
-        .sr-name {{ color: var(--ink); font-size: var(--fs-body); font-weight: 700; line-height: var(--lh-small); }}
+        [class*="st-key-atraiter_"]:not([class*="_btn_"]), [class*="st-key-plusrates_"]:not([class*="_btn_"]) {{ border-bottom: 1px solid var(--line); padding: .45rem 0; }}
+        [class*="st-key-atraiter_btn"] button p, [class*="st-key-plusrates_btn"] button p {{ color: var(--ink) !important; font-size: var(--fs-body) !important; font-weight: 700 !important; text-align: left; }}
+        [class*="st-key-atraiter_btn"] button:hover p, [class*="st-key-plusrates_btn"] button:hover p {{ color: var(--action) !important; text-decoration: underline; }}
+        .sr-right {{ display: flex; align-items: center; gap: .8rem; }}
+        [class*="st-key-atraiter_"] [data-testid="stColumn"] [data-testid="stVerticalBlock"],
+        [class*="st-key-plusrates_"] [data-testid="stColumn"] [data-testid="stVerticalBlock"] {{ gap: 0; }}
+        .sr-score {{ display: inline-flex; justify-content: center; min-width: 2.4rem; border-radius: 6px; padding: .12rem 0; font-size: var(--fs-small); font-weight: 700; font-variant-numeric: tabular-nums; }}
         .sr-where {{ display: block; color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; }}
-        .sr-bar {{ display: block; height: .5rem; border-radius: 3px; background: var(--ink-2); opacity: .55; }}
+        .sr-bar {{ display: block; flex: none; height: .5rem; border-radius: 3px; background: var(--ink-2); opacity: .55; }}
         .sr-fig {{ color: var(--ink-2); font-size: var(--fs-small); white-space: nowrap; font-variant-numeric: tabular-nums; }}
-        @media (max-width: 640px) {{ .sr {{ grid-template-columns: 2.4rem 1fr; }} .sr-bar {{ grid-column: 2; }} .sr-fig {{ grid-column: 2; white-space: normal; }} }}
+        @media (max-width: 640px) {{ .sr-right {{ flex-wrap: wrap; }} .sr-fig {{ white-space: normal; }} }}
         .empty-ok {{ color: var(--ink); font-size: var(--fs-body); padding: .6rem .9rem; background: var(--surface); border-radius: 8px; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
@@ -2165,6 +2176,11 @@ ZONE_EXPLANATIONS = {
 SCROLL_TARGETS = {"fiche-arret": ".fiche-arret", "fiche-ligne": ".fiche-ligne", "carte": ".carte-anchor"}
 
 
+def panel_key(identifier: str) -> str:
+    """Clé de conteneur d'une fiche, propre à l'arrêt ou à la ligne : changer de fiche rejoue son apparition."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(identifier))
+
+
 def request_scroll(target: str) -> None:
     """Demande de faire défiler la page jusqu'à `target` au prochain affichage."""
     st.session_state["_scroll_to"] = target
@@ -2179,7 +2195,8 @@ def scroll_if_requested(target: str) -> None:
     nonce = st.session_state.get("_scroll_nonce", 0)
     st.html(
         f"<script>/* {nonce} */(function(){{const go=()=>{{const el=document.querySelector('{SCROLL_TARGETS[target]}');"
-        "if(el){el.scrollIntoView({behavior:'smooth',block:'start'});}};"
+        "const calm=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;"
+        "if(el){el.scrollIntoView({behavior:calm?'auto':'smooth',block:'start'});}};"
         "setTimeout(go,150);setTimeout(go,900);})();</script>",
         unsafe_allow_javascript=True,
     )
@@ -3005,11 +3022,12 @@ def render_page_territory(c: PageContext) -> None:
                      selected_stop_paths(c.conn, c.cutoff, c.since_ts, c.end_ts, selected),
                      routes=map_routes(c.conn, c.ranking_net), stop_routes=load_stop_route_keys(c.conn))
     if st.session_state.get("stop_id"):
-        render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
-                          territorial_network,
-                          grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None),
-                          reference, c.commune, (c.prev_since_ts, c.prev_end_ts, c.period.prev_label),
-                          detailed=c.detailed, period_label=c.period.label)
+        with st.container(key=f"fiche_{panel_key(st.session_state['stop_id'])}"):
+            render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
+                              territorial_network,
+                              grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None),
+                              reference, c.commune, (c.prev_since_ts, c.prev_end_ts, c.period.prev_label),
+                              detailed=c.detailed, period_label=c.period.label)
     else:
         st.caption("Cliquez sur un arrêt pour ouvrir sa fiche, ou cherchez-le en haut de la page.")
 
@@ -3118,9 +3136,10 @@ def _lines_overview(c: PageContext) -> None:
 def render_page_lines(c: PageContext) -> None:
     line_id = st.session_state.get("line_id")
     if line_id:
-        render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, line_id, c.ranking_net, c.disturbed, c.commune,
-                          (c.prev_since_ts, c.prev_end_ts, c.period.prev_label), detailed=c.detailed,
-                          period_label=c.period.label)
+        with st.container(key=f"fiche_ligne_{panel_key(line_id)}"):
+            render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, line_id, c.ranking_net, c.disturbed, c.commune,
+                              (c.prev_since_ts, c.prev_end_ts, c.period.prev_label), detailed=c.detailed,
+                              period_label=c.period.label)
         with st.expander("Classement des lignes"):
             _lines_overview(c)
         return
@@ -3992,7 +4011,7 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
                         "text": f"La ligne <b>{name}</b> a le plus baissé : {r['score_v2_avant']:.0f} puis "
                                 f"<b>{r['score_v2']:.0f} sur 100</b>, une baisse de {_points(r['ecart'])}, plus que "
                                 f"sa marge d'incertitude de ± {format_number(r['marge_ecart'], 1)}.",
-                        "route_id": str(r["route_id"])})
+                        "route_id": str(r["route_id"]), "line": line_names.get(r["route_id"], r["route_id"])})
     if change.get("marge") is not None and not now.empty:
         floor = change["score"] - change["marge"]
         clear = now.dropna(subset=["score_v2", "marge_v2"])
@@ -4009,7 +4028,8 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
                         "detail": f"± {format_number(r['marge_v2'], 1)}, contre {change['score']:.0f} pour {scope}",
                         "text": f"La ligne <b>{name}</b> est la moins fiable, même en tenant compte de "
                                 f"l'incertitude : <b>{r['score_v2']:.0f} sur 100</b> (± {format_number(r['marge_v2'], 1)}), "
-                                f"contre {change['score']:.0f} pour {scope}.", "route_id": str(r["route_id"])})
+                                f"contre {change['score']:.0f} pour {scope}.", "route_id": str(r["route_id"]),
+                        "line": line_names.get(r["route_id"], r["route_id"])})
     return out[:3]
 
 
@@ -4112,25 +4132,27 @@ def _key_tiles(points: list[dict]) -> None:
                         f'<div class="tile-label">{point["label"]}</div>'
                         f'<div class="tile-detail">{html.escape(point["detail"])}</div>', unsafe_allow_html=True)
             if point["route_id"]:
-                st.button("Voir la ligne ›", key=f"tile_btn_{i}", on_click=open_line, args=(point["route_id"],),
-                          type="tertiary")
+                st.button(f"Voir la ligne {point['line']} ›", key=f"tile_btn_{i}", on_click=open_line,
+                          args=(point["route_id"],), type="tertiary")
 
 
 def _stop_rows(top: pd.DataFrame, prefix: str) -> None:
+    """Une ligne par arrêt : score en pastille, nom cliquable (ouvre la fiche), commune, barre et chiffres."""
     peak = float(top["rates"].max()) if not top.empty else 1.0
     for r in top.itertuples():
         with st.container(key=f"{prefix}_{r.Index}"):
-            left, right = st.columns([6, 1.1], vertical_alignment="center")
-            where = f'<span class="sr-where">{html.escape(r.commune)}</span>' if r.commune else ""
-            left.markdown(
-                f'<div class="sr"><span class="sr-score" style="background:{score_color(r.score)};'
-                f'color:{ink_on(score_color(r.score))}">{r.score:.0f}</span>'
-                f'<span class="sr-name">{html.escape(r.stop_name)}{where}</span>'
-                f'<span class="sr-bar" style="width:{max(4, r.rates / peak * 100):.0f}%"></span>'
-                f'<span class="sr-fig">{fmt_int(r.rates)} passages ratés sur {fmt_int(r.attendus)}</span></div>',
-                unsafe_allow_html=True)
-            right.button("Voir ›", key=f"{prefix}_btn_{r.Index}", on_click=open_stop, args=(r.stop_id,),
-                         type="tertiary", help=f"Ouvrir la fiche de {r.stop_name} sur la carte")
+            badge, name, bar = st.columns([0.45, 2.6, 3.2], vertical_alignment="center", gap="small")
+            badge.markdown(f'<span class="sr-score" style="background:{score_color(r.score)};'
+                           f'color:{ink_on(score_color(r.score))}" aria-label="score {r.score:.0f} sur 100">'
+                           f'{r.score:.0f}</span>', unsafe_allow_html=True)
+            with name:
+                st.button(f"{r.stop_name} ›", key=f"{prefix}_btn_{r.Index}", on_click=open_stop, args=(r.stop_id,),
+                          type="tertiary", help="Ouvrir la fiche de l'arrêt sur la carte")
+                if r.commune:
+                    st.markdown(f'<span class="sr-where">{html.escape(r.commune)}</span>', unsafe_allow_html=True)
+            bar.markdown(f'<div class="sr-right"><span class="sr-bar" style="width:{max(2, r.rates / peak * 45):.0f}%">'
+                         f'</span><span class="sr-fig">{fmt_int(r.rates)} passages ratés sur {fmt_int(r.attendus)}'
+                         f'</span></div>', unsafe_allow_html=True)
 
 
 def render_page_home(c: PageContext) -> None:

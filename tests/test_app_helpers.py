@@ -703,6 +703,27 @@ class TestNombresALaFrancaise:
         assert fmt(float("nan")) == "—"
 
 
+class TestMouvementEtClavier:
+    def test_cle_de_fiche(self):
+        assert app_mod.panel_key("9749") == "9749"
+        assert app_mod.panel_key("TBM:12 a") == "TBM_12_a"
+
+    def test_defilement_et_apparition_respectent_le_reglage(self, monkeypatch):
+        import streamlit as st
+
+        scripts = []
+        monkeypatch.setattr(st, "html", lambda body, **kw: scripts.append(body))
+        st.session_state["_scroll_to"] = "fiche-arret"
+        app_mod.scroll_if_requested("fiche-arret")
+        assert "prefers-reduced-motion: reduce" in scripts[0] and "calm?'auto':'smooth'" in scripts[0]
+        css = []
+        monkeypatch.setattr(st, "markdown", lambda body, **kw: css.append(body))
+        app_mod.inject_style()
+        style = css[0]
+        assert "@media (prefers-reduced-motion: no-preference)" in style and "fiche-in 260ms" in style
+        assert '[data-testid="stHeaderActionElements"] {{ display: none; }}'.replace("{{", "{").replace("}}", "}") in style
+
+
 class TestEchelleTypographique:
     def test_toutes_les_tailles_du_tableau_de_bord_viennent_de_l_echelle(self):
         import re

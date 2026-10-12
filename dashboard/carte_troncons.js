@@ -292,8 +292,12 @@ function legendHtml(data) {
 function buildLayers(deck, state) {
   const { data, slot } = state;
   const colors = data.colors;
-  const rank = (s) => s.c * 10 + ORDER[s.t[slot]];
-  const sorted = data.segments.slice().sort((a, b) => rank(a) - rank(b));
+  if (state.sortedFor !== data) {
+    const worst = (s) => Math.max(...[...s.t].map((code) => ORDER[code] || 0));
+    state.sorted = data.segments.slice().sort((a, b) => (a.c * 10 + worst(a)) - (b.c * 10 + worst(b)));
+    state.sortedFor = data;
+  }
+  const sorted = state.sorted;
   const dashed = new deck.PathStyleExtension({ dash: true });
   const focused = data.focused;
   const colorOf = (seg) => {
@@ -326,6 +330,7 @@ function buildLayers(deck, state) {
       getWidth: widthOf, getColor: colorOf,
       getDashArray: (d) => (d.m === FERRY ? [3, 2] : "voc".includes(d.t[slot]) ? [0, 0] : [2, 2.5]), extensions: [dashed],
       updateTriggers: { getColor: slot, getWidth: slot, getDashArray: slot },
+      transitions: REDUCED_MOTION ? {} : { getColor: { duration: COLOR_FADE_MS }, getWidth: { duration: COLOR_FADE_MS } },
     }),
   ];
   if (state.selected && state.selected.tram) {
@@ -365,6 +370,7 @@ function fitHeight(state) {
 }
 
 const TOP_COUNT = 5;
+const COLOR_FADE_MS = 300;
 
 function topSegments(data, slot) {
   if (data.tram_line) return [];
@@ -570,9 +576,18 @@ export default async function (component) {
       container: state.canvasBox, style: STYLE_URL, center: [data.view.longitude, data.view.latitude],
       zoom: data.view.zoom, minZoom: 9, maxZoom: 18, dragRotate: false, pitchWithRotate: false, touchPitch: false,
       attributionControl: { compact: true },
+      locale: {
+        "NavigationControl.ZoomIn": "Zoomer", "NavigationControl.ZoomOut": "Dézoomer",
+        "AttributionControl.ToggleAttribution": "Afficher les sources de la carte", "Map.Title": "Carte",
+      },
     });
     state.map.touchZoomRotate.disableRotation();
     state.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    state.map.getCanvas().setAttribute("aria-label", "Carte du temps perdu entre arrêts. Au clavier : flèches pour se "
+      + "déplacer, + et − pour zoomer ; la liste des tronçons les plus lents est sous la carte.");
+    state.root.querySelectorAll("div[tabindex]").forEach((el) => {
+      if (!el.getAttribute("aria-label") && !el.getAttribute("role")) el.setAttribute("tabindex", "-1");
+    });
     fit(0);
     state.overlay = new deck.MapboxOverlay({
       interleaved: false,

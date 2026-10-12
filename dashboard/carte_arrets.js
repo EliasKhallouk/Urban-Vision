@@ -3,6 +3,19 @@ const MAPLIBRE_URL = "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplib
 const MAPLIBRE_CSS = "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css";
 const STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const EARTH = 156543.03392;
+const REDUCED_MOTION = typeof window !== "undefined" && window.matchMedia
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const MAP_LOCALE = {
+  "NavigationControl.ZoomIn": "Zoomer", "NavigationControl.ZoomOut": "Dézoomer",
+  "AttributionControl.ToggleAttribution": "Afficher les sources de la carte", "Map.Title": "Carte",
+};
+
+function accessibleMap(state, label) {
+  state.map.getCanvas().setAttribute("aria-label", label);
+  state.root.querySelectorAll("div[tabindex]").forEach((el) => {
+    if (!el.getAttribute("aria-label") && !el.getAttribute("role")) el.setAttribute("tabindex", "-1");
+  });
+}
 
 function loadScript(url, globalName) {
   if (window[globalName]) return Promise.resolve(window[globalName]);
@@ -205,6 +218,8 @@ function buildLayers(deck, state) {
   if (paths.length) {
     layers.push(...pathLayers(deck, paths));
     if (data.dim_stops !== false) iconProps.opacity = 0.45;
+  } else if (state.selectedStop && data.dim_stops !== false) {
+    iconProps.opacity = 0.55;
   }
   if (grouped) {
     layers.push(new deck.IconLayer({ id: "groupes", data: data.groups, getPosition: (d) => [d.x, d.y], ...iconProps }));
@@ -310,7 +325,7 @@ export default async function (component) {
     return undefined;
   }
 
-  const flyTo = (stop, zoom) => state.map.flyTo({ center: [stop.x, stop.y], zoom, duration: 900, essential: true });
+  const flyTo = (stop, zoom) => state.map.flyTo({ center: [stop.x, stop.y], zoom, duration: REDUCED_MOTION ? 0 : 800 });
   const refresh = () => {
     if (!state.overlay) return;
     state.overlay.setProps({ layers: buildLayers(deck, state) });
@@ -336,6 +351,7 @@ export default async function (component) {
       pitchWithRotate: false,
       touchPitch: false,
       attributionControl: { compact: true },
+      locale: MAP_LOCALE,
     });
     state.map.touchZoomRotate.disableRotation();
     state.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
@@ -372,10 +388,13 @@ export default async function (component) {
         if (!info.object || !info.layer || info.layer.id.startsWith("selection") || info.layer.id.startsWith("lignes")) return;
         const id = info.object.m ? info.object.w : info.object.i;
         state.lastClicked = id;
+        flyTo(info.object, Math.max(state.map.getZoom(), state.data.focus_zoom));
         setTriggerValue("clicked", id);
       },
     });
     state.map.addControl(state.overlay);
+    accessibleMap(state, "Carte des arrêts. Au clavier : flèches pour se déplacer, + et − pour zoomer ; "
+      + "choisissez un arrêt avec la recherche en haut de la page.");
     state.lastZoom = state.map.getZoom();
     state.map.on("zoom", () => {
       const zoom = state.map.getZoom();
