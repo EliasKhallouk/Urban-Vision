@@ -146,10 +146,28 @@ class TestDate:
                     "2026-10-04": 80000}
         assert app_mod.contention_dates(passages, "2026-10-05", "2026-10-08", ["2026-10-06"]) == [
             "2026-10-05", "2026-10-07"]
-        assert app_mod.date_coverage_reason("2026-10-04", passages, []).startswith("C'est un dimanche")
+        assert app_mod.date_coverage_reason("2026-10-04", passages, []) == "C'est un dimanche."
         assert app_mod.date_coverage_reason("2026-10-07", passages, []) is None
         assert "52 % des passages" in app_mod.date_coverage_reason("2026-10-08", passages, [])
+        assert app_mod.date_coverage_reason("2026-11-11", passages, []) == "C'est un jour férié (armistice)."
+        assert app_mod.date_slot_hours(None) == 2 and app_mod.date_slot_hours("C'est un dimanche.") == 4
         assert app_mod.date_label("2026-10-07") == "mercredi 07/10/2026"
+
+    def test_creneaux_de_quatre_heures(self, conn):
+        _seed(conn)
+        tr.run(conn, "2026-10-01", "2026-10-08", pause=0)
+        cells = tr.date_cells(conn, "2026-10-07", {"R"}, slot_hours=4)
+        assert set(cells["heure"]) == {8, tr.WHOLE_DAY}
+        assert cells[(cells.heure == 8) & (cells.from_stop_id == "s2")].iloc[0].passages == 8
+
+    def test_jours_feries(self):
+        import indicateurs as ind
+        assert str(ind.easter(2026)) == "2026-04-05" and str(ind.easter(2027)) == "2027-03-28"
+        assert ind.public_holiday("2026-11-11") == "armistice"
+        assert ind.public_holiday("2026-04-06") == "lundi de Pâques"
+        assert ind.public_holiday("2026-05-14") == "Ascension"
+        assert ind.public_holiday("2026-05-25") == "lundi de Pentecôte"
+        assert ind.public_holiday("2026-10-07") is None
 
     def test_donnees_d_une_date(self):
         geo = pd.DataFrame({"from_stop_id": ["a", "c"], "to_stop_id": ["b", "d"], "route_type": [3, 3],

@@ -2,7 +2,7 @@ import json
 import math
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -176,6 +176,34 @@ def regularity(sum_h2_act, sum_h_act, sum_h2_sch, sum_h_sch) -> dict | None:
     actual = sum_h2_act / (2 * sum_h_act)
     planned = sum_h2_sch / (2 * sum_h_sch)
     return {"attente_reelle": actual, "attente_prevue": planned, "attente_excedentaire": actual - planned}
+
+
+FIXED_HOLIDAYS = {(1, 1): "jour de l'an", (5, 1): "fête du Travail", (5, 8): "victoire de 1945",
+                  (7, 14): "fête nationale", (8, 15): "Assomption", (11, 1): "Toussaint", (11, 11): "armistice",
+                  (12, 25): "Noël"}
+EASTER_HOLIDAYS = {1: "lundi de Pâques", 39: "Ascension", 50: "lundi de Pentecôte"}
+
+
+def easter(year: int) -> date:
+    """Dimanche de Pâques (calendrier grégorien, algorithme de Meeus)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    m = (32 + 2 * e + 2 * i - h - k) % 7
+    n = (a + 11 * h + 22 * m) // 451
+    month = (h + m - 7 * n + 114) // 31
+    return date(year, month, (h + m - 7 * n + 114) % 31 + 1)
+
+
+def public_holiday(day: str) -> str | None:
+    """Nom du jour férié national tombant ce jour (AAAA-MM-JJ), sinon None."""
+    d = datetime.strptime(day, "%Y-%m-%d").date()
+    if (d.month, d.day) in FIXED_HOLIDAYS:
+        return FIXED_HOLIDAYS[(d.month, d.day)]
+    return EASTER_HOLIDAYS.get((d - easter(d.year)).days)
 
 
 def day_type(day: str) -> str:

@@ -45,6 +45,7 @@ MIN_PASSAGES = 20
 MIN_DAYS = 3
 DATE_MIN_PASSAGES = 8
 DATE_SLOT_HOURS = 2
+DATE_SLOT_HOURS_LOW = 4
 MAX_ZERO_SHARE = ind.DOUBTFUL_ZERO_SHARE * 100
 MAX_PLATEAU_SHARE = 15.0
 WHOLE_DAY = -1
@@ -242,16 +243,17 @@ def summarize_cells(rows: pd.DataFrame, good_routes: set, min_passages: int = MI
     return out[cols]
 
 
-def date_cells(conn, day: str, good_routes: set) -> pd.DataFrame:
+def date_cells(conn, day: str, good_routes: set, slot_hours: int = DATE_SLOT_HOURS) -> pd.DataFrame:
     """Cases d'une date précise, calculées à la demande depuis `troncons_jour` (rien n'est écrit).
 
-    Créneaux de DATE_SLOT_HOURS heures (heure = début du créneau : 0, 2, … 22) et journée entière
+    Créneaux de `slot_hours` heures (DATE_SLOT_HOURS, ou DATE_SLOT_HOURS_LOW les jours de peu de service ;
+    heure = début du créneau : 0, 2, … 22 ou 0, 4, … 20) et journée entière
     (heure = -1) ; une case est mesurée à partir de DATE_MIN_PASSAGES passages ce jour-là.
     """
     rows = pd.read_sql_query(
         "SELECT date_service, from_stop_id, to_stop_id, route_id, heure, n, n_terminus, gains, pcts "
         "FROM troncons_jour WHERE date_service = ?", conn, params=(day,))
-    rows = rows.assign(jour_type=day, heure=rows["heure"] // DATE_SLOT_HOURS * DATE_SLOT_HOURS)
+    rows = rows.assign(jour_type=day, heure=rows["heure"] // slot_hours * slot_hours)
     return summarize_cells(rows, good_routes, DATE_MIN_PASSAGES, 1)
 
 

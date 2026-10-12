@@ -3694,9 +3694,9 @@ def load_troncons_days(_conn, computed_at: int) -> dict:
 
 
 @st.cache_data(ttl=3600, max_entries=20)
-def load_troncons_date(_conn, day: str, computed_at: int, good: tuple) -> pd.DataFrame:
-    """Cases d'une date précise, en créneaux de 2 h (`troncons.date_cells`), gardées en cache une heure."""
-    return troncons.date_cells(_conn, day, set(good))
+def load_troncons_date(_conn, day: str, computed_at: int, good: tuple, slot_hours: int) -> pd.DataFrame:
+    """Cases d'une date précise, en créneaux de 2 ou 4 h (`troncons.date_cells`), gardées en cache une heure."""
+    return troncons.date_cells(_conn, day, set(good), slot_hours)
 
 
 def contention_dates(days: dict, since: str, until: str, excluded: list) -> list[str]:
@@ -3705,21 +3705,30 @@ def contention_dates(days: dict, since: str, until: str, excluded: list) -> list
 
 
 def date_coverage_reason(day: str, passages: dict, excluded: list) -> str | None:
-    """Raison d'une couverture faible ce jour-là : week-end, ou service bien plus faible qu'un jour de semaine."""
+    """Raison d'un jour de peu de service, qui passe en créneaux de 4 h : jour férié, week-end, ou jour de semaine
+    sous CONTENTION_LOW_SERVICE des passages d'un jour de semaine médian ; None pour un jour ordinaire."""
     weekday = datetime.strptime(day, "%Y-%m-%d").weekday()
+    holiday = ind.public_holiday(day)
+    if holiday:
+        return f"C'est un jour férié ({holiday})."
     if weekday >= 5:
-        return (f"C'est un {WEEKDAY_NAMES[weekday]} : moins de bus circulent, beaucoup de portions n'atteignent "
-                "pas 8 passages en 2 heures.")
+        return f"C'est un {WEEKDAY_NAMES[weekday]}."
     normal = [n for d, n in passages.items()
-              if d not in set(excluded) and datetime.strptime(d, "%Y-%m-%d").weekday() < 5]
+              if d not in set(excluded) and datetime.strptime(d, "%Y-%m-%d").weekday() < 5
+              and not ind.public_holiday(d)]
     if not normal or day not in passages:
         return None
     reference = float(np.median(normal))
     share = passages[day] / reference if reference else 1.0
     if share < CONTENTION_LOW_SERVICE:
-        return (f"Ce jour-là, le service était plus faible qu'un jour de semaine habituel ({share * 100:.0f} % "
+        return (f"Le service était plus faible qu'un jour de semaine habituel ({share * 100:.0f} % "
                 "des passages).")
     return None
+
+
+def date_slot_hours(reason: str | None) -> int:
+    """Créneaux de 4 h les jours de peu de service (une raison existe), sinon de 2 h."""
+    return troncons.DATE_SLOT_HOURS_LOW if reason else troncons.DATE_SLOT_HOURS
 
 
 def date_label(day: str) -> str:
@@ -3778,7 +3787,8 @@ def render_page_contention(c: PageContext) -> None:
                           if day in excluded else "ce jour n'a pas été calculé.")
                        + " Choisissez une autre date.")
             return
-    when = (f"le {date_label(day)}, par créneau de 2 heures" if day
+    when = (f"le {date_label(day)}, par créneau de "
+            f"{date_slot_hours(date_coverage_reason(day, passages, meta.get('jours_exclus', [])))} heures" if day
             else f"période scolaire du {since:%d/%m} au {until:%d/%m/%Y}")
     st.markdown(
         '<div class="section-note contention-note">Temps que les bus perdent entre deux arrêts (circulation, feux '
@@ -3797,13 +3807,14 @@ def render_page_contention(c: PageContext) -> None:
         scope["unmeasured"] = True
     cells, tram_lines, date_info = data["cells"], data["tram_lines"], None
     if day:
-        cells = load_troncons_date(c.conn, day, int(meta["calcule_le"]), tuple(sorted(measurable)))
+        reason = date_coverage_reason(day, passages, meta.get("jours_exclus", []))
+        slot_hours = date_slot_hours(reason)
+        cells = load_troncons_date(c.conn, day, int(meta["calcule_le"]), tuple(sorted(measurable)), slot_hours)
         tram_lines = {}
-        date_info = {"day": day, "label": date_label(day),
-                     "reason": date_coverage_reason(day, passages, meta.get("jours_exclus", []))}
+        date_info = {"day": day, "label": date_label(day), "reason": reason}
     payload = troncons_payload(data["geo"], cells, data["lines"], data["names"], data["communes"],
                                data["tram"], scope, data["route_ids"], measurable, tram_lines,
-                               step=2 if day else 1, date_info=date_info)
+                               step=slot_hours if day else 1, date_info=date_info)
     carte_troncons(payload, key="carte_troncons")
 
 

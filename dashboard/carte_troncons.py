@@ -62,7 +62,9 @@ _CSS = f"""
 .uvt-range {{ width: 100%; accent-color: {BLACK_FOREST}; cursor: pointer; margin: 0; }}
 .uvt-range.off {{ opacity: .4; }}
 .uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-play:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
-.uvt-ticks {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
+.uvt-ticks {{ position: relative; height: 16px; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
+.uvt-ticks span {{ position: absolute; top: 0; white-space: nowrap; }}
+.uvt-slot-note {{ display: none; margin-top: 2px; color: {BLACK_FOREST}; font-size: 12.5px; font-weight: 600; }}
 .uvt-allday {{ flex: none; border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; background: #FFFFFF; color: {BLACK_FOREST};
               padding: 6px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }}
 .uvt-allday[aria-pressed="true"] {{ background: {BLACK_FOREST}; color: #FEFAE0; }}

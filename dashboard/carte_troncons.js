@@ -77,10 +77,23 @@ function tramVerdict(line, slot) {
   return { text, sub: TRAM_NOTE };
 }
 
+const WIDE_NOTE = "Créneaux de 4 h : peu de bus circulent ce jour-là";
+const TICKS = { 1: [0, 6, 12, 18, 23], 2: [0, 6, 12, 18, 22], 4: [0, 4, 8, 12, 16, 20] };
+
 function coverageText(measured, total) {
+  const wide = STEP === 4 ? " en créneaux de 4 h, car peu de bus circulent ce jour-là" : "";
   const reason = DATE && DATE.reason ? ` ${DATE.reason}` : "";
   return `Ce jour-là, ${measured} ${plural(measured, "portion", "portions")} sur ${total} `
-    + `${plural(measured, "a", "ont")} assez de passages pour être mesurées. Les autres sont grises.${reason}`;
+    + `${plural(measured, "a", "ont")} assez de passages pour être mesurées${wide}. Les autres sont grises.${reason}`;
+}
+
+function ticksHtml() {
+  const values = TICKS[STEP] || TICKS[1];
+  const max = 24 - STEP;
+  return values.map((v, i) => {
+    const shift = i === 0 ? "0" : (i === values.length - 1 ? "-100%" : "-50%");
+    return `<span style="left:${(100 * v) / max}%;transform:translateX(${shift})">${v} h</span>`;
+  }).join("");
 }
 
 function verdict(data, slot) {
@@ -332,6 +345,9 @@ function render(state) {
     + `<div class="uvt-verdict">${esc(v.text)}</div><div class="uvt-sub">${esc(v.sub)}</div>`;
   state.clock.textContent = clockText(slot);
   state.range.max = String(24 - STEP);
+  state.ticks.innerHTML = ticksHtml();
+  state.slotNote.textContent = DATE && STEP === 4 ? WIDE_NOTE : "";
+  state.slotNote.style.display = DATE && STEP === 4 ? "block" : "none";
   state.range.step = String(STEP);
   state.range.value = String(slot === WHOLE_DAY ? state.lastHour : slot);
   state.play.setAttribute("aria-pressed", state.timer ? "true" : "false");
@@ -357,7 +373,7 @@ function stopPlay(state) {
 function firstServedSlot(data) {
   const scope = data.segments.filter((s) => s.c);
   for (let h = 0; h < WHOLE_DAY; h += STEP) {
-    if (h >= 5 && scope.some((s) => measuredAt(s, h))) return h;
+    if ((STEP === 4 ? h + STEP > 5 : h >= 5) && scope.some((s) => measuredAt(s, h))) return h;
   }
   return 6;
 }
@@ -367,7 +383,7 @@ function buildControls(state) {
   bottom.className = "uvt-bottom";
   bottom.innerHTML = '<div class="uvt-controls"><div class="uvt-clock" aria-live="polite"></div>'
     + '<div class="uvt-range-box"><input class="uvt-range" type="range" min="0" max="23" step="1" aria-label="Heure de la journée">'
-    + '<div class="uvt-ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>23 h</span></div></div>'
+    + '<div class="uvt-ticks"></div><div class="uvt-slot-note"></div></div>'
     + '<button class="uvt-play" type="button" aria-pressed="false" aria-label="Lecture animée heure par heure">▶ Lecture</button>'
     + '<button class="uvt-allday" type="button" aria-pressed="false">Toute la journée</button></div>'
     + '<div class="uvt-legend"></div>';
@@ -376,6 +392,8 @@ function buildControls(state) {
   state.range = bottom.querySelector(".uvt-range");
   state.allDay = bottom.querySelector(".uvt-allday");
   state.play = bottom.querySelector(".uvt-play");
+  state.ticks = bottom.querySelector(".uvt-ticks");
+  state.slotNote = bottom.querySelector(".uvt-slot-note");
   state.legend = bottom.querySelector(".uvt-legend");
   state.range.addEventListener("input", () => {
     stopPlay(state);
