@@ -3138,6 +3138,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 | U12 | Protection des données | Première sauvegarde le 01/10/2026 à 22 h 11 : 3 628 Mo compressés en 955 Mo (zstd) en 5 min 33 s, restauration contrôlée en 3 min 13 s (12 983 514 observations) ; timers `urban-vision-sauvegarde` (2 h 30) et `urban-vision-archive-gtfs` (6 h 15) actifs ; première version du GTFS archivée (`gtfs_2026-10-01_3ea3193653b8.zip`, valide du 01/10 au 30/12/2026). Copie hors VM non configurée (`/etc/urban-vision/sauvegarde.env` absent) Sauvegarde avant le déploiement de la méthode 2.0 le 02/10/2026 à 0 h 01 (955 Mo, 6 min 46 s, contrôle ok). |
 | U13 | Configuration versionnée | Unités, vhost et rotation installés le 01/10/2026 par `deploy/deployer.sh` ; en-têtes HTTP actifs (HSTS, `nosniff`, `SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`) ; rotation hebdomadaire de `collect.log` et `alerts.log` ; crontab root identique à `deploy/cron/root.crontab` ; copie de l'ancien vhost conservée en `urban-vision.avant-<date>` Crontab root remplacée le 02/10/2026 par `deploy/cron/root.crontab` (GoAccess `--anonymize-ip`), copie de l'ancienne dans `/tmp/root.crontab.avant` le temps du déploiement. |
 | U14 | Score de fiabilité unique | Déployé le 11/10/2026 (`f673240`, `deploy/deployer.sh`) : colonne `cnt_lt60` ajoutée aux tables horaires au passage suivant du timer, rattrapage de 75 jours en 1 166 s (environ 15,5 s par jour), collecte ininterrompue pendant le rattrapage (21 relevés en 21 min, aucun trou) ; score de septembre 75,1 ± 1,2, identique entre le dashboard et `indicateurs.indicators` |
+| U15 | Carte des points de contention, trajets sans temps réel | Déployé le 12/10/2026 à 18 h 02 (`808349e`, `deploy/deployer.sh`, version précédente `069b5d4`) après une sauvegarde manuelle (17 h 50 à 18 h 00, 1,1 Go, contrôle ok) ; unités `urban-vision-troncons.service` et `.timer` installées, premier calcul de la carte prévu le 13/10/2026 à 3 h 40, page « Où les bus perdent du temps » sur le message vide d'ici là. Rattrapage de la règle des trajets sans temps réel : 77 jours en 8 passages, de 18 h 02 à 18 h 40, 157 à 251 s par passage ; recalcul de routine 30 s (22 à 24 s avant) ; collecte ininterrompue (60 relevés sur l'heure, aucune erreur, aucun trou). Septembre 2026 : score 74,93, à l'heure 78,16 %, service 95,89 %, 60 341 passages de trajets sans temps réel écartés, identiques au calcul sur la copie du 11/10/2026. Base 3,9 Go, WAL 127 Mo, 79 Go libres. |
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
@@ -3194,42 +3195,29 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 
 ### 26.5 Recommandations
 
-1. **Retards exactement nuls** (audit du 11/10/2026, copie de production) :
-   la règle des trajets sans temps réel (section 7.4) est dans le code et
-   n'est pas encore déployée ; en production, chaque retard nul compte encore
-   comme une mesure. Après déploiement (procédure en 20.4),
-   `ensure_sans_temps_reel` recalcule les jours passés par tranches de 10 à
-   chaque passage du recalcul (76 jours en 8 passages, environ 40 min) ;
-   `urban-vision-troncons` calcule la carte et `troncons_tram` à 3 h 40.
-   Effet attendu sur septembre : score réseau 75,13 → 74,93, à l'heure
-   78,37 → 78,16 % ; tram 82,48 → 81,72 % ; ligne A 81,28 → 79,59 %. La
-   règle (a), écartée, retirait chaque retard nul, zéros isolés des courses
-   mesurées compris (réseau −0,37 point à l'heure au lieu de −0,21) ; 82 % des zéros du tram et 16 % de ceux des bus sont dans des
-   courses entières sans temps réel. La base de développement compte bien
-   plus de zéros (25 à 33 % pour le tram) : ne pas en tirer de conclusion.
-2. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
+1. **Harmoniser la gestion des trous de collecte** entre dashboard, rapports
    et analyse (définition unique, désormais mesurable par `collection_runs`) ou
    documenter explicitement la divergence (déjà décrite en 7.3/23.2).
-3. **Planifier une politique de rétention** de `observations` (table
+2. **Planifier une politique de rétention** de `observations` (table
    volumineuse) et un VACUUM périodique, avec tests associés.
-4. **Copier les sauvegardes hors de la VM** (section 6.6) : sans cela, elles
+3. **Copier les sauvegardes hors de la VM** (section 6.6) : sans cela, elles
    ne protègent pas d'une perte du disque.
-5. Étendre l'intégration continue : règles `ruff` complètes, typage
+4. Étendre l'intégration continue : règles `ruff` complètes, typage
    (`pyright`), contrôles d'accessibilité.
-6. **Vérifier la carte de la veille des visiteurs** (`veille_visiteurs.py`,
+5. **Vérifier la carte de la veille des visiteurs** (`veille_visiteurs.py`,
    §17.2) : elle utilise les tuiles raster Carto
    `https://{s}.basemaps.cartocdn.com/light_all/...`, qui renvoyaient le
    01/10/2026, depuis le poste de développement, une image « API KEY
    REQUIRED ». Si c'est aussi le cas en production, passer au style
    vectoriel Positron (comme la carte du dashboard) ou à une clé Carto.
-7. **Tester la vue rapide auprès de 3 à 5 lecteurs non analystes** (agents ou
+6. **Tester la vue rapide auprès de 3 à 5 lecteurs non analystes** (agents ou
    élus, proches non spécialistes) avant tout nouvel écran, sur des tâches
    précises (« trouver la ligne la plus problématique de ma commune »,
    « dire pourquoi », « retrouver le rapport du mois dernier »), sans les aider,
    en notant où ils bloquent.
-8. **Prendre une licence Highcharts ou passer à Apache ECharts** avant tout
+7. **Prendre une licence Highcharts ou passer à Apache ECharts** avant tout
    usage commercial du service (§23, point 15).
-9. **Prendre un nom de domaine propre** quand le projet est présenté aux
+8. **Prendre un nom de domaine propre** quand le projet est présenté aux
    communes (procédure en section 15).
 
 ---
