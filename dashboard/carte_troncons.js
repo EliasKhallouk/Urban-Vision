@@ -77,7 +77,6 @@ function tramVerdict(line, slot) {
   return { text, sub: TRAM_NOTE };
 }
 
-const WIDE_NOTE = "Créneaux de 4 h : peu de bus circulent ce jour-là";
 const TICKS = { 1: [0, 6, 12, 18, 23], 2: [0, 6, 12, 18, 22], 4: [0, 4, 8, 12, 16, 20] };
 
 function coverageText(measured, total) {
@@ -216,6 +215,7 @@ function panelHtml(seg, slot, colors) {
   const worst = worstHour(seg);
   let worstText = "";
   if (worst && DATE) worstText = `<p>C'est entre <b>${worst.h} h et ${slotEnd(worst.h)}</b> que les bus y ont perdu le plus de temps ce jour-là (${seconds(worst.s)}).</p>`;
+  else if (worst && STEP > 1) worstText = `<p>C'est entre <b>${worst.h} h et ${slotEnd(worst.h)}</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
   else if (worst) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
   return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>${esc(seg.n)}</h3>`
     + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
@@ -271,15 +271,14 @@ function buildLayers(deck, state) {
     const code = seg.t[slot];
     if (!seg.c) return measuredAt(seg, slot) ? rgb(colors[code], focused ? 40 : 55) : rgb(colors.grey, focused ? 35 : 50);
     if (data.unmeasured) return rgb(colors.grey, 245);
-    if (code === "v") return rgb(colors.v, focused ? 235 : 120);
-    if ("oc".includes(code)) return rgb(colors[code], 255);
+    if ("voc".includes(code)) return rgb(colors[code], 255);
     return rgb(colors.grey, focused ? 240 : 210);
   };
   const widthOf = (seg) => {
     if (focused && !seg.c) return 1.2;
     if (data.unmeasured) return 5;
-    if (focused) return { c: 6, o: 5.5, v: 4 }[seg.t[slot]] || 3.5;
-    return { c: 5.5, o: 4.5, v: 1.6 }[seg.t[slot]] || 2.2;
+    if (focused) return "voc".includes(seg.t[slot]) ? 6 : 3.5;
+    return "voc".includes(seg.t[slot]) ? 4.5 : 2.2;
   };
   const common = { getPath: (d) => d.p, widthUnits: "pixels", capRounded: true, jointRounded: true, parameters: { depthTest: false } };
   const layers = [
@@ -290,7 +289,7 @@ function buildLayers(deck, state) {
       getDashArray: [1, 1.4], dashJustified: true, extensions: [dashed], parameters: { depthTest: false }, pickable: true,
     }),
     new deck.PathLayer({
-      id: "lisere", ...common, data: sorted.filter((d) => d.c && (focused || "oc".includes(d.t[slot]))),
+      id: "lisere", ...common, data: sorted.filter((d) => d.c && (focused || "voc".includes(d.t[slot]))),
       getWidth: (d) => widthOf(d) + 3, getColor: [255, 255, 255, 235],
     }),
     new deck.PathLayer({
@@ -346,8 +345,8 @@ function render(state) {
   state.clock.textContent = clockText(slot);
   state.range.max = String(24 - STEP);
   state.ticks.innerHTML = ticksHtml();
-  state.slotNote.textContent = DATE && STEP === 4 ? WIDE_NOTE : "";
-  state.slotNote.style.display = DATE && STEP === 4 ? "block" : "none";
+  state.slotNote.textContent = data.slot_note || "";
+  state.slotNote.style.display = data.slot_note ? "block" : "none";
   state.range.step = String(STEP);
   state.range.value = String(slot === WHOLE_DAY ? state.lastHour : slot);
   state.play.setAttribute("aria-pressed", state.timer ? "true" : "false");

@@ -124,6 +124,26 @@ class TestCarte:
         assert cell == ("peu", None)
 
 
+class TestCreneauxDesJoursTypes:
+    def test_quatre_heures_le_week_end(self):
+        hours = pd.Series([7, 8, 11, 17, 23, 17])
+        types = pd.Series(["semaine", "samedi", "samedi", "dimanche", "dimanche", "semaine"])
+        assert list(tr.slot_start(hours, types)) == [7, 8, 8, 16, 20, 17]
+
+    def test_samedi_type_en_creneaux_de_quatre_heures(self, conn):
+        _seed(conn, days=("2026-10-03", "2026-10-10", "2026-10-17"))
+        tr.run(conn, "2026-10-01", "2026-10-18", pause=0)
+        hours = {h for (h,) in conn.execute("SELECT DISTINCT heure FROM troncons_carte WHERE jour_type = 'samedi'")}
+        assert hours == {8, tr.WHOLE_DAY}
+
+    def test_mention_sous_le_curseur(self):
+        import app as app_mod
+        assert app_mod.contention_slot_note(1, None, "semaine") == ""
+        assert app_mod.contention_slot_note(4, None, "dimanche") == "Créneaux de 4 h : peu de bus circulent le dimanche"
+        assert app_mod.contention_slot_note(4, "2026-10-04", "date") == "Créneaux de 4 h : peu de bus circulent ce jour-là"
+        assert app_mod.contention_slot_note(2, "2026-10-07", "date") == ""
+
+
 class TestDate:
     def test_creneaux_de_deux_heures_et_seuil(self, conn):
         _seed(conn)

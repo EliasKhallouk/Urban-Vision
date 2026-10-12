@@ -46,6 +46,7 @@ MIN_DAYS = 3
 DATE_MIN_PASSAGES = 8
 DATE_SLOT_HOURS = 2
 DATE_SLOT_HOURS_LOW = 4
+TYPE_SLOT_HOURS = {"semaine": 1, "samedi": 4, "dimanche": 4}
 MAX_ZERO_SHARE = ind.DOUBTFUL_ZERO_SHARE * 100
 MAX_PLATEAU_SHARE = 15.0
 WHOLE_DAY = -1
@@ -192,6 +193,13 @@ def _cell_stats(vals: pd.DataFrame, keys: list) -> pd.DataFrame:
                          "jours": g["date_service"].nunique()})
 
 
+def slot_start(hours: pd.Series, day_types: pd.Series) -> pd.Series:
+    """Début du créneau de chaque heure selon le jour type : 1 h en semaine, 4 h le samedi et le dimanche
+    (TYPE_SLOT_HOURS), faute de passages assez nombreux à l'heure sur les quelques week-ends de la période."""
+    width = day_types.map(TYPE_SLOT_HOURS).fillna(1).astype(int)
+    return hours // width * width
+
+
 def summarize_cells(rows: pd.DataFrame, good_routes: set, min_passages: int = MIN_PASSAGES,
                     min_days: int = MIN_DAYS) -> pd.DataFrame:
     """Statut et médianes de chaque case (jour type, heure, tronçon), plus la journée entière (heure = -1).
@@ -276,6 +284,7 @@ def build_map(conn, since: str, end: str) -> dict:
         if rows.empty:
             continue
         rows["jour_type"] = pd.to_datetime(rows["date_service"]).dt.weekday.map(DAY_TYPES)
+        rows["heure"] = slot_start(rows["heure"], rows["jour_type"])
         cells = summarize_cells(rows, good)
         all_cells += [tuple(None if (isinstance(v, float) and math.isnan(v)) else v for v in r)
                       for r in cells.itertuples(index=False, name=None)]
@@ -344,6 +353,7 @@ def summarize_tram(trips: pd.DataFrame) -> pd.DataFrame:
     if trips.empty:
         return pd.DataFrame(columns=columns)
     trips = trips.assign(jour_type=pd.to_datetime(trips["ds"]).dt.weekday.map(DAY_TYPES))
+    trips = trips.assign(heure=slot_start(trips["heure"], trips["jour_type"]))
     keys = ["jour_type", "route_id", "terminus"]
     frames = []
     for hourly in (True, False):

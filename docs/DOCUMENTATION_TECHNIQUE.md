@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 584 tests pytest
+└── tests/                          # 29 fichiers, 587 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -1424,6 +1424,19 @@ valeurs) pour 39 jours. Sur la VM, à `Nice=19` et E/S `idle`, la collecte
 attendu nul hors ces écritures d'au plus quelques secondes. Échec journalisé « Tronçons : calcul
 échoué » dans `data/collect.log` (code 1, signalé par la veille).
 
+**Créneaux des jours types** (`TYPE_SLOT_HOURS`, `slot_start`) : 1 h en
+semaine, 4 h le samedi et le dimanche (carte et tram de bout en bout). Une
+case de jour type demande 20 passages sur 3 jours ; or la période scolaire
+du 01/09 au 10/10/2026 ne compte que 6 samedis et 5 dimanches : une ligne qui
+passe toutes les 20 min le samedi fait 3 passages à l'heure, 18 sur la
+période, sous le seuil. À l'heure, le samedi type ne mesurait que 441
+portions à 8 h et 1 018 à 17 h (médiane des cases grises : 8 passages), le
+dimanche type 80 et 315 (médiane 5 à 6). En créneaux de 4 h, au même seuil :
+samedi 2 923 à 8-12 h et 2 982 à 16-20 h, dimanche 1 756 et 2 072 (copie de
+production du 11/10/2026). Le curseur des week-ends types a 6 crans et la
+mention « Créneaux de 4 h : peu de bus circulent le samedi » (ou « le
+dimanche »).
+
 **Date précise** (`date_cells`, calcul à la demande, rien n'est écrit) : les
 lignes de `troncons_jour` d'une date sont regroupées en créneaux de 2 h
 (`DATE_SLOT_HOURS`, heure = début du créneau : 0, 2, … 22) et sur la journée,
@@ -1655,7 +1668,9 @@ lecteur qui n'est pas analyste :
      chaîne de 25 codes (`cell_code` : 24 heures puis la journée) et les valeurs
      mesurées (temps perdu, part du temps prévu, passages, part des passages
      qui perdent plus de 2 min) ;
-   - **curseur horaire** (0 h à 23 h) et bouton « Toute la journée » dans un
+   - **curseur horaire** (0 h à 23 h en semaine type, créneaux de 4 h le
+     samedi et le dimanche types, section 10.5 ; graduations et mention sous le
+     curseur, `slot_note`, suivent la largeur des créneaux) et bouton « Toute la journée » dans un
      bandeau sous la carte, avec l'heure en grand et la légende en barre ;
      ouverture sur l'heure où le plus de tronçons perdent beaucoup de temps dans
      le périmètre (`worst_slot`) ;
@@ -1707,9 +1722,9 @@ lecteur qui n'est pas analyste :
      début ou fin de ligne, ou aucun passage ;
    - **dessin** : couleurs des trois paliers, gris pour le non mesuré ; bus en
      trait plein, ferry en tirets, tram en gris hachuré (« mesure par tronçon
-     indisponible pour le tram ») ; sur tout le réseau, le vert est fin et clair,
-     les tronçons qui perdent du temps sont épais, liserés de blanc et dessinés
-     par-dessus ;
+     indisponible pour le tram ») ; les trois paliers ont la même épaisseur
+     (4,5 px sur tout le réseau, 6 px dans un périmètre choisi), liserés de
+     blanc, les tronçons qui perdent le plus de temps dessinés par-dessus ;
    - **tram de bout en bout** (`tram_lines_payload`, table `troncons_tram`,
      section 10.5) : survoler un tracé de tram donne sa ligne, le toucher ou
      le cliquer ouvre le panneau « Tram A » (temps perdu de bout en bout vers
@@ -3087,7 +3102,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 584, isolés (suite `pytest` complète : 584 passed), flux synthétiques
+- Tests : 587, isolés (suite `pytest` complète : 587 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`

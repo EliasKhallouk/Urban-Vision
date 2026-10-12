@@ -3731,6 +3731,15 @@ def date_slot_hours(reason: str | None) -> int:
     return troncons.DATE_SLOT_HOURS_LOW if reason else troncons.DATE_SLOT_HOURS
 
 
+def contention_slot_note(step: int, day: str | None, jour: str) -> str:
+    """Mention sous le curseur quand les créneaux font 4 h : une date de peu de service, ou un samedi ou
+    dimanche type."""
+    if step != troncons.DATE_SLOT_HOURS_LOW:
+        return ""
+    return ("Créneaux de 4 h : peu de bus circulent ce jour-là" if day
+            else f"Créneaux de 4 h : peu de bus circulent le {jour}")
+
+
 def date_label(day: str) -> str:
     d = datetime.strptime(day, "%Y-%m-%d")
     return f"{WEEKDAY_NAMES[d.weekday()]} {d:%d/%m/%Y}"
@@ -3812,9 +3821,10 @@ def render_page_contention(c: PageContext) -> None:
         cells = load_troncons_date(c.conn, day, int(meta["calcule_le"]), tuple(sorted(measurable)), slot_hours)
         tram_lines = {}
         date_info = {"day": day, "label": date_label(day), "reason": reason}
+    step = slot_hours if day else troncons.TYPE_SLOT_HOURS.get(jour, 1)
     payload = troncons_payload(data["geo"], cells, data["lines"], data["names"], data["communes"],
                                data["tram"], scope, data["route_ids"], measurable, tram_lines,
-                               step=slot_hours if day else 1, date_info=date_info)
+                               step=step, date_info=date_info, slot_note=contention_slot_note(step, day, jour))
     carte_troncons(payload, key="carte_troncons")
 
 

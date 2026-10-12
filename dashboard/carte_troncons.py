@@ -215,12 +215,13 @@ def tram_lines_payload(rows: pd.DataFrame, line_names: dict) -> dict:
 def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names: dict, communes: dict,
                      tram_paths: list, scope: dict | None = None, route_ids: dict | None = None,
                      measurable: set | None = None, tram_lines: dict | None = None, step: int = 1,
-                     date_info: dict | None = None) -> dict:
+                     date_info: dict | None = None, slot_note: str = "") -> dict:
     """Données du composant : tronçons (tracé décalé, mode, codes des 25 tranches, valeurs mesurées,
     appartenance au périmètre), tracés du tram ({"r": route_id, "p": tracé}) et son temps perdu de
     bout en bout (`tram_lines`, voir `tram_lines_payload`), cadrage, tranche d'ouverture et textes.
-    `step` : 1 pour un jour type (24 heures), 2 pour une date précise (créneaux de 2 h, rangés au début
-    du créneau) ; `date_info` : day, label (« mercredi 07/10/2026 »), reason (couverture faible).
+    `step` : largeur des créneaux en heures (1 en semaine type, 4 le samedi et le dimanche types, 2 ou 4
+    pour une date précise), les valeurs étant rangées au début du créneau ; `slot_note` : mention sous le
+    curseur ; `date_info` : day, label (« mercredi 07/10/2026 »), reason (couverture faible).
 
     `geo` : from_stop_id, to_stop_id, route_type, coords (liste) ; `cells` : heure, from_stop_id,
     to_stop_id, statut, palier, mediane_s, mediane_pct, passages, part_2min ; `lines` : (de, vers) ->
@@ -296,7 +297,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "view": view, "bounds": bounds,
             "view_key": "|".join(str(scope.get(k) or "") for k in ("commune", "route_id", "stop_id")) or "__reseau__",
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
-            "unmeasured": bool(scope.get("unmeasured")), "step": step, "date": date_info,
+            "unmeasured": bool(scope.get("unmeasured")), "step": step, "date": date_info, "slot_note": slot_note,
             "mode": date_info["day"] if date_info else "type",
             "colors": COLORS, "height": MAP_HEIGHT}
 
