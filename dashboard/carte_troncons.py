@@ -24,6 +24,7 @@ from palette import (  # noqa: E402
     INK,
     INK_MUTED,
     LIE,
+    LINE,
     MEDIUM,
     NEGATIVE,
     PIERRE,
@@ -121,6 +122,21 @@ _CSS = f"""
 .uvt-strip span.now {{ outline: 2px solid {INK}; outline-offset: 1px; }}
 .uvt-strip-axis {{ display: flex; justify-content: space-between; color: {INK_MUTED}; font-size: 11px; margin-top: 3px; }}
 .uvt-error {{ padding: 24px; font-size: 14px; }}
+.uvt-top {{ margin-top: 14px; font-family: 'Source Sans', 'Source Sans 3', sans-serif; color: {INK}; }}
+.uvt-top h4 {{ margin: 0 0 8px; font-size: 17px; font-weight: 700; }}
+.uvt-top-list {{ margin: 0; padding: 0 0 0 1.6rem; display: grid; gap: 6px; }}
+.uvt-top-list li {{ padding-left: 4px; }}
+.uvt-top-list li::marker {{ color: {INK_MUTED}; font-weight: 700; }}
+.uvt-top-item {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; width: 100%; text-align: left;
+                 background: #FFFFFF; border: 1px solid {LINE}; border-radius: 8px; padding: 8px 12px; font: inherit;
+                 color: {INK}; cursor: pointer; }}
+.uvt-top-item:hover {{ border-color: {ACTION}; }}
+.uvt-top-item:focus-visible {{ outline: 2px solid {ACTION}; outline-offset: 2px; }}
+.uvt-top-chip {{ flex: none; width: 22px; height: 6px; border-radius: 3px; align-self: center; }}
+.uvt-top-name {{ font-size: 15px; font-weight: 700; }}
+.uvt-top-fig {{ font-size: 14px; }}
+.uvt-top-lines {{ flex-basis: 100%; color: {INK_MUTED}; font-size: 13px; padding-left: 32px; }}
+.uvt-top-note, .uvt-top-empty {{ color: {INK_MUTED}; font-size: 13px; margin: 8px 0 0; max-width: 72ch; }}
 .uvt-bar b {{ font-weight: 600; }}
 .uvt-bar .sh {{ display: none; }}
 @media (max-width: 640px) {{

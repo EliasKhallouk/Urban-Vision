@@ -364,6 +364,60 @@ function fitHeight(state) {
   if (state.map) state.map.resize();
 }
 
+const TOP_COUNT = 5;
+
+function topSegments(data, slot) {
+  if (data.tram_line) return [];
+  const ranked = data.segments
+    .filter((seg) => seg.c && "oc".includes(seg.t[slot]) && seg.v[slot] && seg.v[slot].length > 4)
+    .sort((a, b) => b.v[slot][4] - a.v[slot][4]);
+  const seen = new Set();
+  const out = [];
+  for (const seg of ranked) {
+    if (seen.has(seg.n)) continue;
+    seen.add(seg.n);
+    out.push(seg);
+    if (out.length === TOP_COUNT) break;
+  }
+  return out;
+}
+
+function topHtml(data, slot, list) {
+  const title = `Les ${TOP_COUNT} tronçons où les bus perdent le plus de temps ${when(slot)}`;
+  if (!list.length) {
+    return `<h4>${title}</h4><p class="uvt-top-empty">Aucun tronçon ne fait perdre nettement de temps aux bus `
+      + `${when(slot)} (15 s ou plus, et au moins un quart du temps prévu).</p>`;
+  }
+  const items = list.map((seg, i) => {
+    const [s, pct] = seg.v[slot];
+    const lines = lineText(seg);
+    return `<li><button class="uvt-top-item" type="button" data-i="${i}">`
+      + `<span class="uvt-top-chip" style="background:${segHex(seg, slot, data)}"></span>`
+      + `<span class="uvt-top-name">${esc(seg.n)}</span>`
+      + `<span class="uvt-top-fig">${seconds(s)} perdues, ${pct} % de temps en plus que prévu</span>`
+      + (lines ? `<span class="uvt-top-lines">${lines}</span>` : "")
+      + "</button></li>";
+  }).join("");
+  return `<h4>${title}</h4><ol class="uvt-top-list">${items}</ol>`
+    + '<p class="uvt-top-note">Classés par temps perdu, plafonné par la part du temps prévu : à secondes égales, '
+    + "un tronçon court passe devant un tronçon long. Cliquez pour le voir sur la carte.</p>";
+}
+
+function focusSegment(state, seg) {
+  state.selected = seg;
+  const lons = seg.p.map((p) => p[0]);
+  const lats = seg.p.map((p) => p[1]);
+  if (state.map) {
+    state.map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+      { padding: fitPadding(state), maxZoom: 16, duration: REDUCED_MOTION ? 0 : 700 });
+  }
+  render(state);
+  state.root.scrollIntoView({ behavior: REDUCED_MOTION ? "auto" : "smooth", block: "nearest" });
+}
+
+const REDUCED_MOTION = typeof window !== "undefined" && window.matchMedia
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 function render(state) {
   const { data, slot } = state;
   DATE = data.date || null;
@@ -385,6 +439,13 @@ function render(state) {
     state.panel.style.display = "none";
   }
   if (state.overlay && state.deck) state.overlay.setProps({ layers: buildLayers(state.deck, state) });
+  if (state.top) {
+    const list = topSegments(data, slot);
+    state.top.innerHTML = topHtml(data, slot, list);
+    state.top.querySelectorAll(".uvt-top-item").forEach((button) => {
+      button.onclick = () => { stopPlay(state); focusSegment(state, list[Number(button.dataset.i)]); };
+    });
+  }
 }
 
 function stopPlay(state) {
@@ -467,8 +528,11 @@ export default async function (component) {
     panel.className = "uvt-panel";
     panel.setAttribute("role", "dialog");
     root.append(canvasBox, head, tip, panel);
-    parentElement.append(css, root);
-    state = parentElement.__uvTroncons = { root, canvasBox, head, tip, panel };
+    const top = document.createElement("section");
+    top.className = "uvt-top";
+    top.setAttribute("aria-live", "polite");
+    parentElement.append(css, root, top);
+    state = parentElement.__uvTroncons = { root, canvasBox, head, tip, panel, top };
     buildControls(state);
   }
   if (!state.sized) {

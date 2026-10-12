@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import highcharts as hc
-from palette import INK, VIN, score_color, screen_hex
+from palette import INK, SCREEN_NO_DATA, VIN, score_color, screen_hex
 
 
 def _assert_json_serializable(config):
@@ -137,6 +137,19 @@ class TestCreneauxEtGroupes:
         assert config["series"][1]["marker"]["symbol"] == "square"
         assert "max" not in config["yAxis"]
         assert config["legend"]["enabled"] is True
+
+    def test_heures_a_peu_de_passages_en_gris(self):
+        assert hc.thin_hours({3: 2626, 18: 468385, 8: 408158}) == {3}
+        assert hc.thin_hours({6: 4, 7: 359, 8: 393}) == {6}
+        assert hc.thin_hours({}) == set()
+        df = pd.DataFrame({"heure": [3, 18], "groupe": ["Ensemble"] * 2, "route_type": [-1, -1],
+                           "pct_retard_5min": [58.0, 15.0], "observations": [2626, 468385]})
+        series = hc.groups_hourly_chart(df, ["Ensemble"])["series"][0]
+        assert series["data"][3]["color"] == SCREEN_NO_DATA and series["data"][3]["peu"] == 2626
+        assert series["data"][18]["color"] == screen_hex(15.0, "pourcent")
+        assert series["zones"][2] == {"value": 3, "color": SCREEN_NO_DATA, "dashStyle": "Dot"}
+        assert series["zones"][5] == {"value": 6}
+        assert "Peu de passages" in series["tooltip"]["pointFormat"]
 
     def test_retards_par_heure_et_par_groupe(self):
         df = pd.DataFrame({"heure": [8, 8], "groupe": ["Ensemble", "Tramway"], "route_type": [-1, 0],

@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 678 tests pytest
+└── tests/                          # 29 fichiers, 676 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -365,7 +365,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 678 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 676 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -900,7 +900,7 @@ consommateur :
   **compte** les secondes de coupure et les observations écartées dans la
   section « Méthode » (grâce à `query_collection_gaps`) ;
 - `app.py` (dashboard) : n'applique pas l'exclusion des trous (l'écart est
-  visible dans « Données & méthode › Suivi de la collecte »).
+  visible dans « Méthode et lexique › Suivi de la collecte »).
 
 En revanche, le dashboard, les rapports et l'export open data écartent tous
 de **tous** leurs indicateurs les mêmes jours et les mêmes lignes de la
@@ -944,7 +944,7 @@ n'apporte alors aucune composante au score ni au service
 - `db.py::refresh_quality_days` compte `obs + cnt_sans_tr` : la qualité d'un
   jour mesure la collecte, pas le temps réel ;
 - export open data : `passages_sans_temps_reel` (et `retards_nuls` par heure) ;
-- dashboard : « Données & méthode » (bloc « Jours et lignes écartés », nombre
+- dashboard : « Méthode et lexique » (bloc « Jours et lignes écartés », nombre
   de passages écartés sous le score) et le lexique.
 
 Ne l'appliquent pas : la régularité des lignes fréquentes
@@ -1352,7 +1352,7 @@ Sur un regroupement quelconque (période, ligne, arrêt, commune, mode, jour) :
 
 ### 10.4 Marges, comparaisons et qualité des données (`indicateurs.py`)
 
-Le score est accompagné d'une marge d'incertitude (« Données & méthode », fiche
+Le score est accompagné d'une marge d'incertitude (« Méthode et lexique », fiche
 ligne, page « Détail du score de fiabilité » du rapport mensuel).
 
 Fonctions de période : `indicators(conn, début, fin, routes, communes,
@@ -1559,14 +1559,25 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 
 ### 11.3 Structure des vues
 
-Navigation par `st.radio` dans la sidebar (pas d'onglets natifs), 8 pages :
-6 pages d'analyse organisées par question, puis « Rapports mensuels » et
-« À propos » (`NAV_ITEMS`, une fonction `render_page_*` par page, aiguillage
-par le dictionnaire `PAGES` ; contexte commun `PageContext`). Chaque
-page suit le même ordre de lecture : une phrase de verdict (bloc `insight`), le
-graphique principal, puis le détail en blocs repliables. Seule la page active
-est calculée ; les pages qui regroupent plusieurs vues passent par
-`st.segmented_control`, qui ne calcule que la vue affichée.
+Navigation par `st.radio` dans la sidebar (pas d'onglets natifs) : **trois
+entrées** (`MAIN_PAGES` : « Accueil », « Carte », « Lignes »), puis, en pied de
+menu, plus petites et séparées par un trait, « Rapports mensuels », « Méthode
+et lexique » et « À propos » (`NAV_ITEMS`, une fonction `render_page_*` par
+page, aiguillage par le dictionnaire `PAGES` ; contexte commun `PageContext`).
+Chaque écran suit le même ordre de lecture : le verdict d'abord (phrase
+`verdict_sentence` dans un bloc `insight`), puis les chiffres, puis le détail à
+la demande. Seule la page active est calculée ; les vues multiples passent par
+`st.segmented_control`, qui ne calcule que la vue affichée (vue de la carte,
+« Voir le détail » de l'accueil).
+
+**Phrase verdict** (`verdict_sentence`) : « Sur septembre 2026, le réseau est
+à surveiller : 75 passages sur 100 ont été assurés et à l'heure, en baisse de
+3,2 points par rapport à août 2026 (plus que la marge d'incertitude de
+± 1,7). » L'évolution est jugée contre la marge combinée des deux périodes
+(`load_score_change` → `indicateurs.indicators` et `indicateurs.compare`) :
+« en baisse » ou « en hausse » si l'écart la dépasse, « stable » sinon ; sans
+marge (fiche arrêt), l'évolution est donnée en mots (`evolution_words`), sans
+jugement. Elle ouvre l'accueil, la fiche ligne et la fiche arrêt.
 
 **Vue rapide et vue détaillée.** Un interrupteur « Vue détaillée » sous la
 navigation (`detailed_view`, transmis aux pages par `PageContext.detailed`)
@@ -1586,19 +1597,17 @@ lecteur qui n'est pas analyste :
   les cartes sont blanches, bordées d'un trait `LINE` ; une carte évaluée porte
   devant sa valeur une pastille à la couleur de son état (`_kpi_color` :
   dégradé du score pour « État », paliers écran sinon) ; l'évolution reste
-  neutre (`evolution_words`). Les pages
-  d'information (`INFO_PAGES` : « Rapports mensuels », « À propos ») n'ont ni
-  titre ni bandeau ;
+  neutre (`evolution_words`). Seul l'accueil a ce bandeau ;
 - **vue rapide** : verdict en phrase, graphique principal et, dans les
   fiches, état, évolution, type de retard, « En bref » et « Pistes ». Restent
-  réservés à la vue détaillée : les blocs repliables de « Mon territoire »
+  réservés à la vue détaillée : les blocs repliables de la carte des arrêts
   (comparaison des communes, tous les arrêts) et de « Quand ? », le tableau
   de toutes les lignes, les sous-vues des fiches (où, quand, quel type,
   contexte) et la ligne « Détail du score » de la fiche ligne. La page « Modes de
   transport » est la même dans les deux vues ;
 - **guide de lecture** (`show_guide`, boîte `st.dialog`) : trois étapes
-  (`GUIDE_STEPS` : choisir territoire et période, lire l'état en un mot,
-  cliquer pour comprendre), affichées au premier chargement de la session
+  (`GUIDE_STEPS` : chercher sa commune, sa ligne ou son arrêt, lire l'état en
+  un mot, cliquer pour comprendre), affichées au premier chargement de la session
   sauf sur un lien direct vers une fiche (`should_show_guide`), et
   rouvrables par le bouton « Guide de lecture » de la sidebar ; la boîte se
   ferme par ✕ ou Échap, sans relancer le calcul de la page ; une fois vu, le
@@ -1607,36 +1616,34 @@ lecteur qui n'est pas analyste :
   `st.context.cookies`) ;
 - **vocabulaire** : « arrêt non desservi » remplace « arrêt sauté » partout
   (dashboard et rapports) ; le lexique (`LEXIQUE`) est la première vue de
-  « Données & méthode ».
+  « Méthode et lexique ».
 
-1. **Mon territoire** — pour une commune, verdict (score de la commune
-   comparé au réseau, tous deux calculés par `network_score` sur les totaux,
-   comme le bandeau) ; bloc **Priorités du moment** : un tableau 2 × 2
-   (`_render_priorities`, conteneur `prio_grid`) qui croise *quoi* (lignes du
-   tableau : arrêt, ligne) et *quel signal* (colonnes : « Le plus de retards »,
-   « La plus forte baisse » du score par rapport à la période de comparaison),
-   chaque libellé n'étant écrit qu'une fois (`diagnostic.priorities`,
-   `PRIORITY_GRID`). Chaque case (`priority_cell_html`) donne le chiffre en
-   grand (passages partis avec plus de 5 min de retard, ou points de score
-   perdus, à l'encre comme toute évolution), puis l'arrêt ou la ligne :
-   - une ligne est une pastille à son nom, au fond de la couleur de son état,
-     comme un pictogramme de réseau (`line_badge_html`) ;
-   - un arrêt porte le glyphe de son mode (● ■ ▲) à la couleur de son état,
-     comme sur la carte (`stop_mark_html`) ;
-   - la colonne « baisse » dessine la pente du score d'une période à l'autre
-     sur l'échelle 0–100, avec les seuils 80 et 50 en pointillés (`slope_svg`,
-     décrite pour les lecteurs d'écran par son `aria-label`) ;
-   - un lien « Ouvrir la fiche de l'arrêt / de la ligne » (bouton Streamlit
-     présenté en lien souligné).
-   Sous 640 px, les colonnes s'empilent : la ligne d'en-têtes est masquée et
-   chaque case affiche le nom de sa colonne (`.pc-col`).
-   Seuls comptent les arrêts et lignes d'au moins `MIN_OBSERVATIONS`
-   passages (sur les deux périodes pour une baisse) ; une carte sans
-   candidat le dit (pas de période de comparaison, aucune baisse, pas assez
-   de passages). La règle est rappelée dans « Méthode » (`PRIORITY_RULE`).
-   Puis la **carte des arrêts**, avec un champ « Chercher un arrêt »
-   (`stop_search`, synchronisé sur `stop_id`, `_on_stop_search`) et une
-   légende couleur (dégradé du score, repères 80 et 50) et forme (mode),
+1. **Accueil** (`render_page_home`) — bandeau (`render_home_header` : titre,
+   phrase verdict du réseau ou de la commune, quatre cartes, note des jours et
+   lignes écartés), puis :
+   - **À retenir** (`key_points`) : trois phrases, chacune fondée sur un écart
+     qui dépasse la marge d'incertitude à 95 % : l'évolution du score du
+     périmètre (« stable » si l'écart reste dans la marge) ; la ligne dont la
+     baisse dépasse le plus sa marge combinée (√(m₁² + m₂²), scores et marges
+     de `indicateurs.route_indicators`, loader `load_route_indicators`) ; la
+     ligne la moins fiable dont le score, marge comprise, reste sous celui du
+     périmètre, marge comprise. Les lignes au temps réel douteux sont
+     écartées ; sans écart réel, la phrase le dit (« Aucune ligne n'a baissé
+     plus que sa marge d'incertitude… »). Un bouton « Voir la ligne » ouvre la
+     fiche ;
+   - **Arrêts à traiter en premier** (`stops_to_treat`) : les 5 arrêts (quais
+     regroupés par nom et commune, au moins `MIN_OBSERVATIONS` passages) qui
+     ratent le plus de passages : passages attendus moins passages assurés et
+     à l'heure (colonnes `attendus` et `rates` de `load_territorial`), ce qui
+     combine le score et le nombre de passages ; pastille à la couleur du
+     score, « 15 721 passages ratés sur 50 562 prévus, score 69 sur 100 », bouton
+     « Voir l'arrêt » (fiche sur la carte, quai qui rate le plus) ;
+   - **Voir le détail** (`home_detail`, aucune vue par défaut) : « Quand ? »,
+     « Modes de transport », « Perturbations » (points 4 à 6).
+2. **Carte** (`render_page_map`) — deux vues (`map_view`, `MAP_VIEWS`) :
+   « État des arrêts » (par défaut) et « Temps perdu entre arrêts ».
+   **État des arrêts** (`render_page_territory`) :
+   la **carte des arrêts**, avec une légende couleur (dégradé du score, repères 80 et 50) et forme (mode),
    arrêts de taille constante (`STOP_SIZE_METERS`), couleur au pas de 2,5
    points de score (`score_level`, atlas de 19 teintes × 4 formes)
    (`map_legend_html`) (`dashboard/carte.py` + `dashboard/carte_arrets.js`,
@@ -1650,12 +1657,12 @@ lecteur qui n'est pas analyste :
      clic) ; à partir du zoom 14, chaque quai a son marqueur, écarté de ses
      voisins dans la direction réelle de sa position tant qu'ils sont à moins
      de 30 px les uns des autres (`MIN_SEP_PX`), puis à sa place exacte ;
-   - couleur = palier du score de fiabilité du quai, toutes lignes confondues
+   - couleur = dégradé du score de fiabilité du quai, toutes lignes confondues
      (section 10.3, composantes de chaque ligne et jour à ce quai) ; forme = mode de
-     la ligne principale ; taille en mètres (`STOP_SIZE_METERS` : 120 à 240 m
-     selon les passages), donc proportionnelle au zoom, bornée entre 8 et 28 px
+     la ligne principale ; taille constante en mètres (`STOP_SIZE_METERS` :
+     170 m), donc proportionnelle au zoom, bornée entre 8 et 28 px
      (`STOP_SIZE_PIXELS`) ; icônes tirées d'un atlas PNG unique
-     (`marker_atlas`, 4 formes × 3 paliers + halo de sélection, dessiné avec
+     (`marker_atlas`, 4 formes × 19 teintes + halo de sélection, dessiné avec
      Pillow ; clé `icon_key` « forme|couleur ») ; les moins fiables sont
      dessinés au-dessus ;
    - **infobulle** (HTML propre au composant) : nom, une ligne par quai
@@ -1665,7 +1672,7 @@ lecteur qui n'est pas analyste :
    - **arrêt sélectionné** : halo et icône agrandie, bandeau « Arrêt
      sélectionné » avec un bouton « Centrer » ; la carte s'y déplace (zoom 15,
      `FOCUS_ZOOM`) quand l'arrêt est choisi ailleurs que sur la carte
-     (recherche, « Priorités du moment », lien `?arret=`), pas après un clic sur la
+     (recherche, « Arrêts à traiter en premier », lien `?arret=`), pas après un clic sur la
      carte ;
    - **lignes de l'arrêt sélectionné** : tracé réel de chaque ligne qui le
      dessert (`route_shapes`, dans le sens de la ligne à cet arrêt d'après
@@ -1687,27 +1694,29 @@ lecteur qui n'est pas analyste :
      l'import de `carte.py` et réenregistré au premier affichage s'il a été
      importé hors du serveur Streamlit.
    **Fiche arrêt** (§11.7) sous la carte, ouverte par un clic sur un arrêt
-   de la carte, par la liste « Arrêt » de la barre de contexte, par le bloc
-   « Priorités du moment » ou par une ligne du tableau des arrêts
+   de la carte, par la recherche, par « Arrêts à traiter en premier » ou par
+   une ligne du tableau des arrêts
    (`st.dataframe(on_select=…)`) ; ces entrées écrivent la même clé
    `st.session_state["stop_id"]` et font
    défiler la page jusqu'à la fiche (`request_scroll` / `scroll_if_requested` :
    script `scrollIntoView` injecté une fois par `st.html(...,
    unsafe_allow_javascript=True)`, cibles fixes `.fiche-arret`,
-   `.fiche-ligne`, `.carte-anchor`). Blocs repliables : **Comparer les
+   `.fiche-ligne`, `.carte-anchor` ; `scroll-margin-top` de 13 rem pour que le
+   titre et la phrase verdict ne passent pas sous la barre collante). Sans arrêt
+   choisi : « Cliquez sur un arrêt pour ouvrir sa fiche, ou cherchez-le en haut
+   de la page. » Blocs repliables : **Comparer les
    communes** (périmètre « Réseau complet » ; `load_commune_stats`, graphique
    `commune_ranking_chart` et tableau) et **Tous les arrêts du périmètre**.
-2. **Où les bus perdent du temps** (`render_page_contention`, page
-   d'information : sans bandeau d'indicateurs, car elle porte sur la période
-   scolaire et non sur la période de la barre du haut ; sur cette page, le
-   choix « Période » est grisé, « Période scolaire », avec la raison en aide :
-   `period_picker(locked=True)`) — carte des points de contention
+   **Temps perdu entre arrêts** (`render_page_contention` ; elle porte sur la
+   période scolaire et non sur la période de la barre du haut : dans cette vue,
+   le choix « Période » est grisé, « Période scolaire », avec la raison en
+   aide : `period_picker(locked=contention_view())`) : carte des points de contention
    (section 10.5). Tant que la carte n'a jamais été calculée, la page affiche
    « La carte n'est pas encore calculée : elle l'est chaque nuit à 3 h 40. » ;
    sur un poste sans `/etc/systemd/system/urban-vision-troncons.timer`, le
    message donne aussi la commande à lancer (`contention_empty_message`,
-   section 5.8). Le choix « Jour » (semaine, samedi, dimanche type) est sur
-   la ligne du titre, suivi d'une phrase d'explication ; la carte prend la
+   section 5.8). Le choix « Jour » (semaine, samedi, dimanche type) est au-dessus
+   de la carte, suivi d'une phrase d'explication ; la carte prend la
    hauteur de l'écran (`fitHeight` : entre 400 et 760 px sur ordinateur, entre
    460 et 720 px sous 640 px de large) pour que la carte, le curseur et la
    légende tiennent dans un écran de 768 px de haut comme sur un téléphone
@@ -1767,11 +1776,20 @@ lecteur qui n'est pas analyste :
      bus y perdent le plus, frise des 24 heures ; pour un tronçon gris, la
      raison : service très peu fréquent, temps réel non fiable sur la ligne,
      début ou fin de ligne, ou aucun passage ;
-   - **dessin** : couleurs des trois paliers, gris pour le non mesuré ; bus en
-     trait plein, ferry en tirets, tram en gris hachuré (« mesure par tronçon
-     indisponible pour le tram ») ; les trois paliers ont la même épaisseur
-     (4,5 px sur tout le réseau, 6 px dans un périmètre choisi), liserés de
-     blanc, les tronçons qui perdent le plus de temps dessinés par-dessus ;
+   - **dessin** : dégradé continu des secondes retenues (§6.4), pointillé gris
+     pour le non mesuré ; bus en trait plein, ferry en tirets, tram en gris
+     hachuré (« mesure par tronçon indisponible pour le tram ») ; même épaisseur
+     pour tous les tronçons mesurés (4,5 px sur tout le réseau, 6 px dans un
+     périmètre choisi), liserés de blanc, les tronçons qui perdent le plus de
+     temps dessinés par-dessus ;
+   - **les 5 tronçons où les bus perdent le plus de temps** (`topSegments`,
+     `topHtml`, sous la carte, recalculés à chaque cran du curseur sans relancer
+     Streamlit) : tronçons mesurés du périmètre qui perdent « un peu » ou
+     « beaucoup », classés par secondes retenues, un seul par nom affiché (deux
+     quais du même nom ne font qu'une entrée) ; pour chacun, nom, lignes, temps
+     perdu et part du temps prévu ; un clic cadre la carte sur le tronçon et
+     ouvre son panneau (`focusSegment`, sans animation si le système demande
+     moins de mouvement) ; sans tronçon qui perd du temps, la phrase le dit ;
    - **tram de bout en bout** (`tram_lines_payload`, table `troncons_tram`,
      section 10.5) : survoler un tracé de tram donne sa ligne, le toucher ou
      le cliquer ouvre le panneau « Tram A » (temps perdu de bout en bout vers
@@ -1784,8 +1802,8 @@ lecteur qui n'est pas analyste :
      le tram A perd habituellement 4 min 08 s vers Le Haillan Rostand et
      3 min 44 s vers La Gardette - Bassens - Carbon-Blanc sur l'ensemble du
      trajet. », avec la même mention ;
-   - **fil d'Ariane** (`contention_scope`, `in_scope`) : la commune, la ligne et
-     l'arrêt de la barre de contexte définissent le périmètre (tronçons dont
+   - **périmètre** (`contention_scope`, `in_scope`) : la commune, la ligne et
+     l'arrêt du fil d'Ariane définissent le périmètre (tronçons dont
      l'un des arrêts est dans la commune, qu'emprunte la ligne, qui touchent
      l'arrêt) ; ils restent tous épais et liserés, vert compris, et c'est le
      reste du réseau qui s'estompe (trait de 1,2 px, transparent) ; le verdict
@@ -1795,25 +1813,28 @@ lecteur qui n'est pas analyste :
      temps réel est absent ou non fiable sur la période scolaire (hors des
      lignes exploitables de `troncons_meta`) a son tracé en gris épais et le
      verdict « La ligne 123 n'est pas mesurable : son temps réel est absent ou
-     non fiable. » (`unmeasured` dans les données du composant). Sur cette
-     page, choisir une ligne ou un arrêt dans la barre ne change pas de page.
-3. **Lignes** — les 15 lignes les moins fiables (`ranking_chart` affiché par
+     non fiable. » (`unmeasured` dans les données du composant).
+3. **Lignes** (`render_page_lines`) — sans ligne choisie : « Les lignes », une
+   phrase qui invite à chercher sa ligne en haut de la page, puis les 15 lignes
+   les moins fiables (`ranking_chart` affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour
    analyser cette ligne ↓ » et un clic sur une barre ouvre la fiche,
    `_on_ranking_click`) ; en vue détaillée, tableau de toutes les lignes du
    périmètre (`lines_table` : ligne, score, retards > 5 min, arrêts non
-   desservis, passages ; une sélection ouvre la fiche) ; puis **fiche ligne**
-   de la ligne choisie dans la barre de contexte, le graphique ou le tableau
-   (`st.session_state["line_id"]` ; à défaut, la ligne la moins fiable)
-   (§11.7), calculée sur toute la ligne quel que soit le filtre « Territoire ».
-   Toute ouverture de fiche ligne fait défiler la page jusqu'à ses
-   indicateurs.
-4. **Quand ?** — deux vues :
+   desservis, passages ; une sélection ouvre la fiche). Avec une ligne
+   choisie (recherche, graphique, tableau, « À retenir »,
+   `st.session_state["line_id"]`) : la **fiche ligne** d'abord (§11.7),
+   calculée sur toute la ligne quel que soit le filtre de commune, puis le
+   classement dans un bloc repliable « Classement des lignes ». Aucune fiche
+   n'est ouverte d'office. Toute ouverture de fiche ligne fait défiler la page
+   jusqu'à son titre.
+4. **Quand ?** (détail de l'accueil) — deux vues :
    - *Selon le créneau* : verdict (créneau qui se détache, règle de
      concentration de §11.7), **score de fiabilité par créneau**
      (`period_score_chart`), retards > 5 min par mode et créneau
      (`period_mode_chart`), **retards > 5 min selon l'heure** pour l'ensemble
-     et les modes choisis (`groups_hourly_chart`, choix « Afficher » :
+     et les modes choisis (`groups_hourly_chart`, heures à trop peu de
+     passages en gris et en pointillé, §11.4 ; choix « Afficher » :
      `_mode_choice`, `st.pills`) ; en vue détaillée, lignes les moins
      ponctuelles d'un créneau (repliable). Créneaux : Matin 6 h–10 h, Journée
      10 h–16 h, Pointe du soir 16 h–20 h, Soirée & nuit 20 h–6 h (lundi–vendredi)
@@ -1834,18 +1855,18 @@ lecteur qui n'est pas analyste :
      (`engagement_progression_chart`, détail repliable). Loaders
      `load_daily_metrics` (`group_metrics` : une ligne « Ensemble » et une par
      mode) et `load_engagement_progression`.
-5. **Modes de transport** — même contenu dans les deux vues : carte de risque
+5. **Modes de transport** (détail de l'accueil) — même contenu dans les deux vues : carte de risque
    des lignes (`scatter_chart`, seuils de `risk_zone`, libellé de chaque zone
    dans son coin : « Retards rares mais longs », « Zone critique », « Retards
    fréquents mais courts », « Risque faible »), verdict (mode le moins
    ponctuel), cartes par mode (glyphe ● ■ ▲, bordure au palier), comparaison
    d'indicateurs ; répartition des écarts, tableau détaillé des lignes et
    tableau par mode (repliables).
-6. **Perturbations** — alertes actives à l'instant courant + historique
+6. **Perturbations** (détail de l'accueil) — alertes actives à l'instant courant + historique
    (dédupliqué : une même annonce peut être publiée sous plusieurs
    `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
    causalité démontrée avec les statistiques.
-7. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
+7. **Méthode et lexique** (pied de menu) — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
    identifiant `lexique_slug` ; un lien `?lexique=<terme>`, venu d'une aide « ? »
    ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné
    (fond `SURFACE`, trait `ACTION`) et le fait défiler à l'écran, sans afficher le guide ; mots du
@@ -1860,7 +1881,7 @@ lecteur qui n'est pas analyste :
    courses suivies, observations par minute sur 7 jours glissants en
    Highcharts Stock, répartition horaire des 7 derniers jours).
 
-8. **Rapports mensuels** — `render_page_reports` : choix du mois
+8. **Rapports mensuels** (pied de menu) — `render_page_reports` : choix du mois
    (`list_reports(REPORTS_DIR)` parcourt `reports/output/AAAA-MM/` et ne
    retient que les mois qui ont au moins un PDF, du plus récent au plus
    ancien) ; bouton de téléchargement du rapport réseau et, pour une commune
@@ -1868,7 +1889,7 @@ lecteur qui n'est pas analyste :
    nommés par `generate_all_reports.slug`, noms affichés depuis
    `stop_municipalities`), de son rapport. Mention de la licence et de la
    citation attendue.
-9. **À propos** — `render_page_about` : objet du projet, indépendance,
+9. **À propos** (pied de menu) — `render_page_about` : objet du projet, indépendance,
    contact, sources et licences, mentions légales et confidentialité
    (section 16).
 
@@ -1883,47 +1904,52 @@ comparaison** (`resolve_period`, objet `Period`) : le mois précédent pour un
 mois, les N jours d'avant pour les jours glissants, la même durée juste avant
 pour des dates précises, aucune pour toute la période ; aucune non plus si
 elle tombe avant le premier jour de données. Cette période sert à toutes les
-évolutions : carte « Évolution » des fiches, arrêt et ligne en baisse du bloc
-« Priorités du moment », vue *Dans le temps*. Bornes : jours de service, fin exclue
+évolutions : phrases verdict, carte « Évolution » des fiches, « À retenir »
+de l'accueil, vue *Dans le temps*. Bornes : jours de service, fin exclue
 (`load_service_days` donne le premier et le dernier jour disponibles).
 
 **Barre de contexte** (`render_context_bar`, conteneur `ctx_bar`), en haut de
 toutes les pages et collée en haut de l'écran au défilement (CSS `sticky` sur
-son `stLayoutWrapper`) : fil d'Ariane « ← Revenir » · Commune › Ligne › Arrêt,
-puis la période :
+son `stLayoutWrapper`) : « ← Revenir », la recherche unique, la période, puis
+le fil d'Ariane :
 
-- **Commune** (`commune_topbar`, « Tout le réseau » puis les communes de
-  `stop_municipalities`) : restreint toutes les pages ; en changer ferme
-  l'arrêt ouvert (`_on_ctx_commune`).
-- **Ligne** (`ctx_line`, `line_options` : « Toutes les lignes », puis les lignes
-  du périmètre, la moins fiable d'abord, avec leur état, puis les lignes
-  desservies sur la période sans aucun passage mesuré, marquées « sans temps
-  réel, non mesurable » : `load_unmeasured_lines`, lignes dont les arrêts
-  attendus existent mais dont tous les trajets sont sans temps réel, section
-  7.4 ; 14 lignes sur la période scolaire 2026, dont la 123) : ouvre la fiche
-  ligne sur la page « Lignes », quelle que soit la page en cours
-  (`_on_ctx_line`). Une ligne sans mesure n'est ni classée ni notée : sa fiche
-  se limite à « Ligne 123 : desservie sur la période, mais sans temps réel,
-  non mesurable… » (`unmeasured_line_message`).
-- **Arrêt** (`ctx_stop`, `stop_options`) : les arrêts de la ligne choisie dans
-  la commune (« Arrêt de la ligne »), sinon ceux de la commune ; libellés
-  « nom — direction » identiques au titre de la fiche ; ouvre la fiche arrêt
-  sous la carte de « Mon territoire » (`_on_ctx_stop`).
-- **← Revenir** (`go_back`) : chaque changement de ce qui est regardé (barre,
-  clic sur la carte, tableaux, priorités, boutons des fiches) mémorise
-  d'abord la page, la commune, la ligne et l'arrêt affichés (`remember`,
-  `_ctx_history`, 20 étapes au plus, `HISTORY_MAX`) ; le bouton restaure la
-  dernière étape, son infobulle dit laquelle (`back_label` : « Revenir à la
-  ligne 1 »…) et il est grisé quand il n'y a rien avant.
+- **Recherche unique** (`ctx_search`, libellé « Votre commune, votre ligne ou
+  votre arrêt », choix de `search_options`, mis en cache par
+  `load_search_options`) : les communes (« Commune : Mérignac »), les lignes
+  avec leur nom long et leur état (« Ligne 23 : Hippodrome ↔ Rives d'Arcins
+  (à surveiller) »), y compris les lignes desservies sans aucun passage
+  mesuré, marquées « sans temps réel, non mesurable » (`load_unmeasured_lines`,
+  section 7.4 ; leur fiche se limite à `unmeasured_line_message`), et les
+  arrêts **par nom et commune, tous quais confondus** (« Arrêt : Quinconces,
+  Bordeaux (lignes 2, 201, B, C…) »). Un choix (`_on_search`) : une commune
+  restreint toutes les pages et ferme l'arrêt ouvert ; une ligne ouvre sa
+  fiche sur « Lignes » ; un arrêt ouvre sur « Carte » la fiche de son quai le
+  plus fréquenté, qui propose les autres quais, et retire la ligne du fil
+  d'Ariane. La liste se vide après chaque choix.
+- **Fil d'Ariane** (`breadcrumb`, conteneur `crumbs`) : « Vous regardez : Tout
+  le réseau › Mérignac › Ligne 23 › Quinconces, vers Cantinolle » ; chaque
+  étape sauf la dernière est un lien (`_crumb_network` remet tout le réseau,
+  `_crumb_commune` garde la commune seule, `_crumb_line` revient à la fiche de
+  la ligne).
+- **← Revenir** (`go_back`) : chaque changement de ce qui est regardé
+  (recherche, fil d'Ariane, clic sur la carte, tableaux, boutons de l'accueil
+  et des fiches) mémorise d'abord la page, la vue de la carte, la commune, la
+  ligne et l'arrêt affichés (`remember`, `_ctx_history`, 20 étapes au plus,
+  `HISTORY_MAX`) ; le bouton restaure la dernière étape, son infobulle dit
+  laquelle (`back_label` : « Revenir à la ligne 1 »…) et il est grisé quand
+  il n'y a rien avant.
+- Liens directs : `?arret=` ouvre la carte sur la fiche de l'arrêt, `?ligne=`
+  la fiche de la ligne, `?lexique=` le terme du lexique (`apply_query_params`).
 
 Toutes les listes déroulantes de l'application (`stSelectbox`) ont un cadre
 encre à 45 % d'opacité, un chevron agrandi et un cadre `ACTION` au focus,
 pour qu'on les reconnaisse comme des menus (le thème rendait leur bordure
 blanche sur fond blanc).
 
-Les listes des widgets sont resynchronisées à chaque affichage sur
-`line_id` / `stop_id` (un widget dont les options changent avec la période
-serait sinon remis à zéro par Streamlit).
+Aucun widget ne porte les clés `line_id` / `stop_id` / `commune_idx` : la
+recherche se vide après chaque choix et le fil d'Ariane est reconstruit à
+chaque affichage (un widget dont les options changent avec la période serait
+sinon remis à zéro par Streamlit).
 
 ### 11.4 Graphiques Highcharts (`dashboard/highcharts.py`)
 
@@ -1968,6 +1994,13 @@ glyphe du mode en étiquette de donnée) ; `groups_trend_chart` et
 `groups_hourly_chart` (courbe « Ensemble » épaisse à l'encre, une
 courbe par mode avec trait `MODE_DASH` et marqueur propres au mode, points
 colorés par `measure_color` : dégradé pour un score, paliers écran sinon).
+Dans `groups_hourly_chart`, une heure à trop peu de passages (`thin_hours` :
+moins de 30, `MIN_HOUR_PASSAGES`, soit environ ± 15 points d'incertitude sur un
+pourcentage, ou moins de 5 % de l'heure la plus chargée de la courbe,
+`MIN_HOUR_SHARE`, service marginal) a un point gris cerclé, le trait voisin en
+pointillé gris (`zones`) et l'infobulle « Peu de passages à cette heure (N) : à
+lire avec prudence. » En septembre 2026, 2 h, 3 h et 4 h du matin pour le
+réseau (9 108, 2 626 et 16 595 passages contre 468 385 à 18 h).
 
 Légendes : quand la légende dessine déjà la forme du mode (bulles, courbes),
 le nom de série est le mode seul ; pour les colonnes, dont le symbole de
@@ -2692,7 +2725,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 678 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 676 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -3154,7 +3187,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 678, isolés (suite `pytest` complète : 678 passed), flux synthétiques
+- Tests : 676, isolés (suite `pytest` complète : 676 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3168,7 +3201,10 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   `3afe0d3`, le 01/10/2026 à 22 h 20). Branche locale `refonte-ui` (refonte de
   l'interface pour les non-initiés, depuis le 12/10/2026) : non poussée, non
   déployée ; phase 1 (charte écran « Pierre et vin », dégradé à repères fixes,
-  arrêts de taille constante, évolutions neutres) terminée le 13/10/2026.
+  arrêts de taille constante, évolutions neutres) et phase 2 (trois entrées,
+  recherche unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à
+  traiter, 5 pires tronçons, heures à peu de passages en gris) terminées le
+  13/10/2026.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -3204,7 +3240,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 et I31 le 13/10/2026 sur la branche `refonte-ui`) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 à I33 le 13/10/2026 sur la branche `refonte-ui`) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -3235,8 +3271,10 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
-| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (678 après la phase 1 de la refonte) |
+| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (676 après la phase 2 de la refonte) |
 | I31 | Charte du dashboard : trois paliers en aplats ocre et cuivre (carte des arrêts presque entièrement ocre pour un réseau à 75), « à surveiller » et « problématique » trop proches (ΔE 22, 18 en deutéranopie), texte blanc sur cuivre à 3,95:1, gris « non mesuré » à 1,74:1 sur le fond de carte, évolutions colorées comme des états, taille des arrêts selon le nombre de passages lue comme une fréquentation | Charte écran « Pierre et vin » et dégradé à repères fixes (§6.4), texte choisi par `ink_on`, gris en pointillé, évolutions neutres, taille constante ; rapports PDF inchangés ; tests `TestCharteEcran`, `TestSecondesRetenues`, `TestDegrade`, `TestCarte`, `TestIcones` |
+| I32 | Navigation : 9 entrées de même poids ; bandeau du réseau répété au-dessus des fiches de ligne et d'arrêt (deux verdicts) ; barre de contexte affichant une ligne ou un arrêt que la page ignorait ; fiche de la ligne la moins fiable ouverte d'office sur « Lignes » ; arrêts proposés par quai et direction, avec des doublons ; aucune liste des tronçons les plus lents ; défilement automatique qui cachait le titre de la fiche sous la barre collante | Trois entrées et pied de menu, recherche unique, fil d'Ariane, phrase verdict, « À retenir » fondé sur la marge d'incertitude, « Arrêts à traiter en premier », 5 pires tronçons, heures à peu de passages en gris, défilement à `scroll-margin-top` (§11.3) ; tests `TestFilDAriane`, `TestTerritoireEtFiches`, `TestCreneauxEtGroupes` |
+| I33 | Fiche d'une ligne dont le retard médian est négatif (S35, −3 min 21 s, 76 % des départs avec plus d'une minute d'avance) : type de retard « Retards fréquents mais courts », car la zone de risque utilise la valeur absolue | Libellé neutre « Écart à l'horaire publié » avec les seuls chiffres, sans phrase d'interprétation (`diagnostic.display_zone`) ; la zone de risque et le score ne changent pas |
 | I29 | Deux scores coexistaient : le score de fiabilité (ponctualité ≤ 5 min − 2 × arrêts non desservis) partout, et le score 2.0 « en test » dans « Méthode », la fiche ligne et une page du rapport ; « à l'heure » comptait les départs très en avance ; les courses supprimées n'entraient pas dans le score ; les jours incomplets et les lignes au temps réel douteux n'étaient écartés que du score 2.0 ; la carte « Courses supprimées » de la fiche ligne ne comptait pas les mêmes courses que le score ; le rapport mêlait point et virgule décimale et tronquait le score de sa carte « Fiabilité » | Un seul score (section 10.3), calculé par `indicateurs.add_components` / `score_of` dans le dashboard, les rapports et l'open data ; « à l'heure » = −1 à +5 min partout ; exclusions appliquées à tous les indicateurs ; `agg_hourly(_stop).cnt_lt60` et son rattrapage ; décomposition exacte des points perdus ; nombres du rapport à la française ; tests `TestComposantesPartagees`, `TestDepartsEnAvanceParHeure`, `TestExclusionsDuRapport`, `TestRegles`, `test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score` |
 
 ### 26.4 Dette documentaire
@@ -3255,7 +3293,8 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
   rendu des graphiques non cliquables), et `use_container_width` (à remplacer
   par `width`). Migration prévue : faire passer tous les graphiques par le
   composant `st.components.v2` déjà utilisé pour le classement cliquable
-  (`dashboard/graphique.py`), plutôt que par `st.iframe`.
+  (`dashboard/graphique.py`), plutôt que par `st.iframe`, dans une phase
+  séparée en fin de refonte (décision du 13/10/2026).
 - Les modules se chargent par `sys.path` inséré au runtime
   (`reports/`, `src/scripts/`, `dashboard/`) sans packaging — fragile mais
   fonctionnel ; un regroupement en paquets installerables simplifierait les
@@ -3285,24 +3324,25 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    en notant où ils bloquent.
 7. **Prendre une licence Highcharts ou passer à Apache ECharts** avant tout
    usage commercial du service (§23, point 15).
-8. **Départ au dernier arrêt d'une course** (à confirmer) : il semble compté
-   dans les agrégats comme les autres passages, alors qu'en fin de course il
-   n'a pas de sens pour un voyageur (ligne S35, rentrée 2026 : 22 départs au
-   dernier arrêt à −571 s en moyenne). Vérifier l'effet sur le score avant
-   toute décision ; c'est une règle de mesure.
-9. **Libellé du type de retard pour les lignes en avance** : la zone de
-   risque utilise la valeur absolue du retard médian, si bien qu'une ligne
-   partant en avance (S35, médiane −3 min 21 s, 76 % des départs avec plus
-   d'une minute d'avance, aucun retard exactement nul) est décrite comme
-   « Retards fréquents mais courts ». Les mesures sont réelles : la ligne reste
-   mesurée, seul le texte doit changer (phase 4 de la refonte).
-10. **Préchauffer le cache du dashboard au démarrage** : le premier affichage
+8. **Départ au dernier arrêt d'une course** (décision en attente, règle de
+   mesure) : il est compté dans les agrégats comme les autres passages, alors
+   qu'en fin de course il n'a pas de sens pour un voyageur. Mesure sur
+   septembre 2026 (jours et lignes écartés, trajets sans temps réel exclus) :
+   166 376 passages au dernier arrêt sur 6 223 386 (2,7 %), retard moyen
+   183 s contre 153 s ailleurs, 61,3 % à l'heure, 16,8 % en avance de plus
+   d'une minute. Les exclure ferait passer le score du réseau de 74,94 à
+   75,43 ; par ligne (121 lignes d'au moins 50 passages) : +0,6 point en
+   médiane, de −0,9 à +9,8, 12 lignes au-delà de +2 points (surtout des lignes
+   scolaires et Arena) ; 3 lignes changeraient de palier (7 et 82 passeraient
+   de 79,5 et 79,7 à 80,0 et 80,1 ; S60 de 77,0 à 86,7).
+9. **Préchauffer le cache du dashboard au démarrage** : le premier affichage
     après un redémarrage prend 10 à 12 s, dont environ 4,3 s pour trois
     chargements (`load_network_data`, `load_territorial`,
     `grouped_territorial`) ; les lancer pour la période par défaut dans un
     fil d'exécution au démarrage du serveur ramènerait le premier visiteur au
-    temps d'une page déjà en cache (environ 2,8 s).
-8. **Prendre un nom de domaine propre** quand le projet est présenté aux
+    temps d'une page déjà en cache (environ 2,8 s). Priorité basse, simple et
+    testé (accord du 13/10/2026).
+10. **Prendre un nom de domaine propre** quand le projet est présenté aux
    communes (procédure en section 15).
 
 ---

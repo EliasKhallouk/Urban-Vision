@@ -41,6 +41,7 @@ from palette import (  # noqa: E402
     WHITE,
     GARONNE,
     PIERRE,
+    SCREEN_NO_DATA,
     score_color,
     screen_hex,
     mode_glyph,
@@ -435,18 +436,50 @@ def groups_trend_chart(df: pd.DataFrame, metric: str, groups: list[str]) -> dict
     }
 
 
+MIN_HOUR_PASSAGES = 30
+MIN_HOUR_SHARE = 0.05
+
+
+def thin_hours(passages: dict) -> set:
+    """Heures à trop peu de passages pour être lues comme les autres : moins de MIN_HOUR_PASSAGES (un
+    pourcentage y varie de ± 15 points d'un tirage à l'autre) ou moins de MIN_HOUR_SHARE de l'heure la plus
+    chargée (service marginal, peu représentatif)."""
+    if not passages:
+        return set()
+    busiest = max(passages.values())
+    return {h for h, n in passages.items() if n < MIN_HOUR_PASSAGES or n < MIN_HOUR_SHARE * busiest}
+
+
 def groups_hourly_chart(df: pd.DataFrame, groups: list[str]) -> dict:
-    """Retards de plus de 5 min heure par heure, pour l'ensemble et les modes choisis."""
+    """Retards de plus de 5 min heure par heure, pour l'ensemble et les modes choisis ; les heures à trop peu
+    de passages (`thin_hours`) sont grises, en pointillé, avec la raison dans l'infobulle."""
     series = []
     for group in groups:
         sub = df[df["groupe"] == group]
         if sub.empty:
             continue
         by_hour = {int(h): round(float(v), 1) for h, v in zip(sub["heure"], sub["pct_retard_5min"]) if pd.notna(v)}
-        data = [{"y": by_hour[h], "color": screen_hex(by_hour[h], "pourcent")} if h in by_hour else {"y": None}
-                for h in range(24)]
+        passages = ({int(h): int(n) for h, n in zip(sub["heure"], sub["observations"]) if pd.notna(n)}
+                    if "observations" in sub else {})
+        thin = thin_hours(passages)
+        data = []
+        for h in range(24):
+            if h not in by_hour:
+                data.append({"y": None})
+            elif h in thin:
+                data.append({"y": by_hour[h], "color": SCREEN_NO_DATA, "peu": passages.get(h, 0),
+                             "marker": {"fillColor": "#FFFFFF", "lineColor": INK_MUTED, "lineWidth": 1.5}})
+            else:
+                data.append({"y": by_hour[h], "color": screen_hex(by_hour[h], "pourcent")})
+        zones = []
+        for h in range(24):
+            grey = h in thin or (h + 1) in thin
+            zones.append({"value": h + 1, **({"color": SCREEN_NO_DATA, "dashStyle": "Dot"} if grey else {})})
+        tip = unit_tooltip(" %", header=HOUR_HEADER)
+        tip["pointFormat"] += ('{#if point.peu}<span style="font-size:12px">Peu de passages à cette heure '
+                               '({point.peu:,.0f}) : à lire avec prudence.</span><br/>{/if}')
         series.append({**_group_series(group, sub["route_type"].iloc[0], data, " %", 1),
-                       "tooltip": unit_tooltip(" %", header=HOUR_HEADER)})
+                       "zoneAxis": "x", "zones": zones, "tooltip": tip})
     return {
         "chart": {"type": "line", "height": 330},
         "title": {"text": None},

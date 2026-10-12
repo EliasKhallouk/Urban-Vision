@@ -107,14 +107,12 @@ from palette import (  # noqa: E402
     tier_label,
     mode_glyph,
     mode_marker,
-    risk_zone,
     CRITICAL,
     FREQUENT_SHORT,
     LOW,
     RARE_LONG,
     RISK_MEDIAN_S,
     RISK_PCT_GT300,
-    RISK_ZONE_LABELS,
 )
 
 
@@ -503,6 +501,9 @@ def inject_style() -> None:
             color: var(--action) !important; font-weight: 700;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) > div:first-child {{ background: var(--action) !important; border-color: var(--action) !important; }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:nth-child(n+4) {{ padding: .3rem .6rem; }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:nth-child(n+4) [data-testid="stMarkdownContainer"] p {{ font-size: var(--fs-small) !important; font-weight: 600; color: var(--ink-2) !important; }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:nth-child(4) {{ margin-top: 1rem; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; padding-top: .8rem; }}
 
         /* ---- Titres ---- */
         h1, h2, h3, h4 {{ color: var(--ink) !important; letter-spacing: -.01em; line-height: var(--lh-title) !important; }}
@@ -538,40 +539,23 @@ def inject_style() -> None:
         .insight.brief li {{ margin-bottom: .3rem; line-height: var(--lh-body); }}
         .hints {{ border: 1px dashed var(--line); border-radius: 8px; padding: .7rem 1rem; color: var(--ink); margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
-        .st-key-prio_grid {{ margin: .2rem 0 .4rem; }}
-        .st-key-prio_grid [data-testid="stHorizontalBlock"] {{ gap: 0; }}
-        .st-key-prio_grid [data-testid="stMarkdownContainer"] {{ margin-bottom: 0; }}
-        .st-key-prio_grid [data-testid="stColumn"] {{ padding: .85rem 1.1rem .75rem; }}
-        .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: 1px solid rgba(43, 37, 35, .16); }}
-        .st-key-prio_heads [data-testid="stColumn"] {{ padding-top: 0; padding-bottom: .55rem; border-bottom: 2px solid var(--ink); }}
-        .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-top: 1px solid rgba(43, 37, 35, .16); border-bottom: 2px solid var(--ink); }}
-        .pg-head {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
-        .pg-head small {{ display: block; color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; margin-top: .15rem; }}
-        .pg-row {{ display: flex; align-items: center; gap: .5rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; padding-top: .2rem; }}
-        .pg-row svg {{ color: var(--ink-2); flex: none; }}
-        .pc-top {{ display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }}
-        .pc-figure {{ color: var(--ink); font-size: var(--fs-page); font-weight: 700; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }}
-        .pc-drop .pc-figure {{ color: var(--ink); }}
-        .pc-unit {{ color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); margin-top: .3rem; max-width: 16rem; }}
-        .pc-name {{ display: flex; align-items: center; gap: .5rem; margin-top: .8rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
-        .pc-detail {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin-top: .15rem; }}
-        .pc-badge {{ display: inline-flex; align-items: center; justify-content: center; min-width: 2.1rem; padding: .18rem .55rem; border-radius: 6px; font-size: var(--fs-block); font-weight: 700; line-height: 1.15; }}
-        .pc-glyph {{ font-size: var(--fs-section); line-height: 1; }}
-        .pc-slope {{ flex: none; margin-top: -.15rem; }}
-        .pc-slope text {{ fill: var(--ink-2); font-size: var(--fs-micro); font-weight: 600; }}
-        .pc-col {{ display: none; color: var(--ink-2); font-size: var(--fs-label); font-weight: 700; margin-bottom: .35rem; }}
-        @media (max-width: 640px) {{
-            .st-key-prio_heads {{ display: none; }}
-            .pc-col {{ display: block; }}
-            .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: none; border-top: 1px solid rgba(43, 37, 35, .16); }}
-            .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-bottom: none; }}
-            .st-key-prio_line_arret {{ border-top: 2px solid var(--ink); }}
-        }}
-        .pc-empty {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); padding: .35rem 0 .2rem; }}
-        .st-key-prio_grid [data-testid="stButton"] button {{ background: transparent; border: none; box-shadow: none; padding: .1rem 0; min-height: 0; margin-top: -.25rem; }}
-        .st-key-prio_grid [data-testid="stButton"] button p {{ color: var(--ink); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-decoration-color: var(--action); text-decoration-thickness: 2px; text-underline-offset: 3px; }}
-        .st-key-prio_grid [data-testid="stButton"] button:hover p {{ color: var(--action); }}
-        .st-key-prio_grid [data-testid="stButton"] button:focus-visible {{ outline: 2px solid var(--action); outline-offset: 2px; }}
+        .crumb-label {{ color: var(--ink-2); font-size: var(--fs-small); white-space: nowrap; }}
+        .crumb-sep {{ color: var(--ink-2); font-size: var(--fs-body); }}
+        .crumb-here {{ color: var(--ink); font-size: var(--fs-small); font-weight: 700; }}
+        .st-key-crumbs {{ gap: .35rem !important; margin-top: .35rem; flex-wrap: wrap; }}
+        .st-key-crumbs [data-testid="stMarkdownContainer"] p {{ margin: 0; }}
+        .st-key-crumbs {{ align-items: center !important; }}
+        .st-key-crumbs [data-testid="stElementContainer"] {{ margin: 0 !important; width: auto !important; }}
+        .st-key-crumbs [data-testid="stButton"] button {{ min-height: 0; height: auto; padding: 0; line-height: 1.45; }}
+        .st-key-crumbs [data-testid="stButton"] button p {{ color: var(--action); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }}
+        [class*="st-key-retenir_"], [class*="st-key-atraiter_"] {{ border-bottom: 1px solid var(--line); padding: .55rem 0; }}
+        .kp-text {{ color: var(--ink); font-size: var(--fs-body); line-height: var(--lh-body); max-width: 70ch; }}
+        .st-row {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; }}
+        .st-dot {{ flex: none; width: .7rem; height: .7rem; border-radius: 50%; align-self: center; box-shadow: 0 0 0 1px rgba(43, 37, 35, .18); }}
+        .st-name {{ color: var(--ink); font-size: var(--fs-body); font-weight: 700; }}
+        .st-fig {{ color: var(--ink-2); font-size: var(--fs-small); }}
+        [class*="st-key-retenir_btn_"] button, [class*="st-key-atraiter_btn_"] button {{ background: #FFFFFF; border-color: var(--action); }}
+        [class*="st-key-retenir_btn_"] button p, [class*="st-key-atraiter_btn_"] button p {{ color: var(--action); font-weight: 600; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
         .lg-item {{ display: inline-flex; align-items: center; gap: .35rem; }}
@@ -590,7 +574,8 @@ def inject_style() -> None:
         .tier-legend {{ margin: .15rem 0 .6rem; color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); }}
         .mode-card {{ flex: 1 1 0; min-width: 220px; background: #ffffff; border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: .9rem 1rem; box-shadow: 0 1px 3px rgba(43, 37, 35, .08); }}
         .hint-note {{ color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; }}
-        .fiche-title, .carte-anchor {{ scroll-margin-top: 1.2rem; }}
+        .fiche-title, .carte-anchor {{ scroll-margin-top: 13rem; }}
+        @media (max-width: 640px) {{ .fiche-title, .carte-anchor {{ scroll-margin-top: 1rem; }} }}
         .sibling-label {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-bottom: -.3rem; }}
         .fiche-title {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; line-height: var(--lh-title); letter-spacing: -.01em; margin-top: 1.6rem; padding-top: 1rem; border-top: 2px solid var(--ink); }}
         .fiche-sub {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin: .3rem 0 .9rem; }}
@@ -613,9 +598,7 @@ def inject_style() -> None:
         .contention-note {{ margin: -.35rem 0 .5rem; }}
         .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid var(--ink); }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3)::before,
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: var(--fs-section); line-height: 1; color: var(--ink-2); }}
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(5) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid var(--line); }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid var(--line); }}
         .st-key-ctx_back button {{ background: var(--action); color: #FFFFFF; border-color: var(--action); }}
         .st-key-ctx_back button p {{ color: #FFFFFF; font-size: var(--fs-small); font-weight: 700; }}
         .st-key-ctx_back button:hover {{ background: var(--ink); border-color: var(--ink); }}
@@ -669,7 +652,7 @@ def load_unmeasured_lines(_conn, cutoff_ts: int, since_ts: int | None, end_ts: i
 def unmeasured_line_message(ligne: str) -> str:
     return (f"Ligne {ligne} : desservie sur la période, mais {UNMEASURED_LABEL}. Ses trajets n'ont pas de temps "
             "réel (tous leurs départs relevés valent exactement zéro) : elle n'est ni classée ni notée. "
-            "Voir « Données & méthode ».")
+            "Voir « Méthode et lexique ».")
 
 
 def _excluded(conn, alias: str, since_day: str, end_day: str) -> tuple[str, list]:
@@ -1442,7 +1425,7 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
     )
     columns = ["stop_id", "stop_name", "direction", "lat", "lon", "route_id", "ligne", "route_type",
                "pct_a_l_heure", "pct_retard_5min", "pct_arrets_sautes", "observations",
-               "score_fiabilite", "lignes"]
+               "score_fiabilite", "lignes", "attendus", "rates"]
     if df.empty:
         return pd.DataFrame(columns=columns)
     df = ind.add_components(df)
@@ -1476,6 +1459,8 @@ def load_territorial(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | 
         "observations": out["obs"].astype(int),
         "score_fiabilite": ind.score_of(out["assured_on_time"], out["expected"]).round(1),
         "lignes": out["lignes"],
+        "attendus": out["expected"].astype(float),
+        "rates": (out["expected"] - out["assured_on_time"]).astype(float),
     }, columns=columns).reset_index(drop=True)
 
 
@@ -1924,11 +1909,18 @@ def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | N
         st.caption(f"Tracés des lignes qui desservent l'arrêt sélectionné, à la couleur de leur état : {names}.")
 
 
-PAGE_CONTENTION = "Où les bus perdent du temps"
-NAV_ITEMS = [
-    "Mon territoire", PAGE_CONTENTION, "Lignes", "Quand ?", "Modes de transport", "Perturbations", "Rapports mensuels",
-    "Données & méthode", "À propos",
-]
+PAGE_HOME = "Accueil"
+PAGE_TERRITORY = "Carte"
+PAGE_LINE = "Lignes"
+PAGE_REPORTS = "Rapports mensuels"
+PAGE_DATA = "Méthode et lexique"
+PAGE_ABOUT = "À propos"
+NAV_ITEMS = [PAGE_HOME, PAGE_TERRITORY, PAGE_LINE, PAGE_REPORTS, PAGE_DATA, PAGE_ABOUT]
+MAIN_PAGES = NAV_ITEMS[:3]
+VIEW_STOPS = "État des arrêts"
+VIEW_CONTENTION = "Temps perdu entre arrêts"
+MAP_VIEWS = [VIEW_STOPS, VIEW_CONTENTION]
+HOME_DETAILS = ["Quand ?", "Modes de transport", "Perturbations"]
 HELP_TEXTS = {
     "score": "Score sur 100 : sur 100 passages prévus, combien ont été assurés (ni arrêt non desservi, ni "
              "course supprimée) et à l'heure. Fiable à partir de 80, problématique sous 50.",
@@ -1992,16 +1984,16 @@ def lexique_slug(term: str) -> str:
 
 def lexique_link(term: str) -> str:
     return f"?lexique={lexique_slug(term)}"
-INFO_PAGES = {"Rapports mensuels", "À propos", PAGE_CONTENTION}
 DETAIL_HINT = ("Graphiques et tableaux détaillés (où, quand, quel type de retard, contexte) : activez "
                "« Vue détaillée » dans le menu de gauche.")
 GUIDE_STEPS = [
-    ("Choisissez ce que vous regardez",
-     "La barre du haut, présente sur toutes les pages : une commune, une ligne, un arrêt, et le mois. "
-     "« Revenir » ramène à ce que vous regardiez juste avant."),
+    ("Cherchez votre commune, votre ligne ou votre arrêt",
+     "La recherche en haut de chaque page. Le fil d'Ariane rappelle ce que vous regardez ; « Revenir » "
+     "ramène à ce que vous regardiez juste avant."),
     ("Lisez l'état en un mot",
-     "Chaque arrêt, ligne ou commune est **fiable** (vert olive), **à surveiller** (ocre) ou "
-     "**problématique** (orange foncé). La forme indique le mode : ● tram, ■ bus, ▲ ferry."),
+     "Chaque arrêt, ligne ou commune est **fiable**, **à surveiller** ou **problématique**. Sur les cartes, "
+     "la couleur va du bleu-vert (tout va bien) au rouge vin (problème) ; le gris veut dire « pas assez de "
+     "données ». La forme indique le mode : ● tram, ■ bus, ▲ ferry."),
     ("Cliquez pour comprendre",
      "Un clic sur un arrêt de la carte ou sur une ligne ouvre sa fiche : une phrase dit d'où vient le "
      "problème, quand il se produit et à qui s'adresser. La « Vue détaillée » du menu ajoute les graphiques."),
@@ -2028,7 +2020,6 @@ def render_sidebar() -> tuple[str, bool]:
             f'<span>Urban Vision</span></div>',
             unsafe_allow_html=True,
         )
-        st.markdown('<div class="sidebar-nav-label">Navigation</div>', unsafe_allow_html=True)
         page = st.radio("Navigation", NAV_ITEMS, index=0, label_visibility="collapsed", key="sidebar_nav")
         detailed = st.toggle("Vue détaillée", key="detailed_view",
                              help="Ajoute les graphiques d'analyse, les tableaux complets et les définitions "
@@ -2081,9 +2072,6 @@ def render_kpis(items) -> None:
         col.markdown(kpi_card(*item), unsafe_allow_html=True)
 
 
-PAGE_TERRITORY = "Mon territoire"
-PAGE_DATA = "Données & méthode"
-PAGE_LINE = "Lignes"
 STOP_VIEWS = ["Où ?", "Quand ?", "Quel type ?", "Contexte"]
 LINE_VIEWS = ["Retards : où ?", "Service non rendu", "Quand ?", "Contexte"]
 ZONE_EXPLANATIONS = {
@@ -2121,7 +2109,7 @@ def scroll_if_requested(target: str) -> None:
 
 HISTORY_KEY = "_ctx_history"
 HISTORY_MAX = 20
-CONTEXT_KEYS = ("sidebar_nav", "commune_idx", "line_id", "stop_id")
+CONTEXT_KEYS = ("sidebar_nav", "map_view", "commune_idx", "line_id", "stop_id")
 
 
 def context_snapshot(session) -> dict:
@@ -2145,10 +2133,9 @@ def go_back() -> None:
     snap = history.pop()
     st.session_state[HISTORY_KEY] = history
     for key, value in snap.items():
-        if key == "sidebar_nav" and value is None:
+        if key in ("sidebar_nav", "map_view") and value is None:
             continue
         st.session_state[key] = value
-    st.session_state["commune_topbar"] = snap.get("commune_idx") or 0
     st.session_state.pop("_from_stop", None)
 
 
@@ -2166,6 +2153,12 @@ def back_label(snap: dict | None, communes: list[str], line_names: dict, stop_na
     return f"« {page} », {where}"
 
 
+def contention_view(session=None) -> bool:
+    """Vrai quand la carte affichée est celle du temps perdu entre arrêts (période scolaire imposée)."""
+    session = st.session_state if session is None else session
+    return session.get("sidebar_nav") == PAGE_TERRITORY and session.get("map_view") == VIEW_CONTENTION
+
+
 def select_stop(stop_id: str | None) -> None:
     remember()
     st.session_state["stop_id"] = stop_id
@@ -2180,6 +2173,7 @@ def show_stop(stop_id: str) -> None:
 def open_stop(stop_id: str) -> None:
     show_stop(stop_id)
     st.session_state["sidebar_nav"] = PAGE_TERRITORY
+    st.session_state["map_view"] = VIEW_STOPS
 
 
 def show_line(route_id: str) -> None:
@@ -2203,47 +2197,54 @@ def line_from_stop(route_id: str, stop_id: str, stop_name: str) -> None:
     st.session_state["_dir_from_stop"] = stop_id
 
 
-ALL = "__tout__"
+SEARCH_KEY = "ctx_search"
 
 
-def _on_stop_search() -> None:
-    chosen = st.session_state.get("stop_search")
-    if chosen:
-        show_stop(chosen)
-
-
-def _on_ctx_commune() -> None:
-    remember()
-    st.session_state["commune_idx"] = int(st.session_state.get("commune_topbar") or 0)
-    st.session_state["stop_id"] = None
-
-
-def _on_ctx_line() -> None:
-    chosen = st.session_state.get("ctx_line")
-    if chosen in (None, ALL):
+def _on_search() -> None:
+    """Choix dans la recherche unique : commune (« c:3 »), ligne (« l:23 ») ou arrêt (« s:<quai> »)."""
+    chosen = st.session_state.get(SEARCH_KEY)
+    st.session_state[SEARCH_KEY] = None
+    if not chosen:
+        return
+    kind, _, value = str(chosen).partition(":")
+    if kind == "c":
         remember()
+        st.session_state["commune_idx"] = int(value)
+        st.session_state["stop_id"] = None
+    elif kind == "l":
+        open_line(value)
+        st.session_state["stop_id"] = None
+    elif kind == "s":
+        open_stop(value)
         st.session_state["line_id"] = None
-        return
-    if st.session_state.get("sidebar_nav") == PAGE_CONTENTION:
-        remember()
-        st.session_state["line_id"] = chosen
-        st.session_state["stop_id"] = None
-        return
-    open_line(chosen)
+
+
+def _crumb_network() -> None:
+    remember()
+    st.session_state.update({"commune_idx": 0, "line_id": None, "stop_id": None})
+
+
+def _crumb_commune() -> None:
+    remember()
+    st.session_state.update({"line_id": None, "stop_id": None})
+
+
+def _crumb_line() -> None:
+    remember()
     st.session_state["stop_id"] = None
+    st.session_state["sidebar_nav"] = PAGE_LINE
 
 
-def _on_ctx_stop() -> None:
-    chosen = st.session_state.get("ctx_stop")
-    if chosen in (None, ALL):
-        remember()
-        st.session_state["stop_id"] = None
-        return
-    if st.session_state.get("sidebar_nav") == PAGE_CONTENTION:
-        remember()
-        st.session_state["stop_id"] = chosen
-        return
-    open_stop(chosen)
+def breadcrumb(commune: str | None, line_name: str | None, stop_name: str | None) -> list[tuple[str, object]]:
+    """Étapes du fil d'Ariane (réseau, commune, ligne, arrêt) ; la dernière, ce qu'on regarde, n'est pas cliquable."""
+    steps = [("Tout le réseau", _crumb_network)]
+    if commune:
+        steps.append((commune, _crumb_commune))
+    if line_name:
+        steps.append((f"Ligne {line_name}", _crumb_line))
+    if stop_name:
+        steps.append((stop_name, None))
+    return [(label, None if i == len(steps) - 1 else cb) for i, (label, cb) in enumerate(steps)]
 
 
 def _on_table_select(table_key: str, ids_key: str, opener) -> None:
@@ -2267,18 +2268,10 @@ def apply_query_params() -> None:
     elif params.get("arret"):
         st.session_state["stop_id"] = params["arret"]
         st.session_state["sidebar_nav"] = PAGE_TERRITORY
+        st.session_state["map_view"] = VIEW_STOPS
     elif params.get("ligne"):
         st.session_state["line_id"] = params["ligne"]
         st.session_state["sidebar_nav"] = PAGE_LINE
-
-
-def stop_labels(territorial: pd.DataFrame) -> dict:
-    """Libellé de recherche de chaque arrêt : nom, direction et lignes desservies."""
-    out = {}
-    for r in territorial.itertuples():
-        direction = f" — {r.direction}" if r.direction else ""
-        out[r.stop_id] = f"{r.stop_name}{direction} ({r.lignes})"
-    return out
 
 
 def network_score(ranking: pd.DataFrame) -> float:
@@ -2333,15 +2326,20 @@ def _render_alerts(alerts: pd.DataFrame) -> None:
 
 
 def zone_banner_html(median_s: float | None, pct_gt300: float) -> str:
-    """Bandeau « Type de retard » (4 zones de `palette.risk_zone`), vide sans retard médian."""
+    """Bandeau « Type de retard » (zones de `palette.risk_zone`), vide sans retard médian. Retard médian
+    négatif au-delà du seuil : « Écart à l'horaire publié », chiffres seuls, sans phrase d'interprétation."""
     if median_s is None or pd.isna(median_s):
         return ""
-    zone = risk_zone(median_s, pct_gt300)
+    zone = dg.display_zone(median_s, pct_gt300)
+    if zone == dg.SCHEDULE_GAP:
+        text = (f"Écart médian à l'horaire publié {format_seconds(median_s, signed=True)}, "
+                f"{format_number(pct_gt300, 1)} % de passages à plus de 5 min de retard.")
+    else:
+        text = (f"{ZONE_EXPLANATIONS[zone]} Retard médian {format_seconds(median_s, signed=True)}, "
+                f"{format_number(pct_gt300, 1)} % de passages à plus de 5 min.")
     return (f'<div class="zone-banner zone-{zone}"><span class="zone-kicker">Type de retard</span>'
-            f'<span class="zone-name">{html.escape(RISK_ZONE_LABELS[zone])}</span>'
-            f'<span class="zone-text">{html.escape(ZONE_EXPLANATIONS[zone])} Retard médian '
-            f'{format_seconds(median_s, signed=True)}, {format_number(pct_gt300, 1)} % de passages à plus de '
-            f'5 min.</span></div>')
+            f'<span class="zone-name">{html.escape(dg.zone_label(zone))}</span>'
+            f'<span class="zone-text">{html.escape(text)}</span></div>')
 
 
 def _render_zone_banner(median_s: float | None, pct_gt300: float) -> None:
@@ -2461,7 +2459,7 @@ def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
 def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
                       territorial_network: pd.DataFrame, groups: pd.DataFrame, reference_score: float,
                       commune: str | None = None, prev: tuple = (None, None, None),
-                      detailed: bool = True) -> None:
+                      detailed: bool = True, period_label: str = "la période") -> None:
     """Fiche diagnostic d'un arrêt : d'où vient le problème, quand, de quel type, et quelles pistes."""
     daily = load_stop_daily(conn, cutoff, since_ts, end_ts, stop_id)
     if daily.empty:
@@ -2508,7 +2506,7 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         in_slot = dg.slot_lines(hourly_all, peak["weekday"], peak["hour"])
         if not in_slot.empty:
             peak_line = dict(zip(lines["route_id"], lines["ligne"].astype(str))).get(in_slot["route_id"].iloc[0])
-    zone = risk_zone(median, pct_gt300) if median is not None else None
+    zone = dg.display_zone(median, pct_gt300) if median is not None else None
     prev_since, prev_end, prev_label = prev
     change = (dg.score_change(daily, load_stop_daily(conn, cutoff, prev_since, prev_end, stop_id))
               if prev_since is not None else None)
@@ -2529,11 +2527,14 @@ def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     direction = info["direction"].iloc[0] if not info.empty else ""
     st.markdown(
         f'<div class="fiche-title fiche-arret">{html.escape(name)}'
-        f'{" — " + html.escape(direction) if direction else ""}</div>'
+        f'{", " + html.escape(direction) if direction else ""}</div>'
         f'<div class="fiche-sub">Lignes : {glyph_lines}</div>',
         unsafe_allow_html=True,
     )
     scroll_if_requested("fiche-arret")
+    _verdict(verdict_sentence(f"l'arrêt {html.escape(name)}", period_label, score,
+                              {"ecart": change["delta"], "marge": None, "significatif": None} if change else None,
+                              prev_label))
     group = groups[groups["members"].map(lambda m: stop_id in m)] if not groups.empty else groups
     siblings = []
     if not group.empty:
@@ -2680,12 +2681,12 @@ def excluded_line_message(conn, cutoff: int, since_ts: int | None, end_ts: int |
     share = ind.doubtful_routes(conn, since_day, end_day).get(route_id)
     detail = f" ({share:.0f} % de retards exactement nuls)" if share is not None else ""
     return (f"Ligne écartée sur la période : son temps réel est douteux{detail}, ses chiffres ne seraient pas "
-            "fiables. Voir « Données & méthode ».")
+            "fiables. Voir « Méthode et lexique ».")
 
 
 def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, route_id: str,
                       ranking_net: pd.DataFrame, disturbed: set, commune: str | None = None,
-                      prev: tuple = (None, None, None), detailed: bool = True) -> None:
+                      prev: tuple = (None, None, None), detailed: bool = True, period_label: str = "la période") -> None:
     """Fiche diagnostic d'une ligne : pourquoi elle n'est pas fiable, où, quand, et quelles pistes."""
     row = ranking_net[ranking_net["route_id"] == route_id]
     if row.empty:
@@ -2750,6 +2751,11 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         unsafe_allow_html=True,
     )
     scroll_if_requested("fiche-ligne")
+    margins = load_score_change(conn, cutoff, since_ts, end_ts, prev_since, prev_end, route_id=route_id)
+    comparison = (margins or {}).get("compare") or (
+        {"ecart": change["delta"], "marge": None, "significatif": None} if change else None)
+    _verdict(verdict_sentence(f"la ligne {html.escape(ligne)}", period_label, float(line["score_fiabilite"]),
+                              comparison, prev_label))
     back = st.session_state.get("_from_stop")
     focus_stop = back[0] if back else None
     from_dir = stop_direction_in(per_dir, focus_stop)
@@ -2789,7 +2795,7 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
     _render_zone_banner(line["retard_median_s"], float(line["pct_retard_5min"]))
     v2_text = method_v2_caption(load_method_v2(conn, cutoff, since_ts, end_ts, route_id=route_id), route_id)
     if v2_text:
-        st.caption(v2_text + " Voir « Données & méthode ».")
+        st.caption(v2_text + " Voir « Méthode et lexique ».")
     _render_brief(summary, hints)
 
     view = st.segmented_control("Détail", LINE_VIEWS, default=LINE_VIEWS[0], key="line_view",
@@ -2887,110 +2893,10 @@ def _tier_word(score: float) -> str:
     return tier_label(score, "score")
 
 
-PRIORITY_RULE = ("Arrêt et ligne les plus en retard : le plus de passages partis avec plus de 5 min de retard "
-                 "sur la période (les quais d'un même arrêt sont comptés ensemble). Arrêt et ligne en plus forte "
-                 "baisse : la plus forte baisse du score de fiabilité par rapport à la période précédente. Seuls "
-                 f"comptent les arrêts et lignes d'au moins {MIN_OBSERVATIONS} passages.")
-ROW_ICONS = {
-    "arret": '<path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
-    "ligne": '<rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 11h14M8 18v3M16 18v3"/>',
-}
-PRIORITY_GRID = (("arret", "Arrêt", "arret_retard", "arret_baisse"), ("ligne", "Ligne", "ligne_retard", "ligne_baisse"))
-SLOPE_WIDTH, SLOPE_HEIGHT, SLOPE_PAD, SLOPE_LABEL = 150, 64, 7, 22
-PRIORITY_COLUMNS = {"retard": "Le plus de retards", "baisse": "La plus forte baisse"}
-
-
-def _row_icon(kind: str) -> str:
-    return (f'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" '
-            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ROW_ICONS[kind]}</svg>')
-
-
-def _tier_colors(score: float) -> tuple[str, str]:
-    color = score_color(score)
-    return color, ink_on(color)
-
-
-def line_badge_html(name: str, score: float) -> str:
-    """Pastille d'une ligne, à la façon des pictogrammes du réseau : fond à la couleur de son état."""
-    bg, fg = _tier_colors(score)
-    return (f'<span class="pc-badge" style="background:{bg};color:{fg}" '
-            f'title="{html.escape(tier_label(score).capitalize())}">{html.escape(name)}</span>')
-
-
-def stop_mark_html(route_type, score: float) -> str:
-    """Glyphe du mode de l'arrêt (● ■ ▲) à la couleur de son état, comme sur la carte."""
-    color, _ = _tier_colors(score)
-    return (f'<span class="pc-glyph" style="color:{color}" aria-hidden="true">'
-            f'{mode_glyph(route_type if route_type is not None else 3)}</span>')
-
-
-def slope_svg(previous: float, score: float) -> str:
-    """Pente du score entre les deux périodes, sur l'échelle 0–100, avec les seuils 80 et 50 en pointillés."""
-    def y(v: float) -> float:
-        return round(SLOPE_PAD + (100 - max(0.0, min(100.0, v))) / 100 * (SLOPE_HEIGHT - 2 * SLOPE_PAD), 1)
-
-    x0, x1 = SLOPE_LABEL + 8, SLOPE_WIDTH - 8
-    guides = "".join(f'<text x="0" y="{y(v) + 4}">{v}</text><line x1="{SLOPE_LABEL}" x2="{SLOPE_WIDTH}" y1="{y(v)}" '
-                     f'y2="{y(v)}" stroke="{INK_MUTED}" stroke-opacity=".45" stroke-width="1" stroke-dasharray="2 3"/>' for v in (80, 50))
-    return (f'<svg class="pc-slope" width="{SLOPE_WIDTH}" height="{SLOPE_HEIGHT}" viewBox="0 0 {SLOPE_WIDTH} '
-            f'{SLOPE_HEIGHT}" role="img" aria-label="Score passé de {format_number(previous, 1)} à '
-            f'{format_number(score, 1)} sur 100">{guides}'
-            f'<line x1="{x0}" y1="{y(previous)}" x2="{x1}" y2="{y(score)}" stroke="{INK_MUTED}" stroke-width="3" '
-            f'stroke-linecap="round"/><circle cx="{x0}" cy="{y(previous)}" r="5" fill="{score_color(previous)}" '
-            f'stroke="#FFFFFF" stroke-width="2"/><circle cx="{x1}" cy="{y(score)}" r="6.5" '
-            f'fill="{score_color(score)}" stroke="#FFFFFF" stroke-width="2"/></svg>')
-
-
-def priority_cell_html(kind: str, item: dict | None, prev_label: str | None) -> str:
-    """Case du tableau des priorités : chiffre, puis l'arrêt ou la ligne concerné(e)."""
-    drop = kind.endswith("baisse")
-    column = f'<div class="pc-col">{PRIORITY_COLUMNS["baisse" if drop else "retard"]}</div>'
-    if item is None:
-        text = ("Pas de période de comparaison." if drop and not prev_label
-                else "Aucune baisse sur la période." if drop else "Pas assez de passages sur la période.")
-        return f'<div class="pc">{column}<div class="pc-empty">{text}</div></div>'
-    if item["kind"] == "ligne":
-        name = f'{line_badge_html(item["name"], item["score"])}<span>Ligne {html.escape(item["name"])}</span>'
-    else:
-        name = f'{stop_mark_html(item.get("route_type"), item["score"])}<span>{html.escape(item["name"])}</span>'
-    if drop:
-        figure = format_number(item["score"] - item["previous"], 1, signed=True)
-        unit = f"points de score depuis {prev_label}" if prev_label else "points de score"
-        detail = f'{format_number(item["previous"], 1)} puis {format_number(item["score"], 1)} sur 100'
-        slope = slope_svg(item["previous"], item["score"])
-    else:
-        figure, unit, slope = item["figure"], "passages partis avec plus de 5 min de retard", ""
-        detail = f'score {format_number(item["score"], 1)} sur 100'
-    if item.get("detail"):
-        detail = f'{html.escape(item["detail"])}, {detail}'
-    return (f'<div class="pc{" pc-drop" if drop else ""}">{column}<div class="pc-top"><div>'
-            f'<div class="pc-figure">{figure}</div><div class="pc-unit">{html.escape(unit)}</div></div>{slope}</div>'
-            f'<div class="pc-name">{name}</div><div class="pc-detail">{detail}</div></div>')
-
-
-def _render_priorities(items: dict, prev_label: str | None) -> None:
-    st.markdown("#### Priorités du moment")
-    widths = [0.42, 1, 1]
-    with st.container(key="prio_grid"):
-        with st.container(key="prio_heads"):
-            _, h1, h2 = st.columns(widths, gap="small")
-            h1.markdown('<div class="pg-head">Le plus de retards<small>passages partis avec plus de 5 min de '
-                        'retard sur la période</small></div>', unsafe_allow_html=True)
-            since = f"par rapport à {html.escape(prev_label)}" if prev_label else "par rapport à la période précédente"
-            h2.markdown(f'<div class="pg-head">La plus forte baisse<small>du score de fiabilité, {since}</small></div>',
-                        unsafe_allow_html=True)
-        for row_kind, row_label, *kinds in PRIORITY_GRID:
-            with st.container(key=f"prio_line_{row_kind}"):
-                cols = st.columns(widths, gap="small")
-                cols[0].markdown(f'<div class="pg-row">{_row_icon(row_kind)}{row_label}</div>', unsafe_allow_html=True)
-                for col, kind in zip(cols[1:], kinds):
-                    item = items.get(kind)
-                    with col:
-                        st.markdown(priority_cell_html(kind, item, prev_label), unsafe_allow_html=True)
-                        if item is not None:
-                            opener = open_line if item["kind"] == "ligne" else show_stop
-                            st.button(f"Ouvrir la fiche {'de la ligne' if item['kind'] == 'ligne' else 'de l’arrêt'}",
-                                      key=f"prio_{kind}", on_click=opener, args=(item["id"],))
+PRIORITY_RULE = ("À retenir : trois écarts qui dépassent la marge d'incertitude à 95 % (évolution du score, "
+                 "ligne en plus forte baisse, ligne nettement la moins fiable). Arrêts à traiter en premier : les "
+                 "plus de passages ratés (attendus moins assurés et à l'heure), quais d'un même arrêt comptés "
+                 f"ensemble, arrêts d'au moins {MIN_OBSERVATIONS} passages.")
 
 
 def map_legend_html() -> str:
@@ -3009,34 +2915,10 @@ def render_page_territory(c: PageContext) -> None:
     territorial_network = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None)
     reference = network_score(c.ranking_net)
     if territorial.empty:
-        st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
-    elif c.commune is not None:
-        local = network_score(c.ranking)
-        gap = local - reference
-        comparison = ("au niveau de l’ensemble du réseau" if abs(gap) < 1
-                      else f"{abs(gap):.0f} point(s) {'au-dessus' if gap > 0 else 'en dessous'} de l’ensemble du réseau")
-        _verdict(f'La fiabilité de <b>{html.escape(c.commune)}</b> est de <b>{local:.0f}/100</b> '
-                 f'({_tier_word(local)}), {comparison}.')
+        st.info("Aucun arrêt exploitable ici pour cette période. Choisissez une autre période ou tout le réseau.")
     groups = grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
-    prog = load_engagement_progression(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts,
-                                       commune=c.commune)
-    before = (load_territorial(c.conn, c.cutoff, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
-              if c.prev_since_ts is not None else None)
-    _render_priorities(dg.priorities(groups, c.visible_ranking, territorial, before, prog, MIN_OBSERVATIONS,
-                                     prev_label=c.period.prev_label), c.period.prev_label)
-
     st.markdown('<div class="carte-anchor"></div>', unsafe_allow_html=True)
     scroll_if_requested("carte")
-    st.markdown("#### Carte des arrêts")
-    labels = stop_labels(territorial_network)
-    options = sorted(territorial["stop_id"].tolist() if not territorial.empty else [],
-                     key=lambda sid: labels.get(sid, sid))
-    current = st.session_state.get("stop_id")
-    if current and current not in options:
-        options = [current] + options
-    st.session_state["stop_search"] = current
-    st.selectbox("Chercher un arrêt", options, key="stop_search", placeholder="Tapez le nom d'un arrêt…",
-                 format_func=lambda sid: labels.get(sid, sid), on_change=_on_stop_search)
     st.markdown(map_legend_html(), unsafe_allow_html=True)
     selected = st.session_state.get("stop_id")
     _territorial_map(territorial, groups, c.commune, selected,
@@ -3046,7 +2928,9 @@ def render_page_territory(c: PageContext) -> None:
                           territorial_network,
                           grouped_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=None),
                           reference, c.commune, (c.prev_since_ts, c.prev_end_ts, c.period.prev_label),
-                          detailed=c.detailed)
+                          detailed=c.detailed, period_label=c.period.label)
+    else:
+        st.caption("Cliquez sur un arrêt pour ouvrir sa fiche, ou cherchez-le en haut de la page.")
 
     if not c.detailed:
         return
@@ -3122,8 +3006,7 @@ def _ranking_block(c: PageContext) -> None:
     graphique_cliquable(ranking_chart(chart_data), key="ranking_chart", on_click=_on_ranking_click, height=420)
 
 
-def render_page_lines(c: PageContext) -> None:
-    st.markdown("### Quelles lignes posent problème, et pourquoi ?")
+def _lines_overview(c: PageContext) -> None:
     if not c.detailed:
         _ranking_block(c)
     else:
@@ -3144,18 +3027,25 @@ def render_page_lines(c: PageContext) -> None:
                 selection_mode="single-row")
     if c.disturbed:
         st.caption(f"⚠ {len(c.disturbed & set(c.ranking['route_id']))} ligne(s) du périmètre font l'objet "
-                   "d'une perturbation signalée par TBM sur la période — sans lien de causalité établi avec "
+                   "d'une perturbation signalée par TBM sur la période, sans lien de causalité établi avec "
                    "les statistiques présentées.")
     if c.commune is not None:
         st.caption("Classement restreint aux arrêts de la commune ; la fiche porte sur toute la ligne, car "
                    "le retard subi dans une commune se forme souvent ailleurs sur le parcours.")
 
-    if st.session_state.get("line_id") is None and not c.visible_ranking.empty:
-        st.session_state["line_id"] = str(c.visible_ranking.iloc[0]["route_id"])
-    if st.session_state.get("line_id"):
-        render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["line_id"],
-                          c.ranking_net, c.disturbed, c.commune,
-                          (c.prev_since_ts, c.prev_end_ts, c.period.prev_label), detailed=c.detailed)
+
+def render_page_lines(c: PageContext) -> None:
+    line_id = st.session_state.get("line_id")
+    if line_id:
+        render_line_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, line_id, c.ranking_net, c.disturbed, c.commune,
+                          (c.prev_since_ts, c.prev_end_ts, c.period.prev_label), detailed=c.detailed,
+                          period_label=c.period.label)
+        with st.expander("Classement des lignes"):
+            _lines_overview(c)
+        return
+    st.markdown("### Les lignes")
+    st.caption("Cherchez votre ligne en haut de la page, ou cliquez sur une barre pour ouvrir sa fiche.")
+    _lines_overview(c)
 
 
 def _period_verdict(period: pd.DataFrame) -> str | None:
@@ -3471,7 +3361,7 @@ def _render_method(c: PageContext) -> None:
         "retirent ; la fiche ligne dit lequel des deux pèse le plus.\n"
         "- **Évolution** : le score de la période comparé à celui de la période précédente (le mois précédent "
         "pour un mois, la même durée juste avant pour les autres périodes).\n"
-        "- **Priorités du moment** : " + PRIORITY_RULE + "\n"
+        "- **À retenir et arrêts à traiter** : " + PRIORITY_RULE + "\n"
         "- **Pistes** : ce sont des indices à confirmer sur le terrain, jamais des conclusions.\n"
         "- **Créneaux** : les arrêts non desservis et les courses supprimées n'ont pas d'heure dans les "
         "données ; le score d'un créneau est sa part de passages à l'heure × le service assuré de ses jours "
@@ -3739,8 +3629,7 @@ def contention_scope(commune: str | None, route_id: str | None, line_name: str |
 
 def render_page_contention(c: PageContext) -> None:
     meta = load_troncons_meta(c.conn)
-    title, choice, pick = st.columns([0.5, 0.25, 0.25], vertical_alignment="bottom")
-    title.markdown("### Où les bus perdent du temps")
+    choice, pick, _ = st.columns([0.26, 0.26, 0.48], vertical_alignment="bottom")
     if not meta.get("calcule_le"):
         st.info(contention_empty_message(TRONCONS_TIMER.exists()))
         return
@@ -3829,7 +3718,7 @@ def render_page_reports(c: PageContext) -> None:
                           "dl_commune")
     st.caption("Les rapports sont produits automatiquement le 1er de chaque mois à partir des données TBM "
                "(Licence Ouverte 2.0). Ils peuvent être librement réutilisés en citant « Urban Vision, d'après "
-               "les données TBM ». Le score de fiabilité a changé de calcul le 11/10/2026 (voir « Données & méthode ») : "
+               "les données TBM ». Le score de fiabilité a changé de calcul le 11/10/2026 (voir « Méthode et lexique ») : "
                "les rapports antérieurs, jusqu'à celui de septembre 2026, utilisent l'ancien calcul (ponctualité "
                "− 2 × arrêts non desservis) et ne se comparent pas directement aux suivants.")
 
@@ -3885,76 +3774,327 @@ def render_page_about(c: PageContext) -> None:
     )
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_score_change(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None, prev_since_ts: int | None,
+                      prev_end_ts: int | None, commune: str | None = None, route_id: str | None = None) -> dict | None:
+    """Score de la période et de la précédente, avec leurs marges à 95 % et leur comparaison (`ind.compare`)."""
+    def at(lo, hi):
+        return ind.indicators(_conn, *_day_bounds(lo, hi, cutoff_ts), routes=[route_id] if route_id else None,
+                              communes=[commune] if commune else None)
+    now = at(since_ts, end_ts)
+    if not now.disponible:
+        return None
+    out = {"score": now.score, "marge": now.marge, "previous": None, "compare": None}
+    if prev_since_ts is not None:
+        prev = at(prev_since_ts, prev_end_ts)
+        if prev.disponible:
+            out["previous"] = prev.score
+            out["compare"] = ind.compare(now, prev)
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_route_indicators(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                          commune: str | None = None) -> pd.DataFrame:
+    """Score et marge à 95 % de chaque ligne (`ind.route_indicators`), sur les arrêts de la commune s'il y en a une."""
+    return ind.route_indicators(_conn, *_day_bounds(since_ts, end_ts, cutoff_ts),
+                                communes=[commune] if commune else None)
+
+
+def _points(value: float) -> str:
+    return f"{format_number(abs(value), 1)} point{'s' if abs(value) >= 2 else ''}"
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:] if text[:1].isalpha() and not text[1:2].isupper() else text
+
+
+def verdict_sentence(subject: str, period_label: str, score: float, comparison: dict | None,
+                     prev_label: str | None) -> str:
+    """Phrase verdict en tête d'écran : l'état en un mot, le score en clair, l'évolution jugée contre la marge."""
+    text = (f"Sur {html.escape(_lower_first(period_label))}, {subject} est <b>{tier_label(score)}</b> : "
+            f"{score:.0f} passages sur 100 ont été assurés et à l'heure")
+    if not prev_label or not comparison:
+        return text + "."
+    gap, margin, significant = comparison["ecart"], comparison["marge"], comparison["significatif"]
+    prev = html.escape(_lower_first(prev_label))
+    if significant is None:
+        return text + f", {evolution_words(gap)} par rapport à {prev}."
+    if significant:
+        return text + (f", <b>{'en baisse' if gap < 0 else 'en hausse'} de {_points(gap)}</b> par rapport à {prev} "
+                       f"(plus que la marge d'incertitude de ± {format_number(margin, 1)}).")
+    return text + (f", stable par rapport à {prev} : l'écart ({format_number(gap, 1, signed=True)}) reste dans la "
+                   f"marge d'incertitude de ± {format_number(margin, 1)}.")
+
+
+def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str | None, lines_now: pd.DataFrame,
+               lines_before: pd.DataFrame | None, line_names: dict) -> list[dict]:
+    """Trois choses à retenir, chacune fondée sur un écart qui dépasse la marge d'incertitude à 95 %.
+
+    1. L'évolution du score du périmètre (stable si l'écart reste dans la marge) ;
+    2. la ligne dont la baisse dépasse le plus sa marge combinée (√(m₁² + m₂²)) ;
+    3. la ligne la moins fiable dont le score, marge comprise, reste sous celui du périmètre marge comprise.
+    Les lignes au temps réel douteux sont écartées. Chaque point : {"text": html, "route_id": … ou None}.
+    """
+    out = []
+    prev = html.escape(_lower_first(prev_label)) if prev_label else None
+    cmp = (change or {}).get("compare")
+    if change is None:
+        return out
+    if cmp is None or cmp["significatif"] is None:
+        out.append({"text": f"Le score {of_scope} est de <b>{change['score']:.0f} sur 100</b>"
+                            + (f" (pas de comparaison possible avec {prev})." if prev else "."), "route_id": None})
+    elif cmp["significatif"]:
+        verb = "baissé" if cmp["ecart"] < 0 else "progressé"
+        out.append({"text": f"Le score {of_scope} a <b>{verb} de {_points(cmp['ecart'])}</b> par rapport à {prev} "
+                            f"({change['previous']:.0f} puis {change['score']:.0f} sur 100), plus que la marge "
+                            f"d'incertitude de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
+    else:
+        out.append({"text": f"Le score {of_scope} est <b>stable</b> par rapport à {prev} : l'écart "
+                            f"({format_number(cmp['ecart'], 1, signed=True)}) reste dans la marge d'incertitude "
+                            f"de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
+    now = lines_now[~lines_now["temps_reel_douteux"].astype(bool)] if not lines_now.empty else lines_now
+    if lines_before is not None and not lines_before.empty and not now.empty:
+        both = now.merge(lines_before[["route_id", "score_v2", "marge_v2"]], on="route_id", suffixes=("", "_avant"))
+        both = both.dropna(subset=["score_v2", "marge_v2", "score_v2_avant", "marge_v2_avant"])
+        both["ecart"] = both["score_v2"] - both["score_v2_avant"]
+        both["marge_ecart"] = (both["marge_v2"] ** 2 + both["marge_v2_avant"] ** 2) ** 0.5
+        drops = both[both["ecart"] < -both["marge_ecart"]].sort_values("ecart")
+        if drops.empty:
+            out.append({"text": f"Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à {prev}.",
+                        "route_id": None})
+        else:
+            r = drops.iloc[0]
+            name = html.escape(line_names.get(r["route_id"], r["route_id"]))
+            out.append({"text": f"La ligne <b>{name}</b> a le plus baissé : {r['score_v2_avant']:.0f} puis "
+                                f"<b>{r['score_v2']:.0f} sur 100</b>, une baisse de {_points(r['ecart'])}, plus que "
+                                f"sa marge d'incertitude de ± {format_number(r['marge_ecart'], 1)}.",
+                        "route_id": str(r["route_id"])})
+    if change.get("marge") is not None and not now.empty:
+        floor = change["score"] - change["marge"]
+        clear = now.dropna(subset=["score_v2", "marge_v2"])
+        clear = clear[clear["score_v2"] + clear["marge_v2"] < floor]
+        if clear.empty:
+            out.append({"text": f"Aucune ligne n'est nettement en dessous {of_scope} une fois la marge "
+                                "d'incertitude prise en compte.", "route_id": None})
+        else:
+            r = clear.assign(haut=clear["score_v2"] + clear["marge_v2"]).sort_values("haut").iloc[0]
+            name = html.escape(line_names.get(r["route_id"], r["route_id"]))
+            out.append({"text": f"La ligne <b>{name}</b> est la moins fiable, même en tenant compte de "
+                                f"l'incertitude : <b>{r['score_v2']:.0f} sur 100</b> (± {format_number(r['marge_v2'], 1)}), "
+                                f"contre {change['score']:.0f} pour {scope}.", "route_id": str(r["route_id"])})
+    return out[:3]
+
+
+def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 5) -> pd.DataFrame:
+    """Arrêts à traiter en premier : quais regroupés par nom et commune, classés par passages ratés
+    (attendus moins assurés et à l'heure), qui combinent le score et le nombre de passages.
+    `stop_id` désigne le quai qui rate le plus de passages."""
+    columns = ["stop_id", "stop_name", "commune", "rates", "attendus", "score", "route_type"]
+    df = territorial[territorial["observations"] >= MIN_OBSERVATIONS] if not territorial.empty else territorial
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    df = df.assign(commune=df["stop_id"].map(stop_communes).fillna(""))
+    rows = []
+    for (name, commune), group in df.groupby(["stop_name", "commune"], sort=False):
+        rep = group.sort_values("rates", ascending=False).iloc[0]
+        expected = float(group["attendus"].sum())
+        missed = float(group["rates"].sum())
+        rows.append({"stop_id": rep["stop_id"], "stop_name": name, "commune": commune, "rates": missed,
+                     "attendus": expected, "score": 100 * (expected - missed) / expected if expected else float("nan"),
+                     "route_type": rep["route_type"]})
+    return pd.DataFrame(rows, columns=columns).sort_values("rates", ascending=False).head(limit).reset_index(drop=True)
+
+
+def _scope_words(commune: str | None) -> tuple[str, str]:
+    """Sujet et complément du périmètre : (« le réseau », « du réseau ») ou (« Mérignac », « de Mérignac »)."""
+    if not commune:
+        return "le réseau", "du réseau"
+    name = html.escape(commune)
+    return name, (f"d'{name}" if name[:1].lower() in "aeiouyéèêâîôûh" else f"de {name}")
+
+
+def render_home_header(c: PageContext) -> None:
+    ranking = c.ranking
+    total = int(ranking["observations"].sum())
+    on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))
+    delay = float((ranking["observations"] * ranking["retard_moyen_s"]).sum() / max(total, 1))
+    skipped_total = int(ranking["skipped"].sum())
+    eligible_total = int(ranking["eligible"].sum())
+    skip_rate = skipped_total / max(eligible_total, 1) * 100
+    score = network_score(ranking)
+    st.markdown('<div class="eyebrow">Observatoire de la fiabilité, Bordeaux Métropole</div>', unsafe_allow_html=True)
+    st.title(f"La fiabilité de {c.commune}, en un coup d’œil." if c.commune else
+             "La fiabilité du réseau, en un coup d’œil.")
+    change = load_score_change(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
+    subject, _ = _scope_words(c.commune)
+    _verdict(verdict_sentence(subject, c.period.label, score, (change or {}).get("compare"), c.period.prev_label))
+    render_kpis(header_kpis(score, on_time, delay, skip_rate, total, len(ranking), skipped_total, eligible_total,
+                            c.commune is not None, c.detailed))
+    note = exclusion_note(load_exclusions(c.conn, *_day_bounds(c.since_ts, c.end_ts, c.cutoff)))
+    if note:
+        st.caption(note)
+
+
+def render_page_home(c: PageContext) -> None:
+    render_home_header(c)
+    scope, of_scope = _scope_words(c.commune)
+    change = load_score_change(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
+    lines_now = load_route_indicators(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    lines_before = (load_route_indicators(c.conn, c.cutoff, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
+                    if c.prev_since_ts is not None else None)
+    names = {str(r.route_id): str(r.ligne) for r in c.ranking_net.itertuples()}
+    points = key_points(scope, of_scope, change, c.period.prev_label, lines_now, lines_before, names)
+    st.markdown("### À retenir")
+    for i, point in enumerate(points):
+        with st.container(key=f"retenir_{i}"):
+            left, right = st.columns([5, 1.3], vertical_alignment="center")
+            left.markdown(f'<div class="kp-text">{point["text"]}</div>', unsafe_allow_html=True)
+            if point["route_id"]:
+                right.button("Voir la ligne", key=f"retenir_btn_{i}", on_click=open_line, args=(point["route_id"],))
+    st.caption("Un écart n'est retenu que s'il dépasse la marge d'incertitude à 95 %, due aux différences d'un "
+               "jour à l'autre : en dessous, il peut venir du hasard.")
+
+    st.markdown("### Arrêts à traiter en premier")
+    territorial = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+    _, stop_communes = load_place_names(c.conn)
+    top = stops_to_treat(territorial, stop_communes)
+    if top.empty:
+        st.info("Pas assez de passages pour classer les arrêts sur cette période.")
+    for r in top.itertuples():
+        with st.container(key=f"atraiter_{r.Index}"):
+            left, right = st.columns([5, 1.3], vertical_alignment="center")
+            where = f", {html.escape(r.commune)}" if r.commune else ""
+            left.markdown(
+                f'<div class="st-row"><span class="st-dot" style="background:{score_color(r.score)}"></span>'
+                f'<span class="st-name">{html.escape(r.stop_name)}{where}</span>'
+                f'<span class="st-fig">{fmt_int(r.rates)} passages ratés sur {fmt_int(r.attendus)} prévus, '
+                f'score {r.score:.0f} sur 100</span></div>', unsafe_allow_html=True)
+            right.button("Voir l'arrêt", key=f"atraiter_btn_{r.Index}", on_click=open_stop, args=(r.stop_id,))
+    if not top.empty:
+        st.caption("Classés par passages ratés (course supprimée, arrêt non desservi ou départ hors de la plage "
+                   "−1 min / +5 min), tous quais confondus : un arrêt très fréquenté un peu en retard peut passer "
+                   "devant un petit arrêt très en retard.")
+
+    st.markdown("### Voir le détail")
+    detail = st.segmented_control("Détail", HOME_DETAILS, key="home_detail", label_visibility="collapsed")
+    if detail == "Quand ?":
+        render_page_when(c)
+    elif detail == "Modes de transport":
+        render_page_network(c)
+    elif detail == "Perturbations":
+        render_page_perturbations(c)
+
+
+def render_page_map(c: PageContext) -> None:
+    st.session_state.setdefault("map_view", VIEW_STOPS)
+    view = st.segmented_control("Ce que montre la carte", MAP_VIEWS, key="map_view",
+                                label_visibility="collapsed") or VIEW_STOPS
+    if view == VIEW_CONTENTION:
+        render_page_contention(c)
+    else:
+        render_page_territory(c)
+
+
 PAGES = {
-    "Mon territoire": render_page_territory,
-    PAGE_CONTENTION: render_page_contention,
-    "Lignes": render_page_lines,
-    "Quand ?": render_page_when,
-    "Modes de transport": render_page_network,
-    "Perturbations": render_page_perturbations,
-    "Rapports mensuels": render_page_reports,
-    "Données & méthode": render_page_data,
-    "À propos": render_page_about,
+    PAGE_HOME: lambda c: render_page_home(c),
+    PAGE_TERRITORY: lambda c: render_page_map(c),
+    PAGE_LINE: render_page_lines,
+    PAGE_REPORTS: render_page_reports,
+    PAGE_DATA: render_page_data,
+    PAGE_ABOUT: render_page_about,
 }
 
 
-def line_options(ranking: pd.DataFrame, current: str | None, unmeasured: pd.DataFrame | None = None) -> dict:
-    """Lignes proposées dans la barre : « Toutes les lignes », puis les lignes du périmètre, la moins fiable d'abord,
-    puis les lignes desservies sans mesure (`load_unmeasured_lines`), signalées comme non mesurables."""
-    out = {ALL: "Toutes les lignes"}
-    for r in ranking.sort_values("score_fiabilite").itertuples():
-        out[r.route_id] = f"{mode_glyph(r.route_type)} {r.ligne} · {tier_label(r.score_fiabilite)}"
+@st.cache_data(ttl=3600)
+def load_place_names(_conn) -> tuple[dict, dict]:
+    """Nom long de chaque ligne (route_id -> terminus) et commune de chaque arrêt (stop_id -> commune)."""
+    lines = dict(_conn.execute("SELECT route_id, COALESCE(route_long_name, '') FROM routes"))
+    communes = dict(_conn.execute("SELECT stop_id, commune_name FROM stop_municipalities"))
+    return lines, communes
+
+
+def _natural(text: str) -> tuple:
+    return tuple(int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(text)))
+
+
+def search_options(communes: list[str], ranking: pd.DataFrame, unmeasured: pd.DataFrame | None,
+                   stops: pd.DataFrame, line_names: dict, stop_communes: dict) -> dict:
+    """Choix de la recherche unique : communes, lignes (avec leur état, ou « sans temps réel ») et arrêts
+    regroupés par nom et commune, tous quais confondus (la clé désigne le quai le plus fréquenté)."""
+    out = {f"c:{i}": f"Commune : {name}" for i, name in enumerate(communes, start=1)}
+    lines = {}
+    for r in ranking.itertuples():
+        lines[str(r.route_id)] = (str(r.ligne), tier_label(float(r.score_fiabilite)))
     if unmeasured is not None:
         for r in unmeasured.itertuples():
-            out.setdefault(r.route_id, f"{mode_glyph(r.route_type)} {r.ligne} · {UNMEASURED_LABEL}")
-    if current and current not in out:
-        out[current] = f"Ligne {current}"
-    return out
-
-
-def stop_options(stops: pd.DataFrame, current: str | None, current_label: str | None = None) -> dict:
-    """Arrêts proposés dans la barre, par ordre alphabétique : nom et direction."""
-    out = {ALL: "Tous les arrêts"}
+            lines.setdefault(str(r.route_id), (str(r.ligne), UNMEASURED_LABEL))
+    for rid, (name, state) in sorted(lines.items(), key=lambda kv: _natural(kv[1][0])):
+        long_name = line_names.get(rid) or ""
+        out[f"l:{rid}"] = f"Ligne {name}{f' : {long_name}' if long_name else ''} ({state})"
     if not stops.empty:
-        for r in stops.sort_values(["stop_name", "direction"]).itertuples():
-            out[r.stop_id] = f"{r.stop_name} — {r.direction}" if r.direction else str(r.stop_name)
-    if current and current not in out:
-        out[current] = current_label or current
-    return out
+        df = stops.assign(commune=stops["stop_id"].map(stop_communes).fillna(""))
+        reps = df.sort_values("observations", ascending=False).drop_duplicates(["stop_name", "commune"])
+        served = df.groupby(["stop_name", "commune"])["lignes"].agg(
+            lambda v: sorted({ln.strip() for x in v for ln in str(x).split(",") if ln.strip()}, key=_natural))
+        for r in reps.itertuples():
+            lines_here = served[(r.stop_name, r.commune)]
+            shown = ", ".join(lines_here[:4]) + ("…" if len(lines_here) > 4 else "")
+            where = f", {r.commune}" if r.commune else ""
+            out[f"s:{r.stop_id}"] = (f"Arrêt : {r.stop_name}{where} (lignes {shown})" if shown
+                                     else f"Arrêt : {r.stop_name}{where}")
+    return dict(sorted(out.items(), key=lambda kv: (kv[0][0] != "c", kv[0][0] != "l", _natural(kv[1]))))
 
 
-def render_context_bar(conn, cutoff: int, since_ts, end_ts, commune: str | None, commune_options: list,
-                       ranking: pd.DataFrame, cols) -> None:
-    """Fil d'Ariane persistant : Revenir, commune, ligne, arrêt ; présent sur toutes les pages."""
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def load_search_options(_conn, cutoff_ts: int, since_ts: int | None, end_ts: int | None,
+                        communes: tuple, _ranking: pd.DataFrame) -> dict:
+    """Choix de la recherche unique pour la période (`search_options`), gardés en cache."""
+    line_names, stop_communes = load_place_names(_conn)
+    return search_options(list(communes), _ranking, load_unmeasured_lines(_conn, cutoff_ts, since_ts, end_ts, commune=None),
+                          load_territorial(_conn, cutoff_ts, since_ts, end_ts, commune=None), line_names, stop_communes)
+
+
+def render_context_bar(conn, cutoff: int, since_ts, end_ts, commune: str | None, communes: list[str],
+                       ranking_net: pd.DataFrame, cols, crumbs_box) -> None:
+    """Barre persistante : « Revenir », recherche unique (commune, ligne, arrêt) et fil d'Ariane cliquable."""
     line_id = st.session_state.get("line_id")
     stop_id = st.session_state.get("stop_id")
-    lines = line_options(ranking, line_id, load_unmeasured_lines(conn, cutoff, since_ts, end_ts, commune=commune))
-    if line_id:
-        stops_df = load_line_stops(conn, cutoff, since_ts, end_ts, line_id)
-        if commune and not stops_df.empty:
-            stops_df = stops_df[stops_df["commune"] == commune]
-    else:
-        stops_df = load_territorial(conn, cutoff, since_ts, end_ts, commune=commune)
     network = load_territorial(conn, cutoff, since_ts, end_ts, commune=None)
-    network_names = stop_labels(network)
-    known = network[["stop_id", "stop_name", "direction"]]
-    stops = stop_options(known[known["stop_id"].isin(stops_df["stop_id"])] if not stops_df.empty else known.head(0),
-                         stop_id, network_names.get(stop_id))
-    st.session_state["ctx_line"] = line_id if line_id in lines else ALL
-    st.session_state["ctx_stop"] = stop_id if stop_id in stops else ALL
+    unmeasured = load_unmeasured_lines(conn, cutoff, since_ts, end_ts, commune=None)
+    options = load_search_options(conn, cutoff, since_ts, end_ts, tuple(communes), ranking_net)
+    short = {str(r.route_id): str(r.ligne) for r in ranking_net.itertuples()}
+    if unmeasured is not None:
+        short.update({str(r.route_id): str(r.ligne) for r in unmeasured.itertuples() if str(r.route_id) not in short})
+    plain = {}
+    for sid in {stop_id} | {snap.get("stop_id") for snap in (st.session_state.get(HISTORY_KEY) or [])[-1:]}:
+        row = network[network["stop_id"] == sid] if sid else network.head(0)
+        if not row.empty:
+            r = row.iloc[0]
+            plain[sid] = f"{r['stop_name']}, {r['direction']}" if r["direction"] else str(r["stop_name"])
     history = st.session_state.get(HISTORY_KEY) or []
-    target = back_label(history[-1] if history else None, commune_options[1:],
-                        {k: v.split(" · ")[0].split(" ", 1)[-1] for k, v in lines.items()}, network_names)
+    target = back_label(history[-1] if history else None, communes, short, plain)
     with cols[0]:
         st.button("← Revenir", key="ctx_back", on_click=go_back, disabled=target is None, width="stretch",
                   help=f"Revenir à {target}" if target else "Rien à quoi revenir pour l'instant.")
-    with cols[2]:
-        st.selectbox("Ligne", list(lines), format_func=lambda k: lines[k], key="ctx_line",
-                     on_change=_on_ctx_line, help="Ouvre la fiche de la ligne (page « Lignes »).")
-    with cols[3]:
-        st.selectbox("Arrêt de la ligne" if line_id else "Arrêt", list(stops), format_func=lambda k: stops[k],
-                     key="ctx_stop", on_change=_on_ctx_stop,
-                     help="Ouvre la fiche de l'arrêt sous la carte (page « Mon territoire »).")
+    with cols[1]:
+        st.session_state.setdefault(SEARCH_KEY, None)
+        st.selectbox("Votre commune, votre ligne ou votre arrêt", list(options), index=None,
+                     format_func=lambda k: options.get(k, k), key=SEARCH_KEY, on_change=_on_search,
+                     placeholder="Tapez un nom : Mérignac, 23, Quinconces…")
+    steps = breadcrumb(commune, short.get(line_id, line_id) if line_id else None,
+                       plain.get(stop_id, stop_id) if stop_id else None)
+    with crumbs_box:
+        with st.container(horizontal=True, gap="small", vertical_alignment="center", key="crumbs"):
+            st.markdown('<span class="crumb-label">Vous regardez :</span>', unsafe_allow_html=True)
+            for i, (label, callback) in enumerate(steps):
+                if i:
+                    st.markdown('<span class="crumb-sep" aria-hidden="true">›</span>', unsafe_allow_html=True)
+                if callback is None:
+                    st.markdown(f'<span class="crumb-here" aria-current="location">{html.escape(label)}</span>',
+                                unsafe_allow_html=True)
+                else:
+                    st.button(label, key=f"crumb_{i}", on_click=callback, type="tertiary")
 
 
 def exclusion_note(excl: ind.Exclusions) -> str | None:
@@ -3966,7 +4106,7 @@ def exclusion_note(excl: ind.Exclusions) -> str | None:
         parts.append(f"{len(excl.lignes)} ligne(s) au temps réel douteux")
     if not parts:
         return None
-    return f"Chiffres calculés hors {' et '.join(parts)} : détail dans « Données & méthode »."
+    return f"Chiffres calculés hors {' et '.join(parts)} : détail dans « Méthode et lexique »."
 
 
 def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, total: int, n_lines: int,
@@ -4013,60 +4153,33 @@ def main() -> None:
             st.warning("Aucune observation disponible pour le moment.")
             return
         communes = load_communes(conn)
-        commune_options = ["Tout le réseau"] + communes
         st.session_state.setdefault("commune_idx", 0)
+        if not 0 <= int(st.session_state["commune_idx"] or 0) <= len(communes):
+            st.session_state["commune_idx"] = 0
+        commune = communes[st.session_state["commune_idx"] - 1] if st.session_state["commune_idx"] else None
 
         with st.container(key="ctx_bar"):
-            cols = st.columns([0.8, 1.1, 0.95, 1.35, 1.1], gap="small", vertical_alignment="bottom")
-        with cols[1]:
-            st.selectbox("Commune", range(len(commune_options)), format_func=lambda i: commune_options[i],
-                         index=st.session_state["commune_idx"], key="commune_topbar", on_change=_on_ctx_commune,
-                         help="Restreint toutes les pages aux arrêts situés dans la commune.")
-        st.session_state["commune_idx"] = int(st.session_state.get("commune_topbar") or 0)
-        commune = communes[st.session_state["commune_idx"] - 1] if st.session_state["commune_idx"] else None
-        with cols[4]:
-            period = period_picker(conn, cutoff, locked=page == PAGE_CONTENTION)
+            cols = st.columns([0.75, 2.6, 1.05], gap="small", vertical_alignment="bottom")
+            crumbs_box = st.container()
+        with cols[2]:
+            period = period_picker(conn, cutoff, locked=contention_view())
         since_ts, end_ts = _ts(period.start), _ts(period.end)
 
+        ranking_net = make_ranking(*load_network_data(conn, cutoff, since_ts, end_ts, commune=None))
+        render_context_bar(conn, cutoff, since_ts, end_ts, commune, communes,
+                           ranking_net[ranking_net["observations"] >= MIN_OBSERVATIONS], cols, crumbs_box)
         scheduled, skipped = load_network_data(conn, cutoff, since_ts, end_ts, commune=commune)
         if scheduled.empty:
-            st.warning("Aucun passage exploitable après stabilisation des données.")
+            st.warning("Aucun passage exploitable pour cette période ici. Choisissez une autre période, ou "
+                       "« Tout le réseau » dans le fil d'Ariane.")
             return
-        ranking = make_ranking(scheduled, skipped)
-
+        ranking = make_ranking(scheduled, skipped) if commune is not None else ranking_net
         visible_ranking = ranking[ranking["observations"] >= MIN_OBSERVATIONS].copy()
         if visible_ranking.empty:
             visible_ranking = ranking.copy()
-        render_context_bar(conn, cutoff, since_ts, end_ts, commune, commune_options, visible_ranking, cols)
 
         total = int(ranking["observations"].sum())
-        on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))
-        retard_moyen_network = float((ranking["observations"] * ranking["retard_moyen_s"]).sum() / max(total, 1))
-        skipped_total = int(ranking["skipped"].sum())
-        eligible_total = int(ranking["eligible"].sum())
-        skip_rate = skipped_total / max(eligible_total, 1) * 100
-        if page not in INFO_PAGES:
-            st.markdown('<div class="eyebrow">Observatoire de la fiabilité, Bordeaux Métropole</div>', unsafe_allow_html=True)
-
-            if commune is not None:
-                st.title(f"La fiabilité de {commune}, en un coup d’œil.")
-                st.markdown('<div class="hero-subtitle">Les arrêts situés sur la commune, agrégés par ligne desservie et par mode.</div>', unsafe_allow_html=True)
-            else:
-                st.title("La fiabilité du réseau, en un coup d’œil.")
-            render_kpis(header_kpis(network_score(ranking), on_time, retard_moyen_network, skip_rate, total,
-                                    len(ranking), skipped_total, eligible_total, commune is not None, detailed))
-            if detailed:
-                st.caption("**Passage analysé** : un départ programmé (SCHEDULED) avec retard connu, sorti du flux "
-                           "depuis ≥ 20 min. **Observation** : une ligne brute du flux GTFS-RT (sert à mesurer le "
-                           "volume de collecte). **Arrêts non desservis** : arrêts annoncés SKIPPED, rapportés aux "
-                           "arrêts attendus (SCHEDULED + SKIPPED).")
-            note = exclusion_note(load_exclusions(conn, *_day_bounds(since_ts, end_ts, cutoff)))
-            if note:
-                st.caption(note)
-
         disturbed = load_disturbed_route_ids(conn, since_ts, end_ts, cutoff, commune=commune)
-        ranking_net = ranking if commune is None else make_ranking(
-            *load_network_data(conn, cutoff, since_ts, end_ts, commune=None))
         ctx = PageContext(conn, cutoff, since_ts, end_ts, commune, ranking, visible_ranking,
                           ranking_net, disturbed, total, period, _ts(period.prev_start), _ts(period.prev_end),
                           detailed)

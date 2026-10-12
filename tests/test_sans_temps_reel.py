@@ -208,9 +208,9 @@ class TestLignesSansMesure:
 
         ranking = pd.DataFrame({"route_id": ["A"], "ligne": ["1"], "route_type": [3], "score_fiabilite": [82.0]})
         unmeasured = pd.DataFrame({"route_id": ["Z", "A"], "ligne": ["123", "1"], "route_type": [3, 3]})
-        options = app_mod.line_options(ranking, None, unmeasured)
-        assert options["Z"].endswith("123 · sans temps réel, non mesurable")
-        assert options["A"].endswith("1 · fiable")
+        options = app_mod.search_options([], ranking, unmeasured, pd.DataFrame(), {}, {})
+        assert options["l:Z"] == "Ligne 123 (sans temps réel, non mesurable)"
+        assert options["l:A"] == "Ligne 1 (fiable)"
         paths = app_mod.stop_route_paths(ranking, {"Z": {0: [[0, 0], [1, 1]]}, "A": {0: [[0, 0], [2, 2]]}},
                                          {}, unmeasured)
         assert [(p["r"], p["s"], p["e"]) for p in paths] == [

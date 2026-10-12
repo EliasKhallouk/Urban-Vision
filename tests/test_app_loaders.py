@@ -596,11 +596,6 @@ class TestAidesFiche:
         assert app_mod.network_score(ranking) == pytest.approx(100 * 471 / 500)
         assert app_mod.network_score(ranking.head(0)) == 0.0
 
-    def test_libelles_de_recherche(self):
-        df = pd.DataFrame({"stop_id": ["s1", "s2"], "stop_name": ["Gare", "Parc"],
-                           "direction": ["vers Parc", ""], "lignes": ["1, 11", "A"]})
-        assert app_mod.stop_labels(df) == {"s1": "Gare — vers Parc (1, 11)", "s2": "Parc (A)"}
-
     def test_alertes_qui_recoupent_un_jour_degrade(self):
         history = pd.DataFrame({
             "route_id": ["A", "A", "B"], "ligne": ["1", "1", "2"],

@@ -18,7 +18,7 @@ import pandas as pd
 _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
-from palette import NEGATIVE, POSITIVE, RISK_ZONE_LABELS, tier  # noqa: E402
+from palette import NEGATIVE, POSITIVE, RISK_MEDIAN_S, RISK_ZONE_LABELS, risk_zone, tier  # noqa: E402
 
 PERIOD_ORDER = ["Matin", "Journée", "Pointe du soir", "Soirée & nuit", "Week-end"]
 WEEKDAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
@@ -38,6 +38,20 @@ EDGE_SHARE = 0.15
 BLOCK_SHARE = 0.6
 IMBALANCE_SHARE = 0.65
 NO_PROBLEM_LOST_POINTS = 5.0
+
+
+SCHEDULE_GAP = "ecart_horaire"
+SCHEDULE_GAP_LABEL = "Écart à l'horaire publié"
+
+
+def display_zone(median_s: float, pct_gt300: float) -> str:
+    """Zone affichée : celle de `risk_zone`, sauf quand le retard médian est négatif au-delà du seuil (départs
+    médians avant l'horaire publié) : libellé neutre, sans interprétation de la cause."""
+    return SCHEDULE_GAP if float(median_s) <= -RISK_MEDIAN_S else risk_zone(median_s, pct_gt300)
+
+
+def zone_label(zone: str) -> str:
+    return SCHEDULE_GAP_LABEL if zone == SCHEDULE_GAP else RISK_ZONE_LABELS[zone]
 
 
 def format_seconds(value: float | int | None, signed: bool = False) -> str:
@@ -516,7 +530,7 @@ def stop_summary(responsible: dict | None, direction: str | None, cause: dict,
                    f"et en partie du tronçon{origin} ({format_seconds(gained_s, signed=True)}).")
     out.extend(_timing_sentences(rec, conc, peak, peak_line))
     if zone:
-        out.append(f"Type de retard : {RISK_ZONE_LABELS[zone].lower()}.")
+        out.append(f"Type de retard : {zone_label(zone)[:1].lower() + zone_label(zone)[1:]}.")
     return out
 
 
@@ -610,97 +624,6 @@ def line_hints(origin: dict, skips: dict, cancelled: int, peak: dict | None = No
                      "à recouper avec les alertes travaux et déviations.")
     hints.extend(_peak_hint(peak, "sur le parcours"))
     return hints
-
-
-PRIORITY_KINDS = ("arret_retard", "ligne_retard", "arret_baisse", "ligne_baisse")
-
-
-def _stop_title(row) -> str:
-    n_dirs = int(row["n_sens"]) if "n_sens" in row and pd.notna(row["n_sens"]) else 1
-    if n_dirs > 1:
-        return f"{row['stop_name']} ({n_dirs} {'sens' if n_dirs == 2 else 'quais'})"
-    direction = row.get("direction") or ""
-    return f"{row['stop_name']} — {direction}" if direction else str(row["stop_name"])
-
-
-def _stop_parts(row) -> tuple[str, str]:
-    """Nom d'un arrêt et précision : nombre de sens ou de quais regroupés, sinon direction."""
-    n_dirs = int(row["n_sens"]) if "n_sens" in row and pd.notna(row["n_sens"]) else 1
-    if n_dirs > 1:
-        return str(row["stop_name"]), f"{n_dirs} {'sens' if n_dirs == 2 else 'quais'}"
-    return str(row["stop_name"]), str(row.get("direction") or "")
-
-
-def _identity(row, kind: str, score: float, previous: float | None = None) -> dict:
-    """Champs d'affichage communs : nom, précision, mode, score et score précédent."""
-    route_type = row.get("route_type")
-    out = {"score": float(score), "previous": None if previous is None else float(previous),
-           "route_type": None if route_type is None or pd.isna(route_type) else int(route_type)}
-    if kind == "arrêt":
-        out["name"], out["detail"] = _stop_parts(row)
-    else:
-        out["name"], out["detail"] = str(row["ligne"]), ""
-    return out
-
-
-def _late(df: pd.DataFrame) -> pd.Series:
-    return df["observations"] * df["pct_retard_5min"] / 100
-
-
-def priorities(stops: pd.DataFrame | None, lines: pd.DataFrame | None, stops_now: pd.DataFrame | None,
-               stops_before: pd.DataFrame | None, progression: pd.DataFrame | None, min_obs: int,
-               prev_label: str | None = None) -> dict:
-    """Les quatre priorités du moment, par type (None quand rien ne s'applique).
-
-    - arret_retard : l'arrêt (quais regroupés, `stops`) qui a le plus de passages à plus de 5 min ;
-    - ligne_retard : la ligne (`lines`, périmètre du territoire) qui a le plus de passages à plus de 5 min ;
-    - arret_baisse : le quai dont le score baisse le plus entre `stops_before` et `stops_now` ;
-    - ligne_baisse : la ligne dont le score baisse le plus (`progression`).
-    Seuls comptent les arrêts et lignes d'au moins `min_obs` passages (sur chaque période pour une baisse).
-    """
-    out = dict.fromkeys(PRIORITY_KINDS)
-    since = f" par rapport à {prev_label}" if prev_label else ""
-    if stops is not None and not stops.empty:
-        s = stops[stops["observations"] >= min_obs]
-        if not s.empty:
-            top = s.loc[_late(s).idxmax()]
-            out["arret_retard"] = {
-                "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
-                "figure": f"{_late(s).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
-                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100",
-                **_identity(top, "arrêt", top["score_fiabilite"])}
-    if lines is not None and not lines.empty:
-        l = lines[lines["observations"] >= min_obs]
-        if not l.empty:
-            top = l.loc[_late(l).idxmax()]
-            out["ligne_retard"] = {
-                "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
-                "figure": f"{_late(l).max():,.0f}".replace(",", " "), "unit": "passages à plus de 5 min",
-                "reason": f"score {format_number(float(top['score_fiabilite']), 1)} / 100",
-                **_identity(top, "ligne", top["score_fiabilite"])}
-    if stops_now is not None and stops_before is not None and not stops_now.empty and not stops_before.empty:
-        before = stops_before[stops_before["observations"] >= min_obs][["stop_id", "score_fiabilite"]]
-        now = stops_now[stops_now["observations"] >= min_obs]
-        both = now.merge(before.rename(columns={"score_fiabilite": "score_prev"}), on="stop_id")
-        if not both.empty:
-            both = both.assign(delta=both["score_fiabilite"] - both["score_prev"])
-            top = both.loc[both["delta"].idxmin()]
-            if top["delta"] < 0:
-                out["arret_baisse"] = {
-                    "kind": "arrêt", "id": top["stop_id"], "title": _stop_title(top),
-                    "figure": f"{format_number(float(top['delta']), 1, signed=True)} pts", "unit": f"de score{since}",
-                    "reason": f"{format_number(float(top['score_prev']), 1)} → {format_number(float(top['score_fiabilite']), 1)} / 100",
-                    **_identity(top, "arrêt", top["score_fiabilite"], top["score_prev"])}
-    if progression is not None and not progression.empty:
-        top = progression.loc[progression["delta_score"].idxmin()]
-        if top["delta_score"] < 0:
-            out["ligne_baisse"] = {
-                "kind": "ligne", "id": top["route_id"], "title": f"Ligne {top['ligne']}",
-                "figure": f"{format_number(float(top['delta_score']), 1, signed=True)} pts", "unit": f"de score{since}",
-                "reason": (f"{format_number(float(top['score_fiabilite_prev']), 1)} → "
-                           f"{format_number(float(top['score_fiabilite']), 1)} / 100"),
-                **_identity(top, "ligne", top["score_fiabilite"], top["score_fiabilite_prev"])}
-    return out
 
 
 MIN_CELL_PASSAGES = 3

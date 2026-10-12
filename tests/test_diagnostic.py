@@ -308,62 +308,6 @@ class TestTronconDominant:
                          "de parcours de la ligne plus que d'un aménagement local. Voir la fiche de la ligne 5."]
 
 
-class TestPriorites:
-    def _prog(self, delta):
-        return pd.DataFrame({"route_id": ["A", "B"], "ligne": ["1", "2"], "delta_score": [delta, 3.0],
-                             "observations": [1000, 1000],
-                             "score_fiabilite_prev": [80.0, 70.0], "score_fiabilite": [80.0 + delta, 73.0]})
-
-    def _lines(self):
-        return pd.DataFrame({"route_id": ["A", "C", "D"], "ligne": ["1", "3", "4"],
-                             "observations": [1000, 5000, 20], "pct_retard_5min": [30.0, 10.0, 90.0],
-                             "score_fiabilite": [60.0, 75.0, 10.0]})
-
-    def _stops(self):
-        return pd.DataFrame({"stop_id": ["s1", "s2"], "stop_name": ["Gare", "Parc"],
-                             "direction": ["vers Parc", ""], "observations": [400, 900],
-                             "pct_retard_5min": [50.0, 5.0], "score_fiabilite": [50.0, 95.0]})
-
-    def test_quatre_priorites(self):
-        before = self._stops().assign(score_fiabilite=[60.0, 99.0])
-        items = dg.priorities(self._stops(), self._lines(), self._stops(), before, self._prog(-12.0), 50,
-                              prev_label="août 2026")
-        assert list(items) == list(dg.PRIORITY_KINDS)
-        assert items["arret_retard"]["id"] == "s1"
-        assert items["arret_retard"]["title"] == "Gare — vers Parc"
-        assert items["arret_retard"]["figure"] == "200"
-        assert items["ligne_retard"]["id"] == "C"
-        assert items["ligne_retard"]["figure"] == "500"
-        assert items["arret_baisse"]["id"] == "s1"
-        assert items["arret_baisse"]["figure"] == "−10,0 pts"
-        assert items["arret_baisse"]["unit"] == "de score par rapport à août 2026"
-        assert items["ligne_baisse"]["id"] == "A"
-        assert items["ligne_baisse"]["reason"] == "80,0 → 68,0 / 100"
-        assert (items["ligne_baisse"]["name"], items["ligne_baisse"]["score"], items["ligne_baisse"]["previous"]) == (
-            "1", 68.0, 80.0)
-        assert (items["arret_retard"]["name"], items["arret_retard"]["detail"]) == ("Gare", "vers Parc")
-        assert items["arret_retard"]["previous"] is None
-
-    def test_arret_regroupe_sur_deux_sens(self):
-        stops = pd.DataFrame({"stop_id": ["s1"], "stop_name": ["Blancherie"], "direction": ["vers Blancherie"],
-                              "n_sens": [2], "observations": [2950], "pct_retard_5min": [16.8],
-                              "score_fiabilite": [67.9]})
-        item = dg.priorities(stops, None, None, None, None, 50)["arret_retard"]
-        assert item["title"] == "Blancherie (2 sens)"
-        assert item["figure"] == "496"
-        assert (item["name"], item["detail"]) == ("Blancherie", "2 sens")
-
-    def test_petit_echantillon_exclu_et_aucune_hausse_retenue(self):
-        items = dg.priorities(None, self._lines().iloc[[2]], self._stops(), self._stops(),
-                              self._prog(2.0).iloc[[0]], 50)
-        assert items["ligne_retard"] is None
-        assert items["arret_baisse"] is None
-        assert items["ligne_baisse"] is None
-
-    def test_rien_a_signaler(self):
-        assert dg.priorities(None, None, None, None, None, 50) == dict.fromkeys(dg.PRIORITY_KINDS)
-
-
 def _fridays_hourly(bad_fridays=4, n_weeks=5, route="A"):
     """Arrêt observé du lundi au vendredi sur n semaines, 8 passages par heure de 7 h à 19 h.
 

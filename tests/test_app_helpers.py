@@ -577,30 +577,55 @@ class TestFilDAriane:
         st.session_state.update({"sidebar_nav": app_mod.PAGE_LINE, "commune_idx": 3, "line_id": "11", "stop_id": None})
         app_mod.open_stop("s9")
         assert (st.session_state["sidebar_nav"], st.session_state["stop_id"]) == (app_mod.PAGE_TERRITORY, "s9")
+        assert st.session_state["map_view"] == app_mod.VIEW_STOPS
         app_mod.go_back()
         assert st.session_state["sidebar_nav"] == app_mod.PAGE_LINE
         assert (st.session_state["line_id"], st.session_state["stop_id"]) == ("11", None)
-        assert st.session_state["commune_topbar"] == 3
+        assert st.session_state["commune_idx"] == 3
         assert st.session_state[app_mod.HISTORY_KEY] == []
 
-    def test_choisir_une_ligne_dans_la_barre_ouvre_sa_fiche(self):
+    def test_recherche_unique_ligne_arret_commune(self):
         import streamlit as st
 
-        st.session_state.update({"sidebar_nav": app_mod.PAGE_TERRITORY, "stop_id": "s1", "ctx_line": "59"})
-        app_mod._on_ctx_line()
+        st.session_state.update({"sidebar_nav": app_mod.PAGE_TERRITORY, "stop_id": "s1", app_mod.SEARCH_KEY: "l:59"})
+        app_mod._on_search()
         assert (st.session_state["line_id"], st.session_state["sidebar_nav"]) == ("59", app_mod.PAGE_LINE)
         assert st.session_state["stop_id"] is None
-        st.session_state["ctx_stop"] = "s4"
-        app_mod._on_ctx_stop()
+        assert st.session_state[app_mod.SEARCH_KEY] is None
+        st.session_state[app_mod.SEARCH_KEY] = "s:s4"
+        app_mod._on_search()
         assert (st.session_state["stop_id"], st.session_state["sidebar_nav"]) == ("s4", app_mod.PAGE_TERRITORY)
+        assert st.session_state["map_view"] == app_mod.VIEW_STOPS
+        assert st.session_state["line_id"] is None
+        st.session_state[app_mod.SEARCH_KEY] = "c:2"
+        app_mod._on_search()
+        assert (st.session_state["commune_idx"], st.session_state["stop_id"]) == (2, None)
+        assert len(st.session_state[app_mod.HISTORY_KEY]) == 3
 
-    def test_changer_de_commune_ferme_l_arret(self):
+    def test_fil_d_ariane(self):
         import streamlit as st
 
-        st.session_state.update({"commune_idx": 0, "stop_id": "s1", "commune_topbar": 2})
-        app_mod._on_ctx_commune()
-        assert (st.session_state["commune_idx"], st.session_state["stop_id"]) == (2, None)
-        assert len(st.session_state[app_mod.HISTORY_KEY]) == 1
+        steps = app_mod.breadcrumb("Mérignac", "23", "Quinconces, vers La Boétie")
+        assert [label for label, _ in steps] == ["Tout le réseau", "Mérignac", "Ligne 23", "Quinconces, vers La Boétie"]
+        assert steps[-1][1] is None and all(cb is not None for _, cb in steps[:-1])
+        assert app_mod.breadcrumb(None, None, None) == [("Tout le réseau", None)]
+        st.session_state.update({"commune_idx": 2, "line_id": "23", "stop_id": "s1", "sidebar_nav": app_mod.PAGE_TERRITORY})
+        steps[2][1]()
+        assert (st.session_state["stop_id"], st.session_state["sidebar_nav"]) == (None, app_mod.PAGE_LINE)
+        steps[1][1]()
+        assert (st.session_state["line_id"], st.session_state["commune_idx"]) == (None, 2)
+        steps[0][1]()
+        assert st.session_state["commune_idx"] == 0
+
+    def test_carte_des_temps_perdus(self):
+        assert app_mod.contention_view({"sidebar_nav": app_mod.PAGE_TERRITORY, "map_view": app_mod.VIEW_CONTENTION})
+        assert not app_mod.contention_view({"sidebar_nav": app_mod.PAGE_TERRITORY, "map_view": app_mod.VIEW_STOPS})
+        assert not app_mod.contention_view({"sidebar_nav": app_mod.PAGE_HOME, "map_view": app_mod.VIEW_CONTENTION})
+
+    def test_trois_entrees_puis_pied_de_menu(self):
+        assert app_mod.MAIN_PAGES == ["Accueil", "Carte", "Lignes"]
+        assert app_mod.NAV_ITEMS[3:] == ["Rapports mensuels", "Méthode et lexique", "À propos"]
+        assert set(app_mod.PAGES) == set(app_mod.NAV_ITEMS)
 
     def test_historique_borne_et_sans_doublon(self):
         session = {"sidebar_nav": "x"}
@@ -619,15 +644,19 @@ class TestFilDAriane:
         assert app_mod.back_label({"sidebar_nav": app_mod.PAGE_LINE, "line_id": "11"}, [], *names) == "la ligne 11"
         assert app_mod.back_label({"sidebar_nav": "Quand ?", "commune_idx": 1}, ["Bègles"], *names) == "« Quand ? », Bègles"
 
-    def test_options_de_la_barre(self):
+    def test_options_de_la_recherche(self):
         ranking = pd.DataFrame({"route_id": ["A", "B"], "route_type": [0, 3], "ligne": ["A", "12"],
                                 "score_fiabilite": [85.0, 40.0]})
-        assert list(app_mod.line_options(ranking, None).values()) == [
-            "Toutes les lignes", "■ 12 · problématique", "● A · fiable"]
-        assert app_mod.line_options(ranking, "Z")["Z"] == "Ligne Z"
-        stops = pd.DataFrame({"stop_id": ["2", "1"], "stop_name": ["Victoire", "Gambetta"], "direction": ["", "vers Issac"]})
-        assert list(app_mod.stop_options(stops, "9", "Quinconces").values()) == [
-            "Tous les arrêts", "Gambetta — vers Issac", "Victoire", "Quinconces"]
+        stops = pd.DataFrame({"stop_id": ["q1", "q2", "q3"], "stop_name": ["Gambetta", "Gambetta", "Victoire"],
+                              "observations": [10, 900, 50], "lignes": ["4", "4, 15", "A, B"]})
+        options = app_mod.search_options(["Bègles", "Mérignac"], ranking, None, stops,
+                                         {"B": "Gare ↔ Parc"}, {"q1": "Bordeaux", "q2": "Bordeaux", "q3": "Bordeaux"})
+        assert list(options.values()) == [
+            "Commune : Bègles", "Commune : Mérignac",
+            "Ligne 12 : Gare ↔ Parc (problématique)", "Ligne A (fiable)",
+            "Arrêt : Gambetta, Bordeaux (lignes 4, 15)", "Arrêt : Victoire, Bordeaux (lignes A, B)"]
+        assert "s:q2" in options and "s:q1" not in options
+        assert list(options)[:2] == ["c:1", "c:2"]
 
 
 class TestLexique:
@@ -739,39 +768,60 @@ class TestIndicateursParGroupe:
 
 
 class TestTerritoireEtFiches:
-    def test_case_retard_d_une_ligne_avec_sa_pastille(self):
-        item = {"kind": "ligne", "id": "A", "figure": "6 534", "name": "<5>", "detail": "", "score": 74.5,
-                "previous": None, "route_type": 3}
-        cell = app_mod.priority_cell_html("ligne_retard", item, "août 2026")
-        assert '<div class="pc-figure">6 534</div>' in cell
-        assert "passages partis avec plus de 5 min de retard" in cell
-        assert "Ligne &lt;5&gt;" in cell
-        assert f"background:{app_mod.score_color(74.5)};color:#2B2523" in cell
-        assert "score 74,5 sur 100" in cell
-        assert '<div class="pc-col">Le plus de retards</div>' in cell
-        assert "<svg" not in cell
+    def test_phrase_verdict_selon_la_marge(self):
+        base = "Sur septembre 2026, le réseau est <b>à surveiller</b> : 75 passages sur 100 ont été assurés et à l'heure"
+        drop = {"ecart": -3.2, "marge": 1.7, "significatif": True}
+        assert app_mod.verdict_sentence("le réseau", "Septembre 2026", 74.9, drop, "Août 2026") == (
+            base + ", <b>en baisse de 3,2 points</b> par rapport à août 2026 (plus que la marge d'incertitude de ± 1,7).")
+        stable = {"ecart": -0.4, "marge": 1.7, "significatif": False}
+        assert "stable par rapport à août 2026 : l'écart (−0,4) reste dans la marge" in app_mod.verdict_sentence(
+            "le réseau", "Septembre 2026", 74.9, stable, "Août 2026")
+        no_margin = {"ecart": -2.7, "marge": None, "significatif": None}
+        assert app_mod.verdict_sentence("l'arrêt Gare", "Septembre 2026", 85.0, no_margin, "Août 2026").endswith(
+            "▼ 2,7 points par rapport à août 2026.")
+        assert app_mod.verdict_sentence("le réseau", "Septembre 2026", 74.9, None, None) == base + "."
 
-    def test_case_baisse_d_un_arret_avec_sa_pente(self):
-        item = {"kind": "arrêt", "id": "s1", "figure": "", "name": "Emaillerie", "detail": "vers Cracovie",
-                "score": 45.5, "previous": 71.8, "route_type": 3}
-        cell = app_mod.priority_cell_html("arret_baisse", item, "août 2026")
-        assert '<div class="pc-figure">−26,3</div>' in cell
-        assert "points de score depuis août 2026" in cell
-        assert "vers Cracovie, 71,8 puis 45,5 sur 100" in cell
-        assert "■" in cell
-        assert 'aria-label="Score passé de 71,8 à 45,5 sur 100"' in cell
+    def _lines(self, scores, margins, doubtful=None):
+        n = len(scores)
+        return pd.DataFrame({"route_id": [str(i) for i in range(n)], "score_v2": scores, "marge_v2": margins,
+                             "temps_reel_douteux": doubtful or [False] * n})
 
-    def test_pente_a_l_echelle_avec_les_seuils(self):
-        svg = app_mod.slope_svg(90.0, 40.0)
-        assert svg.count("<text") == 2 and ">80</text>" in svg and ">50</text>" in svg
-        ys = [float(v) for v in __import__("re").findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)]
-        assert ys[0] < ys[1]
-        assert f'fill="{app_mod.score_color(40.0)}"' in svg
+    def test_trois_choses_fondees_sur_la_marge(self):
+        change = {"score": 74.9, "marge": 1.3, "previous": 78.2,
+                  "compare": {"ecart": -3.3, "marge": 1.7, "significatif": True}}
+        now = self._lines([60.0, 70.0, 40.0, 30.0], [2.0, 2.0, 3.0, 20.0], [False, False, False, True])
+        before = self._lines([72.0, 71.0, 41.0, 60.0], [2.0, 2.0, 3.0, 5.0])
+        names = {"0": "5", "1": "6", "2": "S35", "3": "X"}
+        points = app_mod.key_points("le réseau", "du réseau", change, "Août 2026", now, before, names)
+        assert len(points) == 3
+        assert "a <b>baissé de 3,3 points</b> par rapport à août 2026" in points[0]["text"]
+        assert points[1]["route_id"] == "0" and "La ligne <b>5</b> a le plus baissé" in points[1]["text"]
+        assert points[2]["route_id"] == "2" and "La ligne <b>S35</b> est la moins fiable" in points[2]["text"]
 
-    def test_case_vide(self):
-        assert "Pas de période de comparaison." in app_mod.priority_cell_html("arret_baisse", None, None)
-        assert "Aucune baisse sur la période." in app_mod.priority_cell_html("arret_baisse", None, "août 2026")
-        assert "Pas assez de passages" in app_mod.priority_cell_html("arret_retard", None, None)
+    def test_trois_choses_sans_ecart_reel(self):
+        change = {"score": 74.9, "marge": 1.3, "previous": 75.2,
+                  "compare": {"ecart": -0.3, "marge": 1.7, "significatif": False}}
+        now = self._lines([74.0, 50.0], [2.0, 30.0])
+        before = self._lines([75.0, 70.0], [2.0, 30.0])
+        points = app_mod.key_points("Mérignac", "de Mérignac", change, "Août 2026", now, before, {})
+        assert "<b>stable</b>" in points[0]["text"]
+        assert points[1] == {"text": "Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à août 2026.",
+                             "route_id": None}
+        assert points[2]["route_id"] is None and "nettement en dessous de Mérignac" in points[2]["text"]
+        assert "Le score de Mérignac est <b>stable</b>" in points[0]["text"]
+        assert app_mod._scope_words(None) == ("le réseau", "du réseau")
+        assert app_mod._scope_words("Eysines")[1] == "d'Eysines"
+
+    def test_arrets_a_traiter_par_passages_rates(self):
+        territorial = pd.DataFrame({
+            "stop_id": ["a1", "a2", "b1", "c1"], "stop_name": ["Gare", "Gare", "Parc", "Port"],
+            "observations": [400, 600, 60, 10], "attendus": [400.0, 600.0, 60.0, 10.0],
+            "rates": [40.0, 110.0, 50.0, 9.0], "route_type": [3, 3, 3, 3]})
+        top = app_mod.stops_to_treat(territorial, {"a1": "Bordeaux", "a2": "Bordeaux", "b1": "Pessac"})
+        assert top["stop_name"].tolist() == ["Gare", "Parc"]
+        assert top.iloc[0]["stop_id"] == "a2" and top.iloc[0]["rates"] == 150.0
+        assert round(top.iloc[0]["score"], 1) == 85.0
+        assert app_mod.stops_to_treat(territorial.head(0), {}).empty
 
     def test_legende_de_la_carte(self):
         legend = app_mod.map_legend_html()
@@ -786,6 +836,9 @@ class TestTerritoireEtFiches:
         assert "Retards rares mais longs" in banner
         assert "22,0 %" in banner
         assert "Retards fréquents mais courts" in app_mod.zone_banner_html(400.0, 8.0)
+        early = app_mod.zone_banner_html(-201.0, 0.0)
+        assert "Écart à l&#x27;horaire publié" in early and "−3 min 21 s" in early
+        assert "congestion" not in early and "avance" not in early
         assert app_mod.zone_banner_html(None, 8.0) == ""
         assert app_mod.zone_banner_html(float("nan"), 8.0) == ""
 
@@ -794,7 +847,7 @@ class TestNoteDExclusion:
     def test_jours_et_lignes(self):
         note = app_mod.exclusion_note(app_mod.ind.Exclusions(("2026-09-08", "2026-09-24"), ("102",)))
         assert note == ("Chiffres calculés hors 2 jour(s) à collecte incomplète (08/09, 24/09) et 1 ligne(s) au "
-                        "temps réel douteux : détail dans « Données & méthode ».")
+                        "temps réel douteux : détail dans « Méthode et lexique ».")
 
     def test_rien_a_signaler(self):
         assert app_mod.exclusion_note(app_mod.ind.Exclusions()) is None
