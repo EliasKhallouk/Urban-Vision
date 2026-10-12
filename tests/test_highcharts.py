@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import highcharts as hc
-from palette import BLACK_FOREST, COPPERWOOD, OLIVE_LEAF, hex as palette_hex
+from palette import INK, VIN, score_color, screen_hex
 
 
 def _assert_json_serializable(config):
@@ -34,8 +34,8 @@ class TestRankingChart:
 
     def test_couleur_par_palier_score(self):
         config = hc.ranking_chart(_ranking_df())
-        assert config["series"][0]["data"][0]["color"] == palette_hex(42.0, "score")
-        assert config["series"][0]["data"][1]["color"] == palette_hex(85.3, "score")
+        assert config["series"][0]["data"][0]["color"] == score_color(42.0)
+        assert config["series"][0]["data"][1]["color"] == score_color(85.3)
 
     def test_sans_colonne_ligne_plot_utilise_ligne(self):
         df = _ranking_df().drop(columns=["ligne_plot"])
@@ -73,8 +73,8 @@ class TestScatterChart:
     def test_couleur_du_point_par_palier_de_score(self):
         config = hc.scatter_chart(self._df())
         bus = next(s for s in config["series"] if s["name"] == "Bus")
-        assert bus["data"][0]["color"] == palette_hex(70.0, "score")
-        assert bus["data"][1]["color"] == palette_hex(80.0, "score")
+        assert bus["data"][0]["color"] == score_color(70.0)
+        assert bus["data"][1]["color"] == score_color(80.0)
 
     def test_zone_de_risque_et_seuils_traces(self):
         config = hc.scatter_chart(self._df())
@@ -110,7 +110,7 @@ class TestCreneauxEtGroupes:
         assert config["xAxis"]["categories"][0].startswith("Matin<br>")
         assert config["yAxis"]["max"] == 100
         point = config["series"][0]["data"][1]
-        assert point["y"] == 45.0 and point["color"] == palette_hex(45.0, "score") and point["skip"] == 2.5
+        assert point["y"] == 45.0 and point["color"] == score_color(45.0) and point["skip"] == 2.5
         assert config["lexique"] == "score-de-fiabilite"
         _assert_json_serializable(config)
 
@@ -125,7 +125,7 @@ class TestCreneauxEtGroupes:
         assert [x["name"] for x in config["series"]] == ["Ensemble", "Moyenne sur 7 jours"]
         first = config["series"][0]["data"][0]
         assert first["x"] == int(pd.Timestamp("2026-09-01").timestamp() * 1000)
-        assert first["color"] == palette_hex(80.0, "score")
+        assert first["color"] == score_color(80.0)
         assert config["series"][1]["data"][1][1] == 75.0
         assert config["yAxis"]["max"] == 100
         assert config["lexique"] == "score-de-fiabilite"
@@ -144,7 +144,7 @@ class TestCreneauxEtGroupes:
         config = hc.groups_hourly_chart(df, ["Ensemble", "Tramway"])
         ensemble, tram = config["series"]
         assert len(ensemble["data"]) == 24
-        assert ensemble["data"][8] == {"y": 12.0, "color": palette_hex(12.0, "pourcent")}
+        assert ensemble["data"][8] == {"y": 12.0, "color": screen_hex(12.0, "pourcent")}
         assert ensemble["data"][0] == {"y": None}
         assert tram["marker"]["symbol"] == "circle"
         assert config["xAxis"]["labels"]["step"] == 2
@@ -169,8 +169,8 @@ class TestModeCharts:
         bus = config["series"][0]
         assert bus["name"] == "■ Bus"
         assert [d["y"] for d in bus["data"]] == [90.0, 5.0, 1.0, 0.5]
-        assert bus["data"][0]["color"] == palette_hex(90.0, "score")
-        assert bus["data"][1]["color"] == palette_hex(5.0, "pourcent")
+        assert bus["data"][0]["color"] == score_color(90.0)
+        assert bus["data"][1]["color"] == screen_hex(5.0, "pourcent")
         assert bus["dataLabels"]["format"] == "■"
 
     def test_period_mode_chart_glyphe_et_palier(self):
@@ -185,7 +185,7 @@ class TestModeCharts:
         config = hc.period_mode_chart(df)
         assert [c.split("<br>")[0] for c in config["xAxis"]["categories"]] == ["Matin", "Journée"]
         bus = next(s for s in config["series"] if s["name"] == "■ Bus")
-        assert bus["data"][0] == {"y": 20.0, "color": palette_hex(20.0, "pourcent")}
+        assert bus["data"][0] == {"y": 20.0, "color": screen_hex(20.0, "pourcent")}
         assert bus["dataLabels"]["format"] == "■"
         tram = next(s for s in config["series"] if s["name"] == "● Tramway")
         assert tram["data"][1] == {"y": None}
@@ -205,9 +205,9 @@ class TestDistribution:
         assert data[0]["y"] == 3
         assert data[1]["y"] == 50
         # écart absolu médian de chaque classe -> palette « retard »
-        assert data[0]["color"] == palette_hex(900, "retard")
-        assert data[1]["color"] == palette_hex(30, "retard")
-        assert data[2]["color"] == palette_hex(1500, "retard")
+        assert data[0]["color"] == screen_hex(900, "retard")
+        assert data[1]["color"] == screen_hex(30, "retard")
+        assert data[2]["color"] == screen_hex(1500, "retard")
 
     def test_collection_minutely_chart_stock_mas_zoom(self):
         df = pd.DataFrame(
@@ -241,11 +241,11 @@ class TestEngagement:
             }
         )
 
-    def test_progression_colore_par_signe(self):
+    def test_progression_neutre_quel_que_soit_le_signe(self):
         config = hc.engagement_progression_chart(self._prog())
         assert config["xAxis"]["categories"] == ["L1", "L2"]
-        assert config["series"][0]["data"][0]["color"] == COPPERWOOD
-        assert config["series"][0]["data"][1]["color"] == OLIVE_LEAF
+        assert config["series"][0]["data"][0]["color"] == INK
+        assert config["series"][0]["data"][1]["color"] == INK
         assert config["series"][0]["data"][0]["y"] == -20.0
         _assert_json_serializable(config)
 
@@ -323,7 +323,7 @@ class TestProfils:
                                        commune_stop_ids={"d", "e"}, commune_label="Pessac")
         assert config["xAxis"]["plotLines"][0]["value"] == 2
         assert config["xAxis"]["plotBands"][0]["from"] == 2.5
-        assert config["series"][0]["data"][2]["color"] == COPPERWOOD
+        assert config["series"][0]["data"][2]["color"] == VIN
         _assert_json_serializable(config)
 
     def test_profil_d_un_creneau(self):
@@ -339,7 +339,7 @@ class TestProfils:
 
 class TestLegendes:
     def test_couleur_par_defaut_de_la_charte(self):
-        assert hc.LIGHT_THEME["colors"][0] == BLACK_FOREST
+        assert hc.LIGHT_THEME["colors"][0] == INK
 
     def test_pas_de_legende_sur_les_graphiques_a_une_serie(self):
         assert hc.ranking_chart(_ranking_df())["legend"] == {"enabled": False}
@@ -349,7 +349,7 @@ class TestLegendes:
     def test_serie_du_profil_a_une_couleur_de_legende(self):
         p = pd.DataFrame({"stop_id": ["a"], "stop_name": ["A"], "order": [1], "prev_stop_name": [None],
                           "gain_s": [0.0], "delay_s": [10.0]})
-        assert hc.line_profile_chart(p)["series"][0]["color"] == hc.BLACK_FOREST_35
+        assert hc.line_profile_chart(p)["series"][0]["color"] == hc.INK_35
 
 
 class TestInfobulles:

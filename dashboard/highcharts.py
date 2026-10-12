@@ -1,13 +1,11 @@
 """Configurations Highcharts pour le dashboard Urban Vision.
 
-Charte graphique alignée sur les rapports mensuels. Palette et seuils partagés
-via reports/palette.py (source unique de vérité) :
-- Black Forest (#283618) : marque, titres, éléments neutres (axes, séries sans polarité).
-- Olive Leaf (#606c38) : palier positif (bonne performance).
-- Sunlit Clay (#DDA15E) : palier moyen (performance intermédiaire).
-- Copperwood (#bc6c25) : palier négatif (performance dégradée).
-- Blanc : fond des graphiques et de la page.
-- Olive Leaf (#606c38) : texte secondaire (opacité 70 %).
+Charte écran « Pierre et vin », jetons et seuils de reports/palette.py (source unique) :
+- encre : titres, éléments neutres (axes, séries sans polarité, évolutions) ;
+- texte secondaire et trait : libellés d'axes, grilles, bordures ;
+- scores : dégradé continu `score_color` (repères fixes) ;
+- autres mesures à paliers : `screen_hex` (Garonne, pierre, vin) ;
+- blanc : fond des graphiques et de la page.
 
 Modes de transport : la forme du marqueur (tram ● cercle, bus ■ carré, ferry ▲
 triangle) et le style de trait les distinguent ; la couleur reste réservée aux
@@ -27,10 +25,12 @@ _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
 from palette import (  # noqa: E402
-    BLACK_FOREST,
-    CORNSILK,
-    COPPERWOOD,
-    OLIVE_LEAF,
+    ACTION,
+    INK,
+    INK_MUTED,
+    LINE,
+    SURFACE,
+    VIN,
     RISK_MEDIAN_S,
     RISK_PCT_GT300,
     RISK_ZONE_LABELS,
@@ -38,19 +38,23 @@ from palette import (  # noqa: E402
     FREQUENT_SHORT,
     LOW,
     RARE_LONG,
-    SUNLIT_CLAY,
     WHITE,
-    hex as palette_hex,
+    GARONNE,
+    PIERRE,
+    score_color,
+    screen_hex,
     mode_glyph,
     mode_marker,
     risk_zone,
 )
 
-# Variantes dérivées (opacités de la charte) pour les bordures et textes secondaires.
-SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
-SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
-OLIVE_LEAF_70 = "rgba(96, 108, 56, 0.70)"
-BLACK_FOREST_35 = "rgba(40, 54, 24, 0.35)"
+INK_35 = "rgba(43, 37, 35, 0.35)"
+LINE_SOFT = "rgba(229, 220, 208, 0.75)"
+
+
+def measure_color(value: float, kind: str) -> str:
+    """Couleur d'une valeur : dégradé continu pour un score, paliers écran pour les autres mesures."""
+    return score_color(value) if kind == "score" else screen_hex(value, kind)
 
 MODE_DASH = {0: "Solid", 3: "ShortDash", 4: "Dot"}
 
@@ -70,7 +74,7 @@ def _glyph_labels(route_type) -> dict:
     return {
         "enabled": True,
         "format": mode_glyph(route_type),
-        "style": {"color": BLACK_FOREST, "fontSize": "12px", "textOutline": "none", "fontWeight": "400"},
+        "style": {"color": INK, "fontSize": "12px", "textOutline": "none", "fontWeight": "400"},
     }
 
 
@@ -81,44 +85,44 @@ def _mode_line_series(route_type, mode: str, data: list) -> dict:
     return {
         "name": mode,
         "data": data,
-        "color": BLACK_FOREST,
+        "color": INK,
         "dashStyle": MODE_DASH.get(_route_type(route_type), "LongDash"),
         "lineWidth": 2,
         "marker": {"enabled": True, "symbol": mode_marker(route_type), "radius": 4,
-                   "lineColor": BLACK_FOREST, "lineWidth": 1},
+                   "lineColor": INK, "lineWidth": 1},
     }
 
 LIGHT_THEME = {
-    "colors": [BLACK_FOREST, BLACK_FOREST_35, OLIVE_LEAF, SUNLIT_CLAY, COPPERWOOD],
+    "colors": [INK, INK_35, GARONNE, PIERRE, VIN],
     "chart": {
         "backgroundColor": "#FFFFFF",
-        "style": {"color": OLIVE_LEAF_70, "fontFamily": "'Source Sans', 'Source Sans 3', sans-serif", "fontSize": "13px"},
+        "style": {"color": INK_MUTED, "fontFamily": "'Source Sans', 'Source Sans 3', sans-serif", "fontSize": "13px"},
         "borderRadius": 8,
         "spacing": [12, 12, 12, 12],
     },
-    "title": {"style": {"color": BLACK_FOREST, "fontSize": "17px", "fontWeight": "700"}},
+    "title": {"style": {"color": INK, "fontSize": "17px", "fontWeight": "700"}},
     "xAxis": {
-        "labels": {"autoRotation": False, "style": {"color": OLIVE_LEAF, "fontSize": "13px"}},
-        "lineColor": SUNLIT_CLAY_40,
-        "tickColor": SUNLIT_CLAY_40,
-        "gridLineColor": SUNLIT_CLAY_30,
-        "title": {"style": {"color": OLIVE_LEAF, "fontSize": "13px", "fontWeight": "600"}},
+        "labels": {"autoRotation": False, "style": {"color": INK_MUTED, "fontSize": "13px"}},
+        "lineColor": LINE,
+        "tickColor": LINE,
+        "gridLineColor": LINE_SOFT,
+        "title": {"style": {"color": INK_MUTED, "fontSize": "13px", "fontWeight": "600"}},
     },
     "yAxis": {
-        "labels": {"style": {"color": OLIVE_LEAF, "fontSize": "13px"}},
-        "lineColor": SUNLIT_CLAY_40,
-        "tickColor": SUNLIT_CLAY_40,
-        "gridLineColor": SUNLIT_CLAY_30,
-        "title": {"style": {"color": OLIVE_LEAF, "fontSize": "13px", "fontWeight": "600"}},
+        "labels": {"style": {"color": INK_MUTED, "fontSize": "13px"}},
+        "lineColor": LINE,
+        "tickColor": LINE,
+        "gridLineColor": LINE_SOFT,
+        "title": {"style": {"color": INK_MUTED, "fontSize": "13px", "fontWeight": "600"}},
     },
     "legend": {
-        "itemStyle": {"color": BLACK_FOREST, "fontSize": "13px", "fontWeight": "600"},
-        "itemHoverStyle": {"color": BLACK_FOREST},
+        "itemStyle": {"color": INK, "fontSize": "13px", "fontWeight": "600"},
+        "itemHoverStyle": {"color": INK},
     },
     "tooltip": {
         "backgroundColor": "#FFFFFF",
-        "borderColor": SUNLIT_CLAY_40,
-        "style": {"color": BLACK_FOREST, "fontSize": "14px"},
+        "borderColor": LINE,
+        "style": {"color": INK, "fontSize": "14px"},
         "shadow": True,
         "xDateFormat": "%A %e %B %Y",
     },
@@ -139,9 +143,9 @@ LIGHT_THEME = {
 }
 
 HOUR_HEADER = '<span style="font-size:12px">De {point.key} h à {point.key} h 59</span><br/>'
-LEXIQUE_FOOTER = ('<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(221, 161, 94, 0.40);'
+LEXIQUE_FOOTER = (f'<div style="margin-top:6px;padding-top:5px;border-top:1px solid {LINE};'
                   'font-size:13px"><a href="__BASE__?lexique=__TERME__" target="_blank" rel="noopener" '
-                  'style="color:#283618;text-decoration-color:#DDA15E">Définitions dans le lexique ↗</a></div>')
+                  f'style="color:{ACTION};text-decoration-color:{ACTION}">Définitions dans le lexique ↗</a></div>')
 
 
 def unit_tooltip(suffix: str, decimals: int = 1, header: str | None = None) -> dict:
@@ -210,7 +214,7 @@ def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
 
 def ranking_chart(df: pd.DataFrame) -> dict:
     df = df.sort_values("score_fiabilite")
-    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score"),
+    data = [{"y": round(r["score_fiabilite"], 1), "color": score_color(r["score_fiabilite"]),
              "id": r.get("route_id")}
             for _, r in df.iterrows()]
     labels = df["ligne_plot"].tolist() if "ligne_plot" in df.columns else df["ligne"].tolist()
@@ -228,7 +232,7 @@ def ranking_chart(df: pd.DataFrame) -> dict:
 
 def commune_ranking_chart(df: pd.DataFrame) -> dict:
     df = df.sort_values("score_fiabilite")
-    data = [{"y": round(r["score_fiabilite"], 1), "color": palette_hex(r["score_fiabilite"], "score"),
+    data = [{"y": round(r["score_fiabilite"], 1), "color": score_color(r["score_fiabilite"]),
              "pct": round(r["pct_a_l_heure"], 1), "passages": int(r["observations"])}
             for _, r in df.iterrows()]
     return {
@@ -259,7 +263,7 @@ def zone_labels_series(df: pd.DataFrame) -> dict:
             "enableMouseTracking": False, "marker": {"enabled": False},
             "dataLabels": {"enabled": True, "crop": False, "overflow": "allow",
                            "backgroundColor": "rgba(255, 255, 255, 0.88)", "borderRadius": 4, "padding": 4,
-                           "style": {"color": BLACK_FOREST, "fontSize": "13px", "fontWeight": "700",
+                           "style": {"color": INK, "fontSize": "13px", "fontWeight": "700",
                                      "textOutline": "none"}}, "zIndex": 5}
 
 
@@ -283,20 +287,20 @@ def scatter_chart(df: pd.DataFrame) -> dict:
                 "name": r["ligne"],
                 "score": score,
                 "zone": RISK_ZONE_LABELS[risk_zone(r["retard_median_s"], r["pct_retard_5min"])],
-                "color": palette_hex(score, "score"),
+                "color": score_color(score),
             })
         series.append({
             "type": "bubble",
             "name": sub["mode"].iloc[0] if "mode" in sub.columns else "Autre",
             "data": data,
-            "color": BLACK_FOREST,
+            "color": INK,
             "marker": {"symbol": mode_marker(rt), "lineColor": WHITE, "lineWidth": 1},
             "tooltip": {"headerFormat": "",
                         "pointFormat": "<b>{point.name}</b> ({point.series.name})<br/>{point.zone}<br/>"
                                        "Retard médian : {point.x:.0f} s<br/>&gt; 5 min : {point.y:.1f} %<br/>"
                                        "Score : {point.score:.1f} / 100<br/>Passages : {point.z:,.0f}<br/>"},
         })
-    threshold_line = {"color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1, "zIndex": 3}
+    threshold_line = {"color": INK_MUTED, "dashStyle": "Dash", "width": 1, "zIndex": 3}
     series.append(zone_labels_series(df))
     return {
         "lexique": "retard-median",
@@ -304,18 +308,18 @@ def scatter_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"title": {"text": "Retard médian (secondes)"},
                   "plotLines": [dict(threshold_line, value=RISK_MEDIAN_S,
-                                     label={"text": f"{RISK_MEDIAN_S:.0f} s", "style": {"color": OLIVE_LEAF_70}})]},
+                                     label={"text": f"{RISK_MEDIAN_S:.0f} s", "style": {"color": INK_MUTED}})]},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0,
                   "plotLines": [dict(threshold_line, value=RISK_PCT_GT300,
                                      label={"text": f"{RISK_PCT_GT300:.0f} %", "align": "right",
-                                            "style": {"color": OLIVE_LEAF_70}})]},
+                                            "style": {"color": INK_MUTED}})]},
         "series": series,
         "plotOptions": {"bubble": {"minSize": 10, "maxSize": 60, "opacity": 0.85}},
         "legend": {"enabled": True, "verticalAlign": "bottom", "align": "center",
-                   "bubbleLegend": {"enabled": True, "color": BLACK_FOREST_35, "borderColor": BLACK_FOREST,
-                                    "connectorColor": BLACK_FOREST, "ranges": [{}, {}, {}],
+                   "bubbleLegend": {"enabled": True, "color": INK_35, "borderColor": INK,
+                                    "connectorColor": INK, "ranges": [{}, {}, {}],
                                     "labels": {"format": "{value:,.0f} passages",
-                                               "style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}}}},
+                                               "style": {"color": INK_MUTED, "fontSize": "12px"}}}},
     }
 
 
@@ -328,8 +332,8 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
              "pct_avance_1min": "pourcent", "pct_arrets_sautes": "pourcent"}
     series = []
     for _, r in mode_stats.iterrows():
-        data = [{"y": round(r[m], 1), "color": palette_hex(round(r[m], 1), kinds[m])} for m, _, _ in metrics]
-        series.append({"name": mode_series_name(r["route_type"], r["mode"]), "color": BLACK_FOREST,
+        data = [{"y": round(r[m], 1), "color": measure_color(round(r[m], 1), kinds[m])} for m, _, _ in metrics]
+        series.append({"name": mode_series_name(r["route_type"], r["mode"]), "color": INK,
                        "data": data, "dataLabels": _glyph_labels(r["route_type"]), "tooltip": unit_tooltip(" %")})
     return {
         "chart": {"type": "column", "height": 330},
@@ -368,7 +372,7 @@ def period_category(label: str) -> str:
 
 def period_score_chart(df: pd.DataFrame) -> dict:
     """Score de fiabilité par créneau (couleur = palier)."""
-    data = [{"y": round(float(r["score_fiabilite"]), 1), "color": palette_hex(r["score_fiabilite"], "score"),
+    data = [{"y": round(float(r["score_fiabilite"]), 1), "color": score_color(r["score_fiabilite"]),
              "ponct": round(float(r["pct_a_l_heure"]), 1), "skip": round(float(r["pct_arrets_sautes"]), 2),
              "passages": int(r["observations"])}
             for _, r in df.iterrows()]
@@ -391,11 +395,11 @@ def period_score_chart(df: pd.DataFrame) -> dict:
 def _group_series(group: str, route_type, data: list, unit: str, decimals: int) -> dict:
     tooltip = unit_tooltip(unit, decimals)
     if group == GROUP_ALL:
-        return {"name": GROUP_ALL, "data": data, "color": BLACK_FOREST, "lineWidth": 3, "zIndex": 3,
+        return {"name": GROUP_ALL, "data": data, "color": INK, "lineWidth": 3, "zIndex": 3,
                 "marker": {"enabled": True, "radius": 4, "symbol": "circle"}, "tooltip": tooltip}
     return {**_mode_line_series(route_type, mode_series_name(route_type, group), data), "lineWidth": 1.5,
             "marker": {"enabled": True, "symbol": mode_marker(route_type), "radius": 4,
-                       "fillColor": BLACK_FOREST, "lineColor": BLACK_FOREST, "lineWidth": 1},
+                       "fillColor": INK, "lineColor": INK, "lineWidth": 1},
             "tooltip": tooltip}
 
 
@@ -409,12 +413,12 @@ def groups_trend_chart(df: pd.DataFrame, metric: str, groups: list[str]) -> dict
             continue
         values = sub[metric].astype(float)
         dates = [int(pd.Timestamp(ts).timestamp() * 1000) for ts in sub["date_service"]]
-        data = [{"x": ms, "y": round(float(v), decimals), "color": palette_hex(abs(float(v)), kind)}
+        data = [{"x": ms, "y": round(float(v), decimals), "color": measure_color(abs(float(v)), kind)}
                 for ms, v in zip(dates, values) if pd.notna(v)]
         series.append(_group_series(group, sub["route_type"].iloc[0], data, unit, decimals))
         if groups == [GROUP_ALL]:
             ma = [[ms, round(float(values.iloc[max(0, i - 6):i + 1].mean()), decimals)] for i, ms in enumerate(dates)]
-            series.append({"name": "Moyenne sur 7 jours", "data": ma, "color": OLIVE_LEAF, "dashStyle": "ShortDash",
+            series.append({"name": "Moyenne sur 7 jours", "data": ma, "color": INK_MUTED, "dashStyle": "ShortDash",
                            "lineWidth": 2, "marker": {"enabled": False}, "tooltip": unit_tooltip(unit, decimals)})
     y_axis = {"title": {"text": f"{label} ({unit.strip()})"}, "min": 0}
     if unit != " s":
@@ -439,7 +443,7 @@ def groups_hourly_chart(df: pd.DataFrame, groups: list[str]) -> dict:
         if sub.empty:
             continue
         by_hour = {int(h): round(float(v), 1) for h, v in zip(sub["heure"], sub["pct_retard_5min"]) if pd.notna(v)}
-        data = [{"y": by_hour[h], "color": palette_hex(by_hour[h], "pourcent")} if h in by_hour else {"y": None}
+        data = [{"y": by_hour[h], "color": screen_hex(by_hour[h], "pourcent")} if h in by_hour else {"y": None}
                 for h in range(24)]
         series.append({**_group_series(group, sub["route_type"].iloc[0], data, " %", 1),
                        "tooltip": unit_tooltip(" %", header=HOUR_HEADER)})
@@ -461,10 +465,10 @@ def period_mode_chart(df: pd.DataFrame) -> dict:
         pa = sub.set_index("période").reindex(categories)
         route_type = sub["route_type"].iloc[0]
         data = [{"y": round(float(r["pct_retard_5min"]), 1),
-                 "color": palette_hex(round(float(r["pct_retard_5min"]), 1), "pourcent")}
+                 "color": screen_hex(round(float(r["pct_retard_5min"]), 1), "pourcent")}
                 if pd.notna(r["pct_retard_5min"]) else {"y": None}
                 for _, r in pa.iterrows()]
-        series.append({"name": mode_series_name(route_type, mode), "data": data, "color": BLACK_FOREST,
+        series.append({"name": mode_series_name(route_type, mode), "data": data, "color": INK,
                        "dataLabels": _glyph_labels(route_type), "tooltip": unit_tooltip(" %")})
     return {
         "lexique": "retards-de-plus-de-5-min",
@@ -482,8 +486,7 @@ def engagement_progression_chart(prog: pd.DataFrame) -> dict:
     """Évolution du score de fiabilité par ligne (moitié récente − moitié précédente)."""
     df = prog.sort_values("delta_score")
     data = [{"y": round(r["delta_score"], 1),
-             "color": OLIVE_LEAF if r["delta_score"] >= 2
-                      else COPPERWOOD if r["delta_score"] <= -2 else SUNLIT_CLAY,
+             "color": INK if abs(r["delta_score"]) >= 2 else INK_35,
              "score": round(r["score_fiabilite"], 1),
              "prec": round(r["score_fiabilite_prev"], 1)}
             for _, r in df.iterrows()]
@@ -512,7 +515,7 @@ def delay_distribution_chart(df: pd.DataFrame) -> dict:
         "+2 à +5": 210, "+5 à +10": 450, "+10 à +20": 900, "> +20 min": 1500,
     }
     data = [{"y": int(r["observations"]),
-             "color": palette_hex(drift_seconds.get(r["plage"], 1500), "retard")}
+             "color": screen_hex(drift_seconds.get(r["plage"], 1500), "retard")}
             for _, r in df.iterrows()]
     labels = [p if "min" in p else f"{p} min" for p in df["plage"]]
     return {
@@ -543,24 +546,24 @@ def collection_minutely_chart(df: pd.DataFrame) -> dict:
             ],
             "selected": 2,
             "inputEnabled": False,
-            "buttonTheme": {"fill": "#FFFFFF", "stroke": SUNLIT_CLAY_40, "style": {"color": OLIVE_LEAF_70, "fontSize": "12px"}},
+            "buttonTheme": {"fill": "#FFFFFF", "stroke": LINE, "style": {"color": INK_MUTED, "fontSize": "12px"}},
         },
         "navigator": {
             "enabled": True,
-            "series": {"color": BLACK_FOREST, "lineWidth": 1},
-            "xAxis": {"labels": {"style": {"color": OLIVE_LEAF_70}}},
+            "series": {"color": INK, "lineWidth": 1},
+            "xAxis": {"labels": {"style": {"color": INK_MUTED}}},
         },
         "scrollbar": {
             "enabled": True,
             "barBackgroundColor": "#FFFFFF",
-            "barBorderColor": SUNLIT_CLAY_40,
-            "buttonBackgroundColor": SUNLIT_CLAY_30,
-            "buttonBorderColor": SUNLIT_CLAY_40,
-            "trackBackgroundColor": SUNLIT_CLAY_30,
-            "trackBorderColor": SUNLIT_CLAY_40,
+            "barBorderColor": LINE,
+            "buttonBackgroundColor": LINE_SOFT,
+            "buttonBorderColor": LINE,
+            "trackBackgroundColor": LINE_SOFT,
+            "trackBorderColor": LINE,
         },
         "title": {"text": None},
-        "series": [{"type": "line", "name": "Observations", "data": data, "color": BLACK_FOREST, "marker": {"enabled": False},
+        "series": [{"type": "line", "name": "Observations", "data": data, "color": INK, "marker": {"enabled": False},
                     "tooltip": {"pointFormat": "<b>{point.y:,.0f} observations</b> reçues dans la minute<br/>"}}],
         "lexique": "observation",
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
@@ -575,7 +578,7 @@ def hourly_distribution_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"categories": [str(int(r["heure"])) for _, r in df.iterrows()], "title": {"text": "Heure locale"}, "labels": {"step": 2}},
         "yAxis": {"title": {"text": "Observations"}, "min": 0},
-        "series": [{"name": "Observations", "data": data, "color": BLACK_FOREST,
+        "series": [{"name": "Observations", "data": data, "color": INK,
                     "tooltip": {"headerFormat": HOUR_HEADER,
                                 "pointFormat": "<b>{point.y:,.0f} observations</b><br/>"}}],
         "plotOptions": {"column": {"borderRadius": 3, "groupPadding": 0.05, "pointPadding": 0.05}},
@@ -594,11 +597,11 @@ def commune_bands(stop_ids: list, commune_stop_ids: set | None, commune_label: s
         if inside and start is None:
             start = i
         elif not inside and start is not None:
-            band = {"from": start - 0.5, "to": i - 0.5, "color": CORNSILK, "borderColor": SUNLIT_CLAY_40,
+            band = {"from": start - 0.5, "to": i - 0.5, "color": SURFACE, "borderColor": LINE,
                     "borderWidth": 1, "zIndex": 0}
             if not bands and commune_label:
                 band["label"] = {"text": commune_label, "align": "left", "x": 4, "y": 12,
-                                 "style": {"color": OLIVE_LEAF_70, "fontSize": "12px", "fontWeight": "600"}}
+                                 "style": {"color": INK_MUTED, "fontSize": "12px", "fontWeight": "600"}}
             bands.append(band)
             start = None
     return bands
@@ -607,9 +610,9 @@ def commune_bands(stop_ids: list, commune_stop_ids: set | None, commune_label: s
 def _stop_line(stop_ids: list, stop_id: str | None) -> list:
     if stop_id is None or stop_id not in stop_ids:
         return []
-    return [{"value": stop_ids.index(stop_id), "color": BLACK_FOREST, "dashStyle": "Dash", "width": 2,
+    return [{"value": stop_ids.index(stop_id), "color": INK, "dashStyle": "Dash", "width": 2,
              "zIndex": 4, "label": {"text": "Cet arrêt", "rotation": 0, "y": 12, "x": 4,
-                                    "style": {"color": BLACK_FOREST, "fontWeight": "600", "fontSize": "12px"}}}]
+                                    "style": {"color": INK, "fontWeight": "600", "fontSize": "12px"}}}]
 
 
 def _profile_axis(p: pd.DataFrame, highlight_stop_id, commune_stop_ids, commune_label) -> dict:
@@ -630,7 +633,7 @@ def line_profile_chart(profile: pd.DataFrame, highlight_stop_id: str | None = No
     """
     p = profile.sort_values("order").reset_index(drop=True)
     hot = hotspot_stop_ids or set()
-    gains = [{"y": round(float(g), 1), "color": COPPERWOOD if sid in hot else BLACK_FOREST_35,
+    gains = [{"y": round(float(g), 1), "color": VIN if sid in hot else INK_35,
               "prev": prev if isinstance(prev, str) else "—"}
              for sid, g, prev in zip(p["stop_id"], p["gain_s"], p["prev_stop_name"])]
     delays = [round(float(v), 1) if pd.notna(v) else None for v in p["delay_s"]]
@@ -640,9 +643,9 @@ def line_profile_chart(profile: pd.DataFrame, highlight_stop_id: str | None = No
         "xAxis": _profile_axis(p, highlight_stop_id, commune_stop_ids, commune_label),
         "yAxis": [{"title": {"text": "Retard (secondes)"}}],
         "series": [
-            {"type": "column", "name": "Retard pris sur le tronçon", "data": gains, "color": BLACK_FOREST_35,
+            {"type": "column", "name": "Retard pris sur le tronçon", "data": gains, "color": INK_35,
              "tooltip": {"pointFormat": "Retard pris depuis {point.prev} : <b>{point.y:+.0f} s</b><br/>"}},
-            {"type": "line", "name": "Retard moyen à l'arrêt", "data": delays, "color": BLACK_FOREST,
+            {"type": "line", "name": "Retard moyen à l'arrêt", "data": delays, "color": INK,
              "lineWidth": 2, "marker": {"enabled": False}, "tooltip": unit_tooltip(" s", 0)},
         ],
         "tooltip": {"shared": True},
@@ -666,10 +669,10 @@ def slot_profile_chart(sp: pd.DataFrame, slot_label: str, highlight_stop_id: str
         "xAxis": _profile_axis(p, highlight_stop_id, commune_stop_ids, commune_label),
         "yAxis": {"title": {"text": "Retard moyen (secondes)"}},
         "series": [
-            {"name": slot_label, "data": _values("slot_delay"), "color": BLACK_FOREST, "lineWidth": 3,
+            {"name": slot_label, "data": _values("slot_delay"), "color": INK, "lineWidth": 3,
              "marker": {"enabled": True, "radius": 3, "symbol": "circle"}, "connectNulls": True},
             {"name": "D'habitude (autres jours et heures)", "data": _values("usual_delay"),
-             "color": BLACK_FOREST_35, "dashStyle": "ShortDash", "lineWidth": 2,
+             "color": INK_35, "dashStyle": "ShortDash", "lineWidth": 2,
              "marker": {"enabled": False}, "connectNulls": True},
         ],
         "tooltip": {"shared": True, "valueSuffix": " s", "valueDecimals": 0},
@@ -683,7 +686,7 @@ def skip_profile_chart(profile: pd.DataFrame, commune_stop_ids: set | None = Non
     """Taux d'arrêts non desservis arrêt par arrêt le long d'une direction (palier « pourcent »)."""
     p = profile.sort_values("order").reset_index(drop=True)
     rates = (p["skipped"] / p["eligible"].where(p["eligible"] > 0) * 100).fillna(0.0)
-    data = [{"y": round(float(r), 1), "color": palette_hex(round(float(r), 1), "pourcent"),
+    data = [{"y": round(float(r), 1), "color": screen_hex(round(float(r), 1), "pourcent"),
              "skipped": int(k)} for r, k in zip(rates, p["skipped"])]
     return {
         "legend": {"enabled": False},
@@ -708,9 +711,9 @@ def stop_lines_chart(lines: pd.DataFrame) -> dict:
         "xAxis": {"categories": categories, "title": {"text": None}},
         "yAxis": {"title": {"text": "Passages"}, "min": 0, "allowDecimals": False},
         "series": [
-            {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": BLACK_FOREST,
+            {"name": "Passages à plus de 5 min", "data": [int(v) for v in df["cnt_gt300"]], "color": INK,
              "tooltip": unit_tooltip(" passages", 0)},
-            {"name": "Arrêts non desservis", "data": [int(v) for v in df["skipped"]], "color": BLACK_FOREST_35,
+            {"name": "Arrêts non desservis", "data": [int(v) for v in df["skipped"]], "color": INK_35,
              "tooltip": unit_tooltip(" passages", 0)},
         ],
         "lexique": "retards-de-plus-de-5-min",
@@ -721,7 +724,7 @@ def stop_lines_chart(lines: pd.DataFrame) -> dict:
 
 def risk_by_label_chart(table: pd.DataFrame, label_col: str) -> dict:
     """Part des passages > 5 min par créneau ou par jour (palier « pourcent »)."""
-    data = [{"y": round(float(v), 1), "color": palette_hex(round(float(v), 1), "pourcent"),
+    data = [{"y": round(float(v), 1), "color": screen_hex(round(float(v), 1), "pourcent"),
              "passages": int(o)} for v, o in zip(table["pct_gt300"], table["obs"])]
     return {
         "legend": {"enabled": False},
@@ -742,7 +745,7 @@ def daily_status_chart(daily: pd.DataFrame, threshold: float) -> dict:
          .reset_index())
     d = d[d["obs"] > 0]
     data = [{"x": int(pd.Timestamp(ts).timestamp() * 1000), "y": round(float(c) / float(o) * 100, 1),
-             "color": palette_hex(round(float(c) / float(o) * 100, 1), "pourcent"), "passages": int(o)}
+             "color": screen_hex(round(float(c) / float(o) * 100, 1), "pourcent"), "passages": int(o)}
             for ts, o, c in zip(d["date_service"], d["obs"], d["cnt_gt300"])]
     return {
         "legend": {"enabled": False},
@@ -750,9 +753,9 @@ def daily_status_chart(daily: pd.DataFrame, threshold: float) -> dict:
         "title": {"text": None},
         "xAxis": {"type": "datetime", "title": {"text": None}},
         "yAxis": {"title": {"text": "Retards > 5 min (%)"}, "min": 0,
-                  "plotLines": [{"value": threshold, "color": SUNLIT_CLAY, "dashStyle": "Dash", "width": 1,
+                  "plotLines": [{"value": threshold, "color": INK_MUTED, "dashStyle": "Dash", "width": 1,
                                  "zIndex": 3, "label": {"text": "jour dégradé", "align": "right",
-                                                        "style": {"color": OLIVE_LEAF_70}}}]},
+                                                        "style": {"color": INK_MUTED}}}]},
         "series": [{"name": "Retards > 5 min", "data": data,
                     "tooltip": {"pointFormat": "Retards de plus de 5 min : <b>{point.y:.1f} %</b><br/>Passages : {point.passages:,.0f}<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
@@ -770,7 +773,7 @@ def cancellations_chart(df: pd.DataFrame) -> dict:
         "title": {"text": None},
         "xAxis": {"type": "datetime", "title": {"text": None}},
         "yAxis": {"title": {"text": "Courses supprimées"}, "min": 0, "allowDecimals": False},
-        "series": [{"name": "Courses supprimées", "data": data, "color": BLACK_FOREST,
+        "series": [{"name": "Courses supprimées", "data": data, "color": INK,
                     "tooltip": {"pointFormat": "<b>{point.y} courses supprimées</b> sur {point.trips:,.0f} connues<br/>"}}],
         "plotOptions": {"column": {"borderRadius": 2, "groupPadding": 0.05, "pointPadding": 0.05}},
         "lexique": "course-supprimee",

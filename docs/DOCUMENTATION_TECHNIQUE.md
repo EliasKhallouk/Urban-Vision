@@ -185,8 +185,8 @@ Urban-Vision/
 ├── apt-requirement.txt             # dépendances système (TeX + fonts)
 ├── assets/logo/
 │   ├── urban-vision-logo-bw.png
-│   ├── urban-vision-logo-color.png
-│   └── urban-vision-logo-white.png # utilisé par le dashboard et les rapports
+│   ├── urban-vision-logo-color.png # menu et icône d'onglet du dashboard
+│   └── urban-vision-logo-white.png # couverture des rapports
 ├── dashboard/
 │   ├── app.py                      # dashboard Streamlit (pages, loaders, fiches, 3742 lignes)
 │   ├── carte.py                    # carte des arrêts : composant st.components.v2, données, icônes
@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 583 tests pytest
+└── tests/                          # 29 fichiers, 678 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -365,7 +365,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 431 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 678 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -525,8 +525,8 @@ source des tailles ; test `TestEchelleTypographique`) :
 | `--fs-label` | 0,8125 rem (13 px), demi-gras | libellés et sous-textes des cartes, légendes de paliers |
 | `--fs-micro` | 0,75 rem (12 px) | grille jour × heure, pastille « ? » |
 
-Interlignage 1,2 (titres), 1,55 (texte), 1,45 (légendes). Texte secondaire en
-Olive Leaf plein (`--ink-2`, contraste 5,6:1 sur blanc), sans transparence ;
+Interlignage 1,2 (titres), 1,55 (texte), 1,45 (légendes). Texte secondaire
+plein (`--ink-2` = `INK_MUTED`, contraste 6,2:1 sur blanc), sans transparence ;
 aucune étiquette en capitales espacées. Graphiques : police Source Sans 3
 chargée dans chaque graphique depuis jsDelivr (`CHART_FONT_CSS`, même famille
 que l'application), libellés d'axes et légendes en 13 px, infobulles en 14 px,
@@ -539,7 +539,7 @@ positif = « fiable », moyen = « à surveiller », négatif = « problématiqu
 Le dashboard n'affiche jamais le nom interne d'un palier ni celui de sa
 couleur (légendes `render_tier_legend`, cartes « État », tableaux).
 
-Couleurs
+Couleurs des **rapports PDF** (inchangées, trois paliers fixes : `HEX`, `LATEX`)
 
 | Nom | Hex | Usage |
 |---|---|---|
@@ -547,9 +547,61 @@ Couleurs
 | Olive Leaf | `#606c38` | positif |
 | Sunlit Clay | `#DDA15E` | moyen |
 | Copperwood | `#bc6c25` | négatif |
-| Cornsilk | `#FEFAE0` | accent ponctuel (pastille de navigation active, texte sur cellules colorées) — jamais une couleur de score |
-| White | `#FFFFFF` | fond de page (dashboard et rapports) |
-| Teal | `#2A6F6F` | couleur d'appoint des graphiques matplotlib des rapports (non utilisée par le dashboard) |
+| Cornsilk | `#FEFAE0` | accent ponctuel, jamais une couleur de score |
+| White | `#FFFFFF` | fond de page |
+| Teal | `#2A6F6F` | couleur d'appoint des graphiques matplotlib |
+
+Charte **écran** « Pierre et vin » (dashboard uniquement, section « Charte
+écran » de `palette.py`) : 10 couleurs, injectées en variables CSS par
+`inject_style` (`--ink`, `--ink-2`, `--surface`, `--line`, `--action`,
+`--garonne`, `--pierre`, `--vin`, `--lie`) et lues par Highcharts et les deux
+cartes ; aucune couleur codée en dur ailleurs.
+
+| Jeton | Hex | Usage |
+|---|---|---|
+| `INK` | `#2B2523` | texte, titres, séries neutres, évolutions (15,1:1 sur blanc) |
+| `INK_MUTED` | `#6A5F58` | texte secondaire, axes (6,2:1) |
+| `SURFACE` | `#F6F1EA` | menu, encadrés, halo de sélection |
+| `LINE` | `#E5DCD0` | bordures, grilles |
+| `ACTION` | `#351E8F` | tout ce qui se clique : liens, boutons, élément de menu actif, curseur (12,1:1, texte blanc) |
+| `GARONNE` | `#7FAAA6` | repère calme de l'échelle |
+| `PIERRE` | `#E1C17E` | repère « un peu » |
+| `VIN` | `#B1437A` | repère « beaucoup / problématique » |
+| `LIE` | `#602D24` | repère extrême |
+| `SCREEN_NO_DATA` | `#D6D6D2` | pas assez de données, toujours en pointillé fin |
+
+Le texte n'est jamais posé directement sur une couleur d'échelle sans
+`ink_on(couleur)`, qui choisit l'encre ou le blanc selon le contraste.
+Les mesures à paliers autres que le score (retards, part des passages à plus
+de 5 min, arrêts non desservis) gardent trois couleurs (`screen_hex` :
+Garonne, pierre, vin). Une évolution n'a jamais de couleur d'état
+(`evolution_words` : « ▼ 0,8 point », « stable »).
+
+**Dégradé continu à repères fixes** (`scale_color`, interpolation sRGB entre
+quatre repères, couleur calme avant le premier, extrême après le dernier).
+Les repères ont été fixés une fois pour toutes par l'analyse de la
+distribution sur la rentrée 2026 (`ANCHORS_REFERENCE`, 01/09 au 11/10/2026) :
+
+| Échelle | Calme | Pierre | Vin | Lie | Lecture |
+|---|---|---|---|---|---|
+| Tronçons (`TRONCON_ANCHORS`, secondes retenues) | 0 s | 15 s | 40 s | 60 s | médiane −1 s ; 15 s = 9 tronçons sur 10 en dessous ; 40 s = 98,5 sur 100 ; 60 s ≈ 995 sur 1 000 |
+| Scores (`SCORE_ANCHORS`) | 80 | 60 | 50 | 35 | 80 et 50 = seuils fiable et problématique ; 60 ≈ les 10 % d'arrêts les moins bien notés ; 35 ≈ le 1 % des lignes les moins bien notées |
+
+Secondes retenues (`retained_seconds`) : secondes perdues plafonnées par
+l'équivalent en secondes de la part du temps prévu (25 % = 15 s, 50 % = 40 s,
+proportionnel entre les deux, même pente au-delà). Elles valent au moins
+15 s exactement quand `troncon_tier` donne « un peu » ou « beaucoup », et au
+moins 40 s exactement pour « beaucoup » (81 cas testés,
+`TestSecondesRetenues`) : la couleur ne contredit jamais le palier, qui reste
+la règle de mesure. Côté navigateur, la couleur est en plus bornée à
+l'intervalle du palier (`segHex`, valeurs envoyées arrondies).
+
+Contrôle des couleurs (CIELAB, simulation Machado 2009) : écart entre repères
+successifs d'au moins 30 en vision normale, deutéranopie, protanopie et
+tritanopie (vin et lie : 35 en protanopie) ; aucune couleur à moins de 22
+d'une couleur de TBM (`#039CD2`, `#075E82`, `#FF5B45`, `#E2007A`) ou de
+Keolis (`#E16433`, `#9233A1`, `#00AAC3`, `#20405F`, `#5F006E`), relevées sur
+leurs sites le 12/10/2026.
 
 Seuils (même valeur partout)
 
@@ -565,7 +617,7 @@ code **jamais par la couleur** (réservée aux paliers) mais par la forme du
 marqueur : `palette.MODE_MARKERS = {0: circle (●), 3: square (■), 4: triangle (▲)}`,
 losange (◆) pour tout autre mode ; `mode_marker(route_type)` renvoie le symbole
 Highcharts, `mode_glyph(route_type)` le glyphe texte des légendes et libellés.
-Les séries par mode sans score (courbes temporelles) sont en Black Forest avec
+Les séries par mode sans score (courbes temporelles) sont à l'encre avec
 un style de trait propre au mode (`MODE_DASH` de `highcharts.py`).
 
 Zones de la carte de risque (`palette.risk_zone(median_s, pct_gt300)`, utilisée
@@ -1388,9 +1440,12 @@ milieu, environ 1 600 passages) ; les traversées des lignes 951 et 953 n'ont
 que deux escales, leurs tronçons sont « début ou fin de ligne ».
 
 **Paliers** (`palette.troncon_tier`, règle validée le 11/10/2026) : médiane du
-temps perdu et médiane de la part du temps prévu. Beaucoup de temps perdu
-(Copperwood) : au moins 40 s **et** la moitié du temps prévu ; un peu (Sunlit
-Clay) : au moins 15 s **et** un quart ; sinon pas de temps perdu (Olive Leaf).
+temps perdu et médiane de la part du temps prévu. Beaucoup de temps perdu :
+au moins 40 s **et** la moitié du temps prévu ; un peu : au moins 15 s **et**
+un quart ; sinon pas de temps perdu. À l'écran, chaque tronçon prend la
+couleur continue de ses secondes retenues (§6.4 : Garonne à 0 s, pierre à
+15 s, vin à 40 s, lie à 60 s et plus) ; les tronçons non mesurés sont en
+pointillé gris.
 Les deux conditions évitent de colorer à tort les tronçons longs (avec les
 secondes seules, 25 % des tronçons de plus de 5 min prévues étaient rouges,
 contre 0,7 % des courts) comme les très courts (pourcentage seul). Sur les
@@ -1527,10 +1582,11 @@ lecteur qui n'est pas analyste :
   survol ou au clavier une bulle avec la définition et un lien « Voir dans le
   lexique ↗ » vers le terme correspondant (`HELP_TERMS`, `lexique_link`), ouvert
   dans un nouvel onglet pour ne pas perdre la sélection en cours. Les icônes
-  « ? » des listes (aide Streamlit) sont agrandies à 19 px, en vert foncé. Une carte évaluée
-  (palier fiable, à surveiller ou problématique, ou évolution) est remplie de
-  la couleur de son palier, texte crème, vert foncé ou blanc selon le fond
-  (`KPI_FILLS`) ; une carte neutre reste blanche à liseré. Les pages
+  « ? » des listes (aide Streamlit) sont agrandies à 19 px, à l'encre. Toutes
+  les cartes sont blanches, bordées d'un trait `LINE` ; une carte évaluée porte
+  devant sa valeur une pastille à la couleur de son état (`_kpi_color` :
+  dégradé du score pour « État », paliers écran sinon) ; l'évolution reste
+  neutre (`evolution_words`). Les pages
   d'information (`INFO_PAGES` : « Rapports mensuels », « À propos ») n'ont ni
   titre ni bandeau ;
 - **vue rapide** : verdict en phrase, graphique principal et, dans les
@@ -1562,7 +1618,7 @@ lecteur qui n'est pas analyste :
    chaque libellé n'étant écrit qu'une fois (`diagnostic.priorities`,
    `PRIORITY_GRID`). Chaque case (`priority_cell_html`) donne le chiffre en
    grand (passages partis avec plus de 5 min de retard, ou points de score
-   perdus en Copperwood), puis l'arrêt ou la ligne :
+   perdus, à l'encre comme toute évolution), puis l'arrêt ou la ligne :
    - une ligne est une pastille à son nom, au fond de la couleur de son état,
      comme un pictogramme de réseau (`line_badge_html`) ;
    - un arrêt porte le glyphe de son mode (● ■ ▲) à la couleur de son état,
@@ -1580,7 +1636,9 @@ lecteur qui n'est pas analyste :
    de passages). La règle est rappelée dans « Méthode » (`PRIORITY_RULE`).
    Puis la **carte des arrêts**, avec un champ « Chercher un arrêt »
    (`stop_search`, synchronisé sur `stop_id`, `_on_stop_search`) et une
-   légende couleur (état), forme (mode) et taille (passages)
+   légende couleur (dégradé du score, repères 80 et 50) et forme (mode),
+   arrêts de taille constante (`STOP_SIZE_METERS`), couleur au pas de 2,5
+   points de score (`score_level`, atlas de 19 teintes × 4 formes)
    (`map_legend_html`) (`dashboard/carte.py` + `dashboard/carte_arrets.js`,
    composant `st.components.v2` qui pilote deck.gl 9.1 sur un fond MapLibre,
    style vectoriel « Positron » de Carto ; arrêts de `load_territorial`, depuis
@@ -1618,7 +1676,7 @@ lecteur qui n'est pas analyste :
      une autre (`CollisionFilterExtension` de deck.gl : elle réapparaît en
      zoomant), infobulle (état et score) ; une ligne qui dessert l'arrêt sans
      aucun passage mesuré sur la période (`load_unmeasured_lines`, section 7.4)
-     est tracée en gris (`NO_DATA`) sous les autres, avec l'état « sans temps
+     est tracée en gris (`SCREEN_NO_DATA`) sous les autres, avec l'état « sans temps
      réel, non mesurable » et sans score ; les autres arrêts
      passent en transparence. Le bandeau ajoute « Voir les lignes entières »,
      qui cadre la carte sur tous les tracés ; une phrase sous la carte les
@@ -1789,8 +1847,8 @@ lecteur qui n'est pas analyste :
    causalité démontrée avec les statistiques.
 7. **Données & méthode** — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
    identifiant `lexique_slug` ; un lien `?lexique=<terme>`, venu d'une aide « ? »
-   ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné en
-   crème et le fait défiler à l'écran, sans afficher le guide ; mots du
+   ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné
+   (fond `SURFACE`, trait `ACTION`) et le fait défiler à l'écran, sans afficher le guide ; mots du
    tableau de bord et des rapports en langage courant), *Méthode* (définitions, seuils,
    stabilisation 20 min, jours et lignes écartés, lecture des fiches, arrêts non
    desservis, bloc « Le score de fiabilité de la période » : score ± marge, à
@@ -1859,7 +1917,7 @@ puis la période :
   ligne 1 »…) et il est grisé quand il n'y a rien avant.
 
 Toutes les listes déroulantes de l'application (`stSelectbox`) ont un cadre
-vert foncé à 45 % d'opacité, un chevron agrandi et un cadre plein au survol,
+encre à 45 % d'opacité, un chevron agrandi et un cadre `ACTION` au focus,
 pour qu'on les reconnaisse comme des menus (le thème rendait leur bordure
 blanche sur fond blanc).
 
@@ -1875,8 +1933,8 @@ version figée 13.1.1 (`HIGHCHARTS_CDN`). `code.highcharts.com` n'est plus
 utilisé : son usage en production n'est pas prévu par l'éditeur, et il
 refuse les navigateurs sans interface (« Violation of license/fair-usage
 policy »), ce qui empêchait aussi les contrôles automatiques de rendu ;
-applique `LIGHT_THEME` (fonds blanc, bordures Sunlit Clay, texte Olive Leaf à
-70 %), en français (`lang` : virgule décimale, espace fine pour les milliers,
+applique `LIGHT_THEME` (fonds blanc, grilles `LINE`, texte `INK_MUTED`),
+en français (`lang` : virgule décimale, espace fine pour les milliers,
 mois et jours en français, dates d'infobulle « lundi 15 septembre 2026 »).
 Chaque infobulle nomme ce qu'elle montre et porte son unité (`unit_tooltip` :
 « Retards de plus de 5 min : 12,3 % », « 1 234 passages », « 45 s », « / 100 » ;
@@ -1907,9 +1965,9 @@ Modes : `scatter_chart` (une série de bulles par mode, `marker.symbol` =
 des quatre zones dans les coins : `zone_labels_series`) ;
 `mode_comparison_chart` et `period_mode_chart` (colonnes colorées par palier,
 glyphe du mode en étiquette de donnée) ; `groups_trend_chart` et
-`groups_hourly_chart` (courbe « Ensemble » épaisse en Black Forest, une
+`groups_hourly_chart` (courbe « Ensemble » épaisse à l'encre, une
 courbe par mode avec trait `MODE_DASH` et marqueur propres au mode, points
-colorés par palier).
+colorés par `measure_color` : dégradé pour un score, paliers écran sinon).
 
 Légendes : quand la légende dessine déjà la forme du mode (bulles, courbes),
 le nom de série est le mode seul ; pour les colonnes, dont le symbole de
@@ -1929,9 +1987,9 @@ série), `accessibility.enabled` forcé et description générée
 `json.dumps(..., ensure_ascii=False)` pour garder le texte en clair.
 
 Fiches (§11.7) : `line_profile_chart` (retard pris par tronçon en colonnes,
-tronçons dominants en Copperwood, retard moyen à l'arrêt en courbe, arrêt
+tronçons dominants en vin, retard moyen à l'arrêt en courbe, arrêt
 consulté marqué d'un trait vertical, arrêts de la commune sélectionnée sur
-fond Cornsilk bordé via `commune_bands`), `slot_profile_chart` (retard moyen à
+fond `SURFACE` bordé via `commune_bands`), `slot_profile_chart` (retard moyen à
 chaque arrêt sur un créneau jour × heure, comparé au reste du temps en
 tirets), `skip_profile_chart` (taux
 d'arrêts non desservis arrêt par arrêt, palier `pourcent`), `stop_lines_chart`
@@ -1958,7 +2016,8 @@ médian de la classe (ex. `+1 à +2` → 90 s → palier « retard ») ; seules 
   la carte affiche un message et la recherche et le tableau des arrêts restent
   utilisables. La carte est suivie d'une légende textuelle (alternative de
   lecture pour lecteurs d'écran).
-- Logo local `assets/logo/urban-vision-logo-white.png` (data-URI base64).
+- Logo local `assets/logo/urban-vision-logo-color.png` (data-URI base64), fondu
+  dans le menu clair (`mix-blend-mode: multiply`).
 - **Aucun appel API ni `os.getenv`** dans `app.py`.
 
 ### 11.6 Export open data (`src/scripts/export_open_data.py`)
@@ -2062,7 +2121,7 @@ rendu** (courses supprimées par jour, arrêts non desservis le long de la ligne
 moment-là, le retard s'aggrave surtout entre … » en encadré au-dessus du
 profil du créneau le long de la ligne : `slot_hotspot`), **Contexte**
 (alertes, répartition des écarts). Quand une commune est sélectionnée, ses arrêts
-sont sur fond Cornsilk dans les profils et « En bref » donne la part du retard
+sont sur fond `SURFACE` dans les profils et « En bref » donne la part du retard
 de la ligne prise sur la commune et son tronçon le plus pénalisant
 (`commune_share`). En bas, les 10 arrêts les plus touchés (passages > 5 min +
 arrêts non desservis) ; une sélection ouvre la fiche arrêt.
@@ -2633,7 +2692,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 431 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 678 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -3095,7 +3154,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 583, isolés (suite `pytest` complète : 583 passed), flux synthétiques
+- Tests : 678, isolés (suite `pytest` complète : 678 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3106,7 +3165,10 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   `deploy/deployer.sh --sans-pull` ; formulation des tronçons, `0e7d37d`, vers
   9 h 40 avec `--sans-redemarrage` et un redémarrage du seul dashboard ;
   méthode 2.0, `915fde6`, le 02/10/2026 à 0 h 09 ; protection des données,
-  `3afe0d3`, le 01/10/2026 à 22 h 20).
+  `3afe0d3`, le 01/10/2026 à 22 h 20). Branche locale `refonte-ui` (refonte de
+  l'interface pour les non-initiés, depuis le 12/10/2026) : non poussée, non
+  déployée ; phase 1 (charte écran « Pierre et vin », dégradé à repères fixes,
+  arrêts de taille constante, évolutions neutres) terminée le 13/10/2026.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -3142,7 +3204,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 et I31 le 13/10/2026 sur la branche `refonte-ui`) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -3173,6 +3235,8 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
+| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (678 après la phase 1 de la refonte) |
+| I31 | Charte du dashboard : trois paliers en aplats ocre et cuivre (carte des arrêts presque entièrement ocre pour un réseau à 75), « à surveiller » et « problématique » trop proches (ΔE 22, 18 en deutéranopie), texte blanc sur cuivre à 3,95:1, gris « non mesuré » à 1,74:1 sur le fond de carte, évolutions colorées comme des états, taille des arrêts selon le nombre de passages lue comme une fréquentation | Charte écran « Pierre et vin » et dégradé à repères fixes (§6.4), texte choisi par `ink_on`, gris en pointillé, évolutions neutres, taille constante ; rapports PDF inchangés ; tests `TestCharteEcran`, `TestSecondesRetenues`, `TestDegrade`, `TestCarte`, `TestIcones` |
 | I29 | Deux scores coexistaient : le score de fiabilité (ponctualité ≤ 5 min − 2 × arrêts non desservis) partout, et le score 2.0 « en test » dans « Méthode », la fiche ligne et une page du rapport ; « à l'heure » comptait les départs très en avance ; les courses supprimées n'entraient pas dans le score ; les jours incomplets et les lignes au temps réel douteux n'étaient écartés que du score 2.0 ; la carte « Courses supprimées » de la fiche ligne ne comptait pas les mêmes courses que le score ; le rapport mêlait point et virgule décimale et tronquait le score de sa carte « Fiabilité » | Un seul score (section 10.3), calculé par `indicateurs.add_components` / `score_of` dans le dashboard, les rapports et l'open data ; « à l'heure » = −1 à +5 min partout ; exclusions appliquées à tous les indicateurs ; `agg_hourly(_stop).cnt_lt60` et son rattrapage ; décomposition exacte des points perdus ; nombres du rapport à la française ; tests `TestComposantesPartagees`, `TestDepartsEnAvanceParHeure`, `TestExclusionsDuRapport`, `TestRegles`, `test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score` |
 
 ### 26.4 Dette documentaire
@@ -3185,9 +3249,13 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 - Intégration continue en place (`.github/workflows/tests.yml`) ; le contrôle
   `ruff` se limite aux erreurs bloquantes, sans formatage ni typage, et le dépôt
   n'a pas de `pyproject.toml`.
-- Streamlit 1.60 signale deux API dépréciées utilisées par le dashboard :
-  `st.components.v1.html` (rendu Highcharts, à remplacer par `st.iframe`) et
-  `use_container_width` (à remplacer par `width`).
+- Streamlit 1.60 (figé dans `requirements.txt`) signale deux API dépréciées
+  utilisées par le dashboard : `st.components.v1.html`, annoncée comme retirée
+  « après le 01/06/2026 » et appelée à un seul endroit (`highcharts.py`,
+  rendu des graphiques non cliquables), et `use_container_width` (à remplacer
+  par `width`). Migration prévue : faire passer tous les graphiques par le
+  composant `st.components.v2` déjà utilisé pour le classement cliquable
+  (`dashboard/graphique.py`), plutôt que par `st.iframe`.
 - Les modules se chargent par `sys.path` inséré au runtime
   (`reports/`, `src/scripts/`, `dashboard/`) sans packaging — fragile mais
   fonctionnel ; un regroupement en paquets installerables simplifierait les
@@ -3217,6 +3285,23 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    en notant où ils bloquent.
 7. **Prendre une licence Highcharts ou passer à Apache ECharts** avant tout
    usage commercial du service (§23, point 15).
+8. **Départ au dernier arrêt d'une course** (à confirmer) : il semble compté
+   dans les agrégats comme les autres passages, alors qu'en fin de course il
+   n'a pas de sens pour un voyageur (ligne S35, rentrée 2026 : 22 départs au
+   dernier arrêt à −571 s en moyenne). Vérifier l'effet sur le score avant
+   toute décision ; c'est une règle de mesure.
+9. **Libellé du type de retard pour les lignes en avance** : la zone de
+   risque utilise la valeur absolue du retard médian, si bien qu'une ligne
+   partant en avance (S35, médiane −3 min 21 s, 76 % des départs avec plus
+   d'une minute d'avance, aucun retard exactement nul) est décrite comme
+   « Retards fréquents mais courts ». Les mesures sont réelles : la ligne reste
+   mesurée, seul le texte doit changer (phase 4 de la refonte).
+10. **Préchauffer le cache du dashboard au démarrage** : le premier affichage
+    après un redémarrage prend 10 à 12 s, dont environ 4,3 s pour trois
+    chargements (`load_network_data`, `load_territorial`,
+    `grouped_territorial`) ; les lancer pour la période par défaut dans un
+    fil d'exécution au démarrage du serveur ramènerait le premier visiteur au
+    temps d'une page déjà en cache (environ 2,8 s).
 8. **Prendre un nom de domaine propre** quand le projet est présenté aux
    communes (procédure en section 15).
 

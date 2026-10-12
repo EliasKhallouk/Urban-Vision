@@ -66,19 +66,26 @@ class TestMedianFromHistograms:
 class TestCouleurs:
     def test_score_tier_style(self):
         style = app_mod._score_tier_style(90.0)
-        assert "background-color: #606c38" in style
-        assert "color: #FEFAE0" in style
-        style = app_mod._score_tier_style(60.0)
-        assert "background-color: #DDA15E" in style
-        assert "color: #283618" in style
+        assert "background-color: #7FAAA6" in style
+        assert "color: #2B2523" in style
+        style = app_mod._score_tier_style(45.0)
+        assert f"background-color: {app_mod.score_color(45.0)}" in style
+        assert "color: #FFFFFF" in style
+
+    def test_evolution_neutre(self):
+        assert app_mod._delta_style(-8.0) == app_mod._delta_style(8.0)
+        assert app_mod.evolution_words(-0.8) == "▼ 0,8 point"
+        assert app_mod.evolution_words(2.7) == "▲ 2,7 points"
+        assert app_mod.evolution_words(0.0) == "stable"
 
 
 class TestKpiCard:
-    def test_bordure_par_polarite(self):
-        assert app_mod._kpi_border("positif") == "#606c38"
-        assert app_mod._kpi_border("negatif") == "#bc6c25"
-        assert app_mod._kpi_border("moyen") == "#DDA15E"
-        assert app_mod._kpi_border("autre") == "rgba(221, 161, 94, 0.50)"
+    def test_pastille_par_polarite(self):
+        assert app_mod._kpi_color("positif") == "#7FAAA6"
+        assert app_mod._kpi_color("negatif") == "#B1437A"
+        assert app_mod._kpi_color("moyen") == "#E1C17E"
+        assert app_mod._kpi_color("#123456") == "#123456"
+        assert app_mod._kpi_color("neutral") is None
 
     def test_kpi_card_sans_sublabel(self):
         card = app_mod.kpi_card("Passages", "1 234")
@@ -88,18 +95,14 @@ class TestKpiCard:
 
     def test_kpi_card_avec_sublabel(self):
         card = app_mod.kpi_card("Retard moyen", "1 min", "≤ 5 min", polarity="positif")
-        assert 'class="kpi-card kpi-filled"' in card
-        assert "background:#606c38" in card and "--kpi-ink:#FEFAE0" in card
+        assert 'class="kpi-card"' in card
+        assert 'class="kpi-dot" style="background:#7FAAA6"' in card
         assert "kpi-sublabel" in card
 
     def test_carte_neutre_non_coloree(self):
         card = app_mod.kpi_card("Passages", "1 234", polarity="neutral")
-        assert "kpi-filled" not in card
-        assert "border-left-color" in card
-
-    def test_texte_lisible_sur_chaque_palier(self):
-        assert app_mod.KPI_FILLS["moyen"] == "#283618"
-        assert app_mod.KPI_FILLS["negatif"] == "#FFFFFF"
+        assert "kpi-dot" not in card
+        assert "background" not in card
 
 
 def _ranking_inputs():
@@ -339,7 +342,7 @@ class TestGrilleJourHeure:
     def test_cases_colorees_encadrement_et_marges(self):
         html = app_mod.week_hour_grid_html(self._table(), {"weekday": 4, "hour": 9})
         assert html.count("<tr>") == 9
-        assert 'style="background:#bc6c25;color:#FEFAE0;outline:2px solid #283618' in html
+        assert 'style="background:#B1437A;color:#FFFFFF;outline:2px solid #2B2523' in html
         assert "Vendredi 9 h–10 h : 60 % de passages à plus de 5 min · 30 passages · dégradé 3 fois sur 3" in html
         assert '<th>Ven.</th>' in html and "<th>Tous</th>" in html
         assert ">30</td>" in html
@@ -501,7 +504,7 @@ class TestVueRapide:
 
     def test_carte_etat(self):
         label, value, sub, polarity, help_text = app_mod.status_kpi(47.2, "réseau : 88 / 100")
-        assert (label, value, polarity) == ("État", "Problématique", "negatif")
+        assert (label, value, polarity) == ("État", "Problématique", app_mod.score_color(47.2))
         assert sub == "score 47 / 100 · réseau : 88 / 100"
         assert "Fiable à partir de 80" in help_text
 
@@ -514,7 +517,7 @@ class TestVueRapide:
     def test_aide_avec_lien_vers_le_lexique(self):
         card = app_mod.kpi_card("État", "Fiable", None, "positif", app_mod.HELP_TEXTS["score"])
         assert '<a href="?lexique=score-de-fiabilite" target="_blank" rel="noopener">Voir dans le lexique ↗</a>' in card
-        assert "--kpi-bg:#606c38" in card
+        assert 'class="kpi-dot" style="background:#7FAAA6"' in card
 
     def test_guide_au_premier_affichage_seulement(self):
         assert app_mod.should_show_guide({}, {}) is True
@@ -743,7 +746,7 @@ class TestTerritoireEtFiches:
         assert '<div class="pc-figure">6 534</div>' in cell
         assert "passages partis avec plus de 5 min de retard" in cell
         assert "Ligne &lt;5&gt;" in cell
-        assert "background:#DDA15E;color:#283618" in cell
+        assert f"background:{app_mod.score_color(74.5)};color:#2B2523" in cell
         assert "score 74,5 sur 100" in cell
         assert '<div class="pc-col">Le plus de retards</div>' in cell
         assert "<svg" not in cell
@@ -763,7 +766,7 @@ class TestTerritoireEtFiches:
         assert svg.count("<text") == 2 and ">80</text>" in svg and ">50</text>" in svg
         ys = [float(v) for v in __import__("re").findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)]
         assert ys[0] < ys[1]
-        assert f'fill="{app_mod.palette_hex(40.0, "score")}"' in svg
+        assert f'fill="{app_mod.score_color(40.0)}"' in svg
 
     def test_case_vide(self):
         assert "Pas de période de comparaison." in app_mod.priority_cell_html("arret_baisse", None, None)
@@ -772,9 +775,10 @@ class TestTerritoireEtFiches:
 
     def test_legende_de_la_carte(self):
         legend = app_mod.map_legend_html()
-        for text in ("Couleur", "Forme", "Taille", "Fiable", "À surveiller", "Problématique",
+        for text in ("Couleur", "Forme", "80 : fiable", "50 : problématique", "linear-gradient",
                      "●</span>Tramway", "■</span>Bus", "▲</span>Ferry"):
             assert text in legend
+        assert "Taille" not in legend
 
     def test_bandeau_type_de_retard(self):
         banner = app_mod.zone_banner_html(30.0, 22.0)

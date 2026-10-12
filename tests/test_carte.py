@@ -26,20 +26,24 @@ class TestIcones:
     def test_atlas_formes_par_palier_et_halo(self):
         uri, mapping = carte.marker_atlas()
         assert uri.startswith("data:image/png;base64,")
-        assert len(mapping) == 13
+        levels = carte.score_levels()
+        assert levels[0] == 80.0 and levels[-1] == 35.0 and len(levels) == 19
+        assert len(mapping) == 4 * 19 + 1
         img = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
-        assert img.size == (4 * carte.MARKER_CELL, 4 * carte.MARKER_CELL)
-        cell = mapping["square|#bc6c25"]
-        assert img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))[:3] == (0xBC, 0x6C, 0x25)
+        assert img.size == (4 * carte.MARKER_CELL, 20 * carte.MARKER_CELL)
+        cell = mapping["square|#B1437A"]
+        assert img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))[:3] == (0xB1, 0x43, 0x7A)
         halo = mapping["halo"]
         center = img.getpixel((halo["x"] + halo["width"] // 2, halo["y"] + halo["height"] // 2))
-        assert all(abs(a - b) <= 2 for a, b in zip(center[:3], (0xFE, 0xFA, 0xE0)))
+        assert all(abs(a - b) <= 2 for a, b in zip(center[:3], (0xF6, 0xF1, 0xEA)))
 
     def test_cle_d_icone(self):
-        assert carte.icon_key(3, 90.0) == "square|#606c38"
-        assert carte.icon_key(0, 60.0) == "circle|#DDA15E"
-        assert carte.icon_key(11, 10.0) == "diamond|#bc6c25"
-        assert carte.icon_key(4, 30.0) in carte.marker_atlas()[1]
+        assert carte.icon_key(3, 90.0) == "square|#7FAAA6"
+        assert carte.icon_key(0, 60.0) == "circle|#E1C17E"
+        assert carte.icon_key(11, 10.0) == "diamond|#602D24"
+        assert carte.icon_key(3, 61.1) == carte.icon_key(3, 60.0)
+        for score in (4.0, 30.0, 47.3, 66.6, 79.9, 100.0):
+            assert carte.icon_key(4, score) in carte.marker_atlas()[1]
 
 
 class TestDonneesDeLaCarte:
@@ -56,15 +60,13 @@ class TestDonneesDeLaCarte:
         p = self._payload()
         blanch = next(g for g in p["groups"] if g["w"] == "s2")
         assert sorted(p["stops"][i]["i"] for i in blanch["m"]) == ["s1", "s2"]
-        assert blanch["k"] == "square|#DDA15E"
+        assert blanch["k"] == f"square|{carte.score_color(67.5)}"
         assert all(p["groups"][s["g"]]["w"] in ("s2", "s3") for s in p["stops"])
         assert p["stops"][2]["d"] == "vers Blancherie"
 
-    def test_taille_selon_les_passages(self):
+    def test_taille_constante(self):
         p = self._payload()
-        low, high = carte.STOP_SIZE_METERS
-        sizes = {s["i"]: s["z"] for s in p["stops"]}
-        assert sizes == {"s1": high, "s2": low, "s3": (low + high) / 2}
+        assert {s["z"] for s in p["stops"]} | {g["z"] for g in p["groups"]} == {carte.STOP_SIZE_METERS}
 
     def test_selection_et_vue(self):
         assert self._payload("s1")["selected"] == "s1"

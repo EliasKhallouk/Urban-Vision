@@ -30,7 +30,7 @@ function esc(value) {
 }
 
 function chipColor(key) {
-  return key.split("|")[1] || "#283618";
+  return key.split("|")[1] || "#2B2523";
 }
 
 function spreadOffsets(stops, groups, zoom, minSep) {
@@ -132,7 +132,7 @@ function pathLayers(deck, paths) {
     new deck.PathLayer({ id: "lignes-lisere", ...common, getColor: [255, 255, 255, 235], getWidth: 10 }),
     new deck.PathLayer({
       id: "lignes-trace", ...common, getColor: (d) => [...d.c, 240], getWidth: 5,
-      pickable: true, autoHighlight: true, highlightColor: [40, 54, 24, 120],
+      pickable: true, autoHighlight: true, highlightColor: [53, 30, 143, 120],
     }),
   ];
 }
@@ -183,7 +183,7 @@ function buildLayers(deck, state) {
     sizeMaxPixels: data.size_px[1],
     pickable: true,
     autoHighlight: true,
-    highlightColor: [254, 250, 224, 170],
+    highlightColor: [246, 241, 234, 170],
   };
   const layers = [];
   const paths = data.paths || [];

@@ -78,7 +78,7 @@ class TestCarte:
         assert [(p["r"], p["p"][0]) for p in paths] == [("B", [2, 2]), ("B", [3, 3]), ("A", [1, 1])]
         a = paths[-1]
         assert (a["l"], a["e"], a["g"]) == ("1", "problématique", "●")
-        assert a["c"] == [0xBC, 0x6C, 0x25]
+        assert a["c"] == app_mod._hex_rgb(app_mod.score_color(40.0))
         assert a["t"] == [255, 255, 255]
 
     def test_ligne_sans_trace_ignoree(self):

@@ -23,18 +23,20 @@ _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
 from palette import (  # noqa: E402
-    BLACK_FOREST,
-    COPPERWOOD,
-    CORNSILK,
-    OLIVE_LEAF,
-    SUNLIT_CLAY,
-    hex as palette_hex,
+    ACTION,
+    INK,
+    INK_MUTED,
+    LINE,
+    SCORE_ANCHORS,
+    SURFACE,
     mode_marker,
+    score_color,
 )
 
 MARKER_SHAPES = ("circle", "square", "triangle", "diamond")
 MARKER_CELL = 48
-STOP_SIZE_METERS = (120.0, 240.0)
+STOP_SIZE_METERS = 170.0
+SCORE_STEP = 2.5
 STOP_SIZE_PIXELS = (8, 28)
 SPLIT_ZOOM = 14.0
 FOCUS_ZOOM = 15.0
@@ -46,34 +48,34 @@ COMMUNE_ZOOM = 11.5
 _JS = Path(__file__).with_name("carte_arrets.js").read_text(encoding="utf-8")
 _CSS = f"""
 .uv-map {{ position: relative; width: 100%; border-radius: 10px; overflow: hidden;
-          border: 1px solid rgba(221, 161, 94, .45); background: #F4F4EF; font-family: Inter, 'Segoe UI', sans-serif; }}
+          border: 1px solid {LINE}; background: #F4F4EF; font-family: 'Source Sans 3', 'Source Sans Pro', 'Segoe UI', sans-serif; }}
 .uv-canvas {{ position: absolute !important; inset: 0; width: 100%; height: 100%; }}
 .uv-map canvas {{ outline: none; }}
 .uv-tip {{ position: absolute; z-index: 3; display: none; pointer-events: none; max-width: 340px;
-          background: #FFFFFF; color: {BLACK_FOREST}; border: 1px solid rgba(221, 161, 94, .6);
-          border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 18px rgba(40, 54, 24, .18);
+          background: #FFFFFF; color: {INK}; border: 1px solid {LINE};
+          border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 18px rgba(43, 37, 35, .16);
           font-size: 13px; line-height: 1.45; }}
 .uv-title {{ font-weight: 700; font-size: 15px; margin-bottom: 2px; }}
-.uv-sub {{ color: rgba(96, 108, 56, .8); font-size: 12px; margin-bottom: 4px; }}
+.uv-sub {{ color: {INK_MUTED}; font-size: 12px; margin-bottom: 4px; }}
 .uv-row {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
 .uv-chip {{ flex: none; width: 10px; height: 10px; border-radius: 2px; }}
-.uv-num {{ margin-left: auto; padding-left: 10px; white-space: nowrap; color: rgba(40, 54, 24, .8); }}
-.uv-more {{ color: rgba(96, 108, 56, .8); font-size: 12px; }}
-.uv-foot {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(221, 161, 94, .35);
-           color: rgba(96, 108, 56, .85); font-size: 12px; }}
+.uv-num {{ margin-left: auto; padding-left: 10px; white-space: nowrap; color: {INK}; }}
+.uv-more {{ color: {INK_MUTED}; font-size: 12px; }}
+.uv-foot {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid {LINE};
+           color: {INK_MUTED}; font-size: 12px; }}
 .uv-cta {{ margin-top: 6px; font-weight: 600; }}
 .uv-badge {{ position: absolute; z-index: 2; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px;
-            max-width: calc(100% - 20px); background: {CORNSILK}; color: {BLACK_FOREST};
-            border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; padding: 5px 6px 5px 12px;
-            font-size: 13px; box-shadow: 0 2px 8px rgba(40, 54, 24, .18); }}
+            max-width: calc(100% - 20px); background: #FFFFFF; color: {INK};
+            border: 1.5px solid {ACTION}; border-radius: 999px; padding: 5px 6px 5px 12px;
+            font-size: 13px; box-shadow: 0 2px 8px rgba(43, 37, 35, .16); }}
 .uv-badge span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.uv-dot {{ flex: none; width: 10px; height: 10px; border-radius: 50%; background: {BLACK_FOREST};
-          box-shadow: 0 0 0 3px rgba(40, 54, 24, .25); }}
-.uv-badge button {{ flex: none; border: none; border-radius: 999px; background: {BLACK_FOREST}; color: #FFFFFF;
+.uv-dot {{ flex: none; width: 10px; height: 10px; border-radius: 50%; background: {ACTION};
+          box-shadow: 0 0 0 3px rgba(53, 30, 143, .2); }}
+.uv-badge button {{ flex: none; border: none; border-radius: 999px; background: {ACTION}; color: #FFFFFF;
                    padding: 3px 10px; font-size: 12px; cursor: pointer; }}
 .uv-hint {{ position: absolute; z-index: 2; left: 10px; bottom: 8px; background: rgba(255, 255, 255, .88);
-           color: rgba(40, 54, 24, .85); border-radius: 6px; padding: 2px 8px; font-size: 12px; }}
-.uv-error {{ padding: 24px; color: {BLACK_FOREST}; font-size: 14px; }}
+           color: {INK}; border-radius: 6px; padding: 2px 8px; font-size: 12px; }}
+.uv-error {{ padding: 24px; color: {INK}; font-size: 14px; }}
 """
 
 COMPONENT_NAME = "urban_vision_carte_arrets"
@@ -88,8 +90,8 @@ _carte = _register()
 
 @lru_cache(maxsize=1)
 def marker_atlas() -> tuple[str, dict]:
-    """Atlas PNG des icônes (forme du mode × couleur de palier, plus le halo de sélection) et son index."""
-    colors = (OLIVE_LEAF, SUNLIT_CLAY, COPPERWOOD)
+    """Atlas PNG des icônes (forme du mode × couleur du dégradé par pas de score, plus le halo) et son index."""
+    colors = tuple(dict.fromkeys(score_color(level) for level in score_levels()))
     scale, cell = 4, MARKER_CELL
     atlas = Image.new("RGBA", (cell * len(MARKER_SHAPES), cell * (len(colors) + 1)), (0, 0, 0, 0))
     mapping = {}
@@ -112,7 +114,7 @@ def marker_atlas() -> tuple[str, dict]:
             mapping[f"{shape}|{color}"] = {"x": i * cell, "y": j * cell, "width": cell, "height": cell,
                                            "anchorY": cell // 2}
     halo = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    ImageDraw.Draw(halo).ellipse([w, w, n - w, n - w], fill=CORNSILK + "E6", outline=BLACK_FOREST, width=w)
+    ImageDraw.Draw(halo).ellipse([w, w, n - w, n - w], fill=SURFACE + "E6", outline=ACTION, width=w)
     top = cell * len(colors)
     atlas.paste(halo.resize((cell, cell), Image.LANCZOS), (0, top))
     mapping["halo"] = {"x": 0, "y": top, "width": cell, "height": cell, "anchorY": cell // 2}
@@ -121,14 +123,26 @@ def marker_atlas() -> tuple[str, dict]:
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"), mapping
 
 
+def score_levels() -> list[float]:
+    """Scores représentés dans l'atlas : du repère calme au repère extrême, par pas de SCORE_STEP."""
+    high, low = SCORE_ANCHORS[0], SCORE_ANCHORS[-1]
+    return [high - i * SCORE_STEP for i in range(int((high - low) / SCORE_STEP) + 1)]
+
+
+def score_level(score: float) -> float:
+    """Score arrondi au pas de l'atlas, borné aux repères calme et extrême."""
+    high, low = SCORE_ANCHORS[0], SCORE_ANCHORS[-1]
+    return min(high, max(low, round(float(score) / SCORE_STEP) * SCORE_STEP))
+
+
 def icon_key(route_type, score: float) -> str:
-    """Clé d'icône de l'atlas : forme du mode et couleur du palier de score."""
-    return f"{mode_marker(route_type)}|{palette_hex(score, 'score')}"
+    """Clé d'icône de l'atlas : forme du mode et couleur du dégradé au score arrondi."""
+    return f"{mode_marker(route_type)}|{score_color(score_level(score))}"
 
 
 def _size_m(observations: float) -> float:
-    low, high = STOP_SIZE_METERS
-    return round(low + (min(max(float(observations), 50.0), 400.0) - 50.0) / 350.0 * (high - low), 1)
+    """Taille constante : la carte ne dit que l'état (couleur) et le mode (forme)."""
+    return STOP_SIZE_METERS
 
 
 def map_view(stops: pd.DataFrame, commune: str | None) -> dict:

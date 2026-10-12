@@ -1,10 +1,8 @@
 """Tableau de bord de fiabilite des passages TBM.
 
-Charte graphique « Urban Vision » (fond blanc) : Black Forest #283618 (marque,
-titres), Olive Leaf #606c38 (texte secondaire), Sunlit Clay #DDA15E (bordures),
-Cornsilk #FEFAE0 (accent ponctuel). Couleur de performance à 3 paliers, partagée
-avec les rapports via reports/palette.py : Olive Leaf = positif, Sunlit Clay =
-moyen, Copperwood = négatif (pas de dégradé continu). Les modes de transport se
+Charte écran « Pierre et vin » (fond blanc, jetons de reports/palette.py) : encre,
+texte secondaire, surface, trait, couleur d'action et dégradé continu Garonne,
+pierre, vin, lie, à repères fixes ; les rapports gardent leurs trois paliers. Les modes de transport se
 distinguent par la forme du marqueur (tram ●, bus ■, ferry ▲), jamais par la couleur. Les observations les plus recentes
 restent dans le flux GTFS-RT : elles sont ecartees afin de ne mesurer que des
 passages pour lesquels le retard est stabilise.
@@ -89,14 +87,21 @@ import indicateurs as ind  # noqa: E402
 import troncons  # noqa: E402
 from generate_all_reports import slug as report_slug  # noqa: E402
 from palette import (  # noqa: E402
-    BLACK_FOREST,
-    COPPERWOOD,
-    NO_DATA,
-    OLIVE_LEAF,
-    SUNLIT_CLAY,
-    CORNSILK,
-    WHITE,
-    hex as palette_hex,
+    ACTION,
+    GARONNE,
+    INK,
+    INK_MUTED,
+    LIE,
+    LINE,
+    PIERRE,
+    SCORE_ANCHORS,
+    SCREEN_HEX,
+    SCREEN_NO_DATA,
+    SURFACE,
+    VIN,
+    ink_on,
+    score_color,
+    screen_hex,
     kpi_tier as palette_kpi_tier,
     TIER_LABELS,
     tier_label,
@@ -112,9 +117,6 @@ from palette import (  # noqa: E402
     RISK_ZONE_LABELS,
 )
 
-SUNLIT_CLAY_40 = "rgba(221, 161, 94, 0.40)"
-SUNLIT_CLAY_30 = "rgba(221, 161, 94, 0.30)"
-OLIVE_LEAF_70 = "rgba(96, 108, 56, 0.70)"
 
 CAUTION_TEXT = (
     "Cette ligne fait l'objet d'une perturbation signalée par TBM sur tout ou "
@@ -130,47 +132,43 @@ def fmt_int(value) -> str:
 
 
 def _score_tier_style(value: float) -> str:
-    """Style de cellule selon le palier « score » des rapports (positif/moyen/négatif)."""
-    color = palette_hex(value, "score")
-    foreground = CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST
-    return f"background-color: {color}; color: {foreground};"
+    """Style de cellule selon le dégradé continu des scores (`palette.score_color`)."""
+    color = score_color(value)
+    return f"background-color: {color}; color: {ink_on(color)};"
 
 
 def _delta_style(value: float, threshold: float = 2.0) -> str:
-    """Style d'une cellule d'évolution (Δ) : positif → Olive Leaf, négatif → Copperwood."""
-    if value >= threshold:
-        return f"color: {OLIVE_LEAF}; font-weight: 600;"
-    if value <= -threshold:
-        return f"color: {COPPERWOOD}; font-weight: 600;"
-    return f"color: {SUNLIT_CLAY};"
+    """Style d'une cellule d'évolution : neutre, une évolution n'est pas un état."""
+    return f"color: {INK}; font-weight: 600;" if abs(value) >= threshold else f"color: {INK_MUTED};"
+
+
+def score_gradient_css() -> str:
+    """Dégradé CSS des scores de 100 (gauche) à 20 (droite), repères aux positions de `SCORE_ANCHORS`."""
+    stops = ", ".join(f"{c} {(100 - a) / 80 * 100:.1f}%" for a, c in zip(SCORE_ANCHORS, (GARONNE, PIERRE, VIN, LIE)))
+    return f"linear-gradient(90deg, {GARONNE} 0%, {stops}, {LIE} 100%)"
 
 
 def render_tier_legend(title: str = "", invert: bool = False) -> None:
-    """Légende à 3 paliers, alignée sur les seuils des rapports, en mots courants.
+    """Légende des couleurs, en mots courants.
 
-    Trois pastilles (fiable, à surveiller, problématique) aux couleurs des
-    paliers, sans dégradé continu. `invert=True` pour les métriques où
-    « plus = pire » (retards, arrêts non desservis, écart à l'horaire) : le
-    palier fiable s'affiche à gauche.
+    Pour le score : barre du dégradé continu avec les repères fiable (80) et problématique (50).
+    `invert=True` pour les métriques où « plus = pire » (retards, arrêts non desservis, écart à
+    l'horaire), tracées par paliers : trois pastilles, le palier fiable à gauche.
     """
-    tiers = [("positif", OLIVE_LEAF), ("moyen", SUNLIT_CLAY), ("negatif", COPPERWOOD)]
+    head = f"<b>{title}</b>&nbsp; " if title else ""
     if not invert:
-        tiers.reverse()
-    chips = ""
-    for tier_name, color in tiers:
-        chips += (
-            '<span style="display:inline-flex;align-items:center;gap:.35rem;margin-right:1rem">'
-            f'<span style="width:.72rem;height:.72rem;border-radius:3px;background:{color}"></span>'
-            f'<b>{TIER_LABELS[tier_name].capitalize()}</b></span>'
-        )
-    st.markdown(
-        f'<div class="tier-legend">'
-        f'{(f"<b>{title}</b>&nbsp; " if title else "")}{chips}</div>',
-        unsafe_allow_html=True,
-    )
-
-
-
+        bar = (f'<span class="tl-bar" style="background:{score_gradient_css()}"></span>'
+               '<span class="tl-ticks"><span style="left:25%">80 : fiable</span>'
+               '<span style="left:62.5%">50 : problématique</span></span>')
+        st.markdown(f'<div class="tier-legend">{head}<span class="tl-scale">{bar}</span></div>',
+                    unsafe_allow_html=True)
+        return
+    chips = "".join(
+        '<span style="display:inline-flex;align-items:center;gap:.35rem;margin-right:1rem">'
+        f'<span style="width:.72rem;height:.72rem;border-radius:3px;background:{SCREEN_HEX[t]}"></span>'
+        f'<b>{TIER_LABELS[t].capitalize()}</b></span>'
+        for t in ("positif", "moyen", "negatif"))
+    st.markdown(f'<div class="tier-legend">{head}{chips}</div>', unsafe_allow_html=True)
 
 
 MODE_LABELS = {0: "Tramway", 3: "Bus", 4: "Ferry", 2: "Rail", 5: "Câble", 7: "Funiculaire", 11: "Trolleybus"}
@@ -463,7 +461,8 @@ def inject_style() -> None:
             --fs-page: 1.75rem; --fs-figure: 1.6rem; --fs-section: 1.3rem; --fs-block: 1.0625rem;
             --fs-body: 1rem; --fs-small: .875rem; --fs-label: .8125rem; --fs-micro: .75rem;
             --lh-title: 1.2; --lh-body: 1.55; --lh-small: 1.45;
-            --ink: #283618; --ink-2: #606c38;
+            --ink: {INK}; --ink-2: {INK_MUTED}; --surface: {SURFACE}; --line: {LINE}; --action: {ACTION};
+            --garonne: {GARONNE}; --pierre: {PIERRE}; --vin: {VIN}; --lie: {LIE};
         }}
         .stApp {{ background: #FFFFFF; color: var(--ink); }}
         [data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
@@ -474,38 +473,36 @@ def inject_style() -> None:
         [data-testid="stHeader"] {{ background: transparent; }}
         .block-container {{ max-width: 1500px; padding-top: 2.1rem; padding-bottom: 3rem; }}
 
-        /* ---- Sidebar : seule zone de couleur pleine forte de l'interface ---- */
-        [data-testid="stSidebar"] {{ background: #283618; }}
+        [data-testid="stSidebar"] {{ background: var(--surface); border-right: 1px solid var(--line); }}
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {{ display: none; }}
         [data-testid="stSidebar"] > div:first-child {{ padding-top: 1.2rem; }}
         .sidebar-brand {{ display: flex; flex-direction: column; align-items: flex-start; gap: .55rem; margin: .1rem 0 1rem; }}
-        .sidebar-brand img {{ height: 74px; width: auto; max-width: 100%; }}
-        .sidebar-brand span {{ color: #FEFAE0; font-size: var(--fs-section); font-weight: 700; letter-spacing: -.01em; line-height: var(--lh-title); }}
-        .sidebar-nav-label {{ color: #FEFAE0; font-size: var(--fs-small); font-weight: 600; margin: .8rem 0 .4rem; opacity: .85; }}
+        .sidebar-brand img {{ height: 74px; width: auto; max-width: 100%; mix-blend-mode: multiply; }}
+        .sidebar-brand span {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; letter-spacing: -.01em; line-height: var(--lh-title); }}
+        .sidebar-nav-label {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin: .8rem 0 .4rem; }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button {{ background: #FFFFFF; border-color: var(--line); }}
         [data-testid="stSidebar"] [data-testid="stButton"] button:hover,
-        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {{ background: #DDA15E; border-color: #DDA15E; color: #283618; }}
-        [data-testid="stSidebar"] [data-testid="stButton"] button:hover p {{ color: #283618; }}
-        [data-testid="stSidebar"] hr {{ border-color: rgba(221, 161, 94, .3); }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {{ border-color: var(--action); color: var(--action); }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover p {{ color: var(--action); }}
+        [data-testid="stSidebar"] hr {{ border-color: var(--line); }}
         [data-testid="stSidebar"] [data-testid="stCheckbox"] {{ margin-top: 1.2rem; }}
-        [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {{ color: #FEFAE0; font-weight: 600; font-size: var(--fs-body); }}
-        [data-testid="stSidebar"] [data-testid="stCheckbox"] label > span + div {{ background-color: rgba(254, 250, 224, .30) !important; }}
-        [data-testid="stSidebar"] [data-testid="stCheckbox"] label:has(input:checked) > span + div {{ background-color: #DDA15E !important; }}
-        [data-testid="stSidebar"] [data-testid="stCheckbox"] [data-testid="stTooltipIcon"] svg {{ stroke: #FEFAE0; }}
-        /* Items de navigation : actif = pastille Cornsilk / inactif = blanc opaque, gros */
+        [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {{ color: var(--ink); font-weight: 600; font-size: var(--fs-body); }}
+        [data-testid="stSidebar"] [data-testid="stCheckbox"] label:has(input:checked) > span + div {{ background-color: var(--action) !important; }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label {{
-            color: #FFFFFF; opacity: 1; padding: .5rem .6rem; border-radius: 8px; font-size: var(--fs-body); font-weight: 600;
+            color: var(--ink); opacity: 1; padding: .5rem .6rem; border-radius: 8px; font-size: var(--fs-body); font-weight: 600;
             margin-bottom: .15rem; cursor: pointer; transition: background .12s ease, color .12s ease;
         }}
-        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:hover {{ background: rgba(254, 250, 224, .14); }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:hover {{ background: rgba(43, 37, 35, .06); }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) {{
-            background: #FEFAE0; font-weight: 700;
+            background: #FFFFFF; box-shadow: inset 0 0 0 1px var(--line); font-weight: 700;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label [data-testid="stMarkdownContainer"] p {{
-            color: #FFFFFF !important; margin: 0; font-size: var(--fs-body); font-weight: 600;
+            color: var(--ink) !important; margin: 0; font-size: var(--fs-body); font-weight: 600;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) [data-testid="stMarkdownContainer"] p {{
-            color: #283618 !important; font-weight: 700;
+            color: var(--action) !important; font-weight: 700;
         }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) > div:first-child {{ background: var(--action) !important; border-color: var(--action) !important; }}
 
         /* ---- Titres ---- */
         h1, h2, h3, h4 {{ color: var(--ink) !important; letter-spacing: -.01em; line-height: var(--lh-title) !important; }}
@@ -514,117 +511,119 @@ def inject_style() -> None:
         h4 {{ font-size: var(--fs-block) !important; font-weight: 700 !important; padding: 0 !important; margin: 1.3rem 0 .45rem !important; }}
 
         /* ---- Cartes KPI : fond blanc uniforme + bordure gauche sémantique ---- */
-        .kpi-card {{ background: #ffffff; border: 1px solid rgba(221, 161, 94, .35); border-left: 3px solid rgba(221, 161, 94, .5); border-radius: 12px; padding: .95rem 1.05rem; height: 100%; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .kpi-card {{ background: #FFFFFF; border: 1px solid var(--line); border-radius: 10px; padding: .95rem 1.05rem; height: 100%; }}
+        .kpi-dot {{ flex: none; width: .6em; height: .6em; border-radius: 50%; box-shadow: 0 0 0 1px rgba(43, 37, 35, .18); }}
         .kpi-label {{ display: flex; align-items: center; color: var(--ink-2); font-size: var(--fs-label); font-weight: 600; line-height: var(--lh-small); }}
-        .kpi-value {{ color: var(--ink); font-size: var(--fs-figure); font-weight: 700; margin-top: .25rem; line-height: var(--lh-title); }}
+        .kpi-value {{ display: flex; align-items: center; gap: .45rem; color: var(--ink); font-size: var(--fs-figure); font-weight: 700; margin-top: .25rem; line-height: var(--lh-title); min-width: 0; }}
         .kpi-sublabel {{ color: var(--ink-2); font-size: var(--fs-label); margin-top: .3rem; font-weight: 400; line-height: var(--lh-small); }}
-        [data-testid="stMain"] [data-testid="stMarkdownContainer"] a {{ color: #283618; text-decoration-color: #DDA15E; }}
-        .kpi-filled, .kpi-filled .kpi-label, .kpi-filled .kpi-value, .kpi-filled .kpi-sublabel {{ color: var(--kpi-ink) !important; }}
-        .kpi-filled .kpi-sublabel {{ opacity: .92; }}
+        [data-testid="stMain"] [data-testid="stMarkdownContainer"] a {{ color: var(--action); text-decoration-color: var(--action); }}
         .lexique-item {{ padding: .5rem .75rem; margin: 0 -.75rem; border-left: 3px solid transparent; border-radius: 4px; }}
-        .lexique-focus {{ background: #FEFAE0; border-left-color: #DDA15E; }}
-        .kpi-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: .35rem; border-radius: 50%; background: #283618; color: #FEFAE0; font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0; text-transform: none; flex: none; cursor: help; }}
-        .kpi-filled .kpi-help {{ background: var(--kpi-ink); color: var(--kpi-bg); }}
-        .kpi-help:focus-visible {{ outline: 2px solid #DDA15E; outline-offset: 2px; }}
-        .kpi-tip {{ display: none; position: absolute; z-index: 30; top: calc(100% + 8px); left: -12px; width: 260px; padding: .65rem .75rem; border-radius: 8px; background: #FFFFFF; border: 1px solid rgba(221, 161, 94, .6); box-shadow: 0 6px 18px rgba(40, 54, 24, .18); color: #283618 !important; font-size: var(--fs-small); font-weight: 400; line-height: var(--lh-small); letter-spacing: 0; text-transform: none; text-align: left; white-space: normal; cursor: default; }}
+        .lexique-focus {{ background: var(--surface); border-left-color: var(--action); }}
+        .kpi-help {{ position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: .35rem; border-radius: 50%; background: var(--ink-2); color: #FFFFFF; font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0; text-transform: none; flex: none; cursor: help; }}
+        .kpi-help:focus-visible {{ outline: 2px solid var(--action); outline-offset: 2px; }}
+        .kpi-tip {{ display: none; position: absolute; z-index: 30; top: calc(100% + 8px); left: -12px; width: 260px; padding: .65rem .75rem; border-radius: 8px; background: #FFFFFF; border: 1px solid var(--line); box-shadow: 0 6px 18px rgba(43, 37, 35, .18); color: var(--ink) !important; font-size: var(--fs-small); font-weight: 400; line-height: var(--lh-small); letter-spacing: 0; text-transform: none; text-align: left; white-space: normal; cursor: default; }}
         .kpi-tip::before {{ content: ""; position: absolute; top: -10px; left: 0; right: 0; height: 10px; }}
-        .kpi-tip a {{ display: block; margin-top: .45rem; color: #283618 !important; font-weight: 700; text-decoration-color: #DDA15E; }}
+        .kpi-tip a {{ display: block; margin-top: .45rem; color: var(--action) !important; font-weight: 700; text-decoration-color: var(--action); }}
         .kpi-help:hover .kpi-tip, .kpi-help:focus-within .kpi-tip {{ display: block; }}
         [data-testid="stColumn"]:last-child .kpi-tip {{ left: auto; right: -12px; }}
-        [data-testid="stTooltipIcon"] svg {{ width: 19px; height: 19px; stroke: #283618; stroke-width: 2.4; }}
+        [data-testid="stTooltipIcon"] svg {{ width: 19px; height: 19px; stroke: var(--ink); stroke-width: 2.4; }}
         [data-testid="stTooltipIcon"] button {{ opacity: 1; }}
 
         .eyebrow {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-top: .4rem; }}
         .hero-subtitle {{ color: var(--ink-2); font-size: var(--fs-body); line-height: var(--lh-body); margin-bottom: 1.2rem; }}
         .section-note {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin: 0 0 .75rem; }}
-        .insight {{ background: #ffffff; border-left: 3px solid #283618; border-radius: 8px; padding: .8rem 1rem; margin: .4rem 0 .9rem; color: var(--ink); font-size: var(--fs-body); line-height: var(--lh-body); box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .insight {{ background: #ffffff; border-left: 3px solid var(--ink); border-radius: 8px; padding: .8rem 1rem; margin: .4rem 0 .9rem; color: var(--ink); font-size: var(--fs-body); line-height: var(--lh-body); box-shadow: 0 1px 3px rgba(43, 37, 35, .08); }}
         .insight.brief {{ margin: 1rem 0 .6rem; }}
         .insight.brief ul, .hints ul {{ margin: .35rem 0 0 1.1rem; padding: 0; }}
         .insight.brief li {{ margin-bottom: .3rem; line-height: var(--lh-body); }}
-        .hints {{ border: 1px dashed rgba(221, 161, 94, .7); border-radius: 8px; padding: .7rem 1rem; color: #283618; margin-bottom: 1rem; }}
+        .hints {{ border: 1px dashed var(--line); border-radius: 8px; padding: .7rem 1rem; color: var(--ink); margin-bottom: 1rem; }}
         .hints li {{ margin-bottom: .25rem; }}
         .st-key-prio_grid {{ margin: .2rem 0 .4rem; }}
         .st-key-prio_grid [data-testid="stHorizontalBlock"] {{ gap: 0; }}
         .st-key-prio_grid [data-testid="stMarkdownContainer"] {{ margin-bottom: 0; }}
         .st-key-prio_grid [data-testid="stColumn"] {{ padding: .85rem 1.1rem .75rem; }}
-        .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: 1px solid rgba(40, 54, 24, .16); }}
-        .st-key-prio_heads [data-testid="stColumn"] {{ padding-top: 0; padding-bottom: .55rem; border-bottom: 2px solid #283618; }}
-        .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-top: 1px solid rgba(40, 54, 24, .16); border-bottom: 2px solid #283618; }}
+        .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: 1px solid rgba(43, 37, 35, .16); }}
+        .st-key-prio_heads [data-testid="stColumn"] {{ padding-top: 0; padding-bottom: .55rem; border-bottom: 2px solid var(--ink); }}
+        .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-top: 1px solid rgba(43, 37, 35, .16); border-bottom: 2px solid var(--ink); }}
         .pg-head {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
         .pg-head small {{ display: block; color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; margin-top: .15rem; }}
         .pg-row {{ display: flex; align-items: center; gap: .5rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; padding-top: .2rem; }}
-        .pg-row svg {{ color: #606c38; flex: none; }}
+        .pg-row svg {{ color: var(--ink-2); flex: none; }}
         .pc-top {{ display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }}
         .pc-figure {{ color: var(--ink); font-size: var(--fs-page); font-weight: 700; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }}
-        .pc-drop .pc-figure {{ color: #bc6c25; }}
+        .pc-drop .pc-figure {{ color: var(--ink); }}
         .pc-unit {{ color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); margin-top: .3rem; max-width: 16rem; }}
         .pc-name {{ display: flex; align-items: center; gap: .5rem; margin-top: .8rem; color: var(--ink); font-size: var(--fs-block); font-weight: 700; line-height: var(--lh-title); }}
         .pc-detail {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin-top: .15rem; }}
         .pc-badge {{ display: inline-flex; align-items: center; justify-content: center; min-width: 2.1rem; padding: .18rem .55rem; border-radius: 6px; font-size: var(--fs-block); font-weight: 700; line-height: 1.15; }}
         .pc-glyph {{ font-size: var(--fs-section); line-height: 1; }}
         .pc-slope {{ flex: none; margin-top: -.15rem; }}
-        .pc-slope text {{ fill: #606c38; font-size: var(--fs-micro); font-weight: 600; }}
+        .pc-slope text {{ fill: var(--ink-2); font-size: var(--fs-micro); font-weight: 600; }}
         .pc-col {{ display: none; color: var(--ink-2); font-size: var(--fs-label); font-weight: 700; margin-bottom: .35rem; }}
         @media (max-width: 640px) {{
             .st-key-prio_heads {{ display: none; }}
             .pc-col {{ display: block; }}
-            .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: none; border-top: 1px solid rgba(40, 54, 24, .16); }}
+            .st-key-prio_grid [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: none; border-top: 1px solid rgba(43, 37, 35, .16); }}
             .st-key-prio_line_ligne [data-testid="stColumn"] {{ border-bottom: none; }}
-            .st-key-prio_line_arret {{ border-top: 2px solid #283618; }}
+            .st-key-prio_line_arret {{ border-top: 2px solid var(--ink); }}
         }}
         .pc-empty {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); padding: .35rem 0 .2rem; }}
         .st-key-prio_grid [data-testid="stButton"] button {{ background: transparent; border: none; box-shadow: none; padding: .1rem 0; min-height: 0; margin-top: -.25rem; }}
-        .st-key-prio_grid [data-testid="stButton"] button p {{ color: var(--ink); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-decoration-color: #DDA15E; text-decoration-thickness: 2px; text-underline-offset: 3px; }}
-        .st-key-prio_grid [data-testid="stButton"] button:hover p {{ text-decoration-color: #283618; }}
-        .st-key-prio_grid [data-testid="stButton"] button:focus-visible {{ outline: 2px solid #DDA15E; outline-offset: 2px; }}
+        .st-key-prio_grid [data-testid="stButton"] button p {{ color: var(--ink); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-decoration-color: var(--action); text-decoration-thickness: 2px; text-underline-offset: 3px; }}
+        .st-key-prio_grid [data-testid="stButton"] button:hover p {{ color: var(--action); }}
+        .st-key-prio_grid [data-testid="stButton"] button:focus-visible {{ outline: 2px solid var(--action); outline-offset: 2px; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
         .lg-item {{ display: inline-flex; align-items: center; gap: .35rem; }}
         .lg-swatch {{ width: .8rem; height: .8rem; border-radius: 3px; }}
         .lg-glyph {{ font-size: var(--fs-block); line-height: 1; }}
-        .lg-size {{ display: inline-block; background: #606c38; border-radius: 2px; }}
-        .zone-banner {{ display: grid; grid-template-columns: auto 1fr; gap: .1rem 1rem; align-items: baseline; margin: .9rem 0 .2rem; padding: .75rem 1rem; border-radius: 10px; background: #FEFAE0; border: 2px solid #283618; }}
+        .tl-scale {{ display: inline-flex; flex-direction: column; vertical-align: middle; width: 21rem; max-width: 100%; margin-left: .4rem; }}
+        .tl-bar {{ display: block; height: .7rem; border-radius: 3px; }}
+        .tl-ticks {{ position: relative; display: block; height: 1.1rem; font-size: var(--fs-micro); color: var(--ink-2); }}
+        .tl-ticks span {{ position: absolute; top: .1rem; transform: translateX(-50%); white-space: nowrap; }}
+        .tl-ticks span::before {{ content: ""; position: absolute; left: 50%; top: -.25rem; width: 1px; height: .3rem; background: var(--ink-2); }}
+        .zone-banner {{ display: grid; grid-template-columns: auto 1fr; gap: .1rem 1rem; align-items: baseline; margin: .9rem 0 .2rem; padding: .75rem 1rem; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }}
         .zone-kicker {{ grid-row: span 2; align-self: center; color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; }}
         .zone-name {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; line-height: var(--lh-title); }}
         .zone-text {{ color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
-        .zone-critique {{ border-color: #bc6c25; }}
+        .zone-critique {{ border-color: var(--vin); }}
         .tier-legend {{ margin: .15rem 0 .6rem; color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-small); }}
-        .mode-card {{ flex: 1 1 0; min-width: 220px; background: #ffffff; border: 1px solid rgba(221, 161, 94, .35); border-left-width: 4px; border-radius: 10px; padding: .9rem 1rem; box-shadow: 0 1px 3px rgba(40, 54, 24, .08); }}
+        .mode-card {{ flex: 1 1 0; min-width: 220px; background: #ffffff; border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: .9rem 1rem; box-shadow: 0 1px 3px rgba(43, 37, 35, .08); }}
         .hint-note {{ color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; }}
         .fiche-title, .carte-anchor {{ scroll-margin-top: 1.2rem; }}
         .sibling-label {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-bottom: -.3rem; }}
-        .fiche-title {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; line-height: var(--lh-title); letter-spacing: -.01em; margin-top: 1.6rem; padding-top: 1rem; border-top: 2px solid #283618; }}
+        .fiche-title {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; line-height: var(--lh-title); letter-spacing: -.01em; margin-top: 1.6rem; padding-top: 1rem; border-top: 2px solid var(--ink); }}
         .fiche-sub {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin: .3rem 0 .9rem; }}
         .wh-wrap {{ overflow-x: auto; margin: .2rem 0 .3rem; }}
         .wh-grid {{ border-collapse: separate; border-spacing: 2px; font-size: var(--fs-micro); }}
         .wh-grid th {{ color: var(--ink-2); font-weight: 600; padding: 0 3px; text-align: center; white-space: nowrap; }}
         .wh-grid td {{ min-width: 26px; height: 22px; text-align: center; border-radius: 3px; font-weight: 600; cursor: default; }}
-        .wh-grid td.wh-empty {{ background: #FFFFFF; border: 1px dashed rgba(221, 161, 94, .35); }}
-        .wh-grid td.wh-total {{ box-shadow: inset 0 0 0 1px rgba(40, 54, 24, .45); }}
+        .wh-grid td.wh-empty {{ background: #FFFFFF; border: 1px dashed var(--line); }}
+        .wh-grid td.wh-total {{ box-shadow: inset 0 0 0 1px rgba(43, 37, 35, .45); }}
         .watch-title {{ color: var(--ink); font-size: var(--fs-block); font-weight: 700; margin-top: .25rem; line-height: var(--lh-title); }}
-        .stDataFrame {{ border: 1px solid rgba(221, 161, 94, .35); border-radius: 10px; overflow: hidden; }}
-        [data-testid="stSelectbox"] [role="group"] {{ border: 1px solid rgba(40, 54, 24, .45); background: #FFFFFF; box-shadow: 0 1px 2px rgba(40, 54, 24, .08); cursor: pointer; }}
-        [data-testid="stSelectbox"] [role="group"]:hover {{ border-color: #283618; }}
-        [data-testid="stSelectbox"] [role="group"]:focus-within {{ border-color: #283618; box-shadow: 0 0 0 2px rgba(221, 161, 94, .55); }}
+        .stDataFrame {{ border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }}
+        [data-testid="stSelectbox"] [role="group"] {{ border: 1px solid rgba(43, 37, 35, .45); background: #FFFFFF; box-shadow: 0 1px 2px rgba(43, 37, 35, .08); cursor: pointer; }}
+        [data-testid="stSelectbox"] [role="group"]:hover {{ border-color: var(--ink); }}
+        [data-testid="stSelectbox"] [role="group"]:focus-within {{ border-color: var(--action); box-shadow: 0 0 0 2px rgba(53, 30, 143, .25); }}
         [data-testid="stSelectbox"] [role="group"] input {{ cursor: pointer; }}
-        [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] {{ color: #283618; }}
+        [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] {{ color: var(--ink); }}
         [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] svg {{ width: 1.45rem; height: 1.45rem; }}
         [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: sticky; top: 3.75rem; z-index: 60; background: #FFFFFF; box-shadow: 0 -3.75rem 0 #FFFFFF; }}
         @media (max-width: 640px) {{ [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: static; box-shadow: none; }} }}
         .contention-note {{ margin: -.35rem 0 .5rem; }}
-        .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid #283618; }}
+        .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid var(--ink); }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
         .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3)::before,
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: var(--fs-section); line-height: 1; color: #DDA15E; }}
-        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(5) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid rgba(221, 161, 94, .45); }}
-        .st-key-ctx_back button {{ background: #283618; color: #FEFAE0; border-color: #283618; }}
-        .st-key-ctx_back button p {{ color: #FEFAE0; font-size: var(--fs-small); font-weight: 700; }}
-        .st-key-ctx_back button:hover {{ background: #DDA15E; border-color: #DDA15E; }}
-        .st-key-ctx_back button:hover p {{ color: #283618; }}
-        .st-key-ctx_back button:disabled {{ background: #FFFFFF; border-color: rgba(221, 161, 94, .45); }}
-        .st-key-ctx_back button:disabled p {{ color: rgba(96, 108, 56, .55); font-weight: 600; }}
-        [data-testid="stPopoverButton"] {{ background: #ffffff; border: 1px solid rgba(221, 161, 94, .40); border-radius: 8px; font-size: var(--fs-small); font-weight: 500; color: #283618; padding: .4rem .8rem; white-space: nowrap; }}
-        [data-testid="stPopoverButton"]:hover, [data-testid="stPopoverButton"][aria-expanded="true"] {{ background: #283618; border-color: #283618; color: #ffffff; }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(4)::before {{ content: "›"; position: absolute; left: -.62rem; bottom: .45rem; font-size: var(--fs-section); line-height: 1; color: var(--ink-2); }}
+        .st-key-ctx_bar [data-testid="stColumn"]:nth-child(5) {{ margin-left: .9rem; padding-left: .9rem; border-left: 1px solid var(--line); }}
+        .st-key-ctx_back button {{ background: var(--action); color: #FFFFFF; border-color: var(--action); }}
+        .st-key-ctx_back button p {{ color: #FFFFFF; font-size: var(--fs-small); font-weight: 700; }}
+        .st-key-ctx_back button:hover {{ background: var(--ink); border-color: var(--ink); }}
+        .st-key-ctx_back button:hover p {{ color: #FFFFFF; }}
+        .st-key-ctx_back button:disabled {{ background: #FFFFFF; border-color: var(--line); }}
+        .st-key-ctx_back button:disabled p {{ color: var(--ink-2); font-weight: 600; }}
+        [data-testid="stPopoverButton"] {{ background: #ffffff; border: 1px solid var(--line); border-radius: 8px; font-size: var(--fs-small); font-weight: 500; color: var(--ink); padding: .4rem .8rem; white-space: nowrap; }}
+        [data-testid="stPopoverButton"]:hover, [data-testid="stPopoverButton"][aria-expanded="true"] {{ background: var(--action); border-color: var(--action); color: #FFFFFF; }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1379,9 +1378,9 @@ def week_hour_grid_html(table: pd.DataFrame, peak: dict | None = None) -> str:
         if obs < dg.MIN_CELL_PASSAGES:
             return f'<td class="wh-empty {css}" title="{html.escape(title)}"></td>'
         pct = cnt / obs * 100
-        color = palette_hex(pct, "pourcent")
-        fg = CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST
-        ring = ";outline:2px solid #283618;outline-offset:1px" if outline else ""
+        color = screen_hex(pct, "pourcent")
+        fg = ink_on(color)
+        ring = f";outline:2px solid {INK};outline-offset:1px" if outline else ""
         return (f'<td class="{css}" style="background:{color};color:{fg}{ring}" '
                 f'title="{html.escape(title)}">{pct:.0f}</td>')
 
@@ -1864,7 +1863,7 @@ def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict,
     gris, sans score, sous les autres ; puis les plus fiables d'abord : les moins fiables passent dessus.
     """
     out = []
-    grey = _hex_rgb(NO_DATA)
+    grey = _hex_rgb(SCREEN_NO_DATA)
     for r in (unmeasured if unmeasured is not None else pd.DataFrame(columns=["route_id"])).itertuples():
         if r.route_id in set(lines.get("route_id", [])):
             continue
@@ -1872,7 +1871,7 @@ def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict,
         direction = directions.get(r.route_id)
         for coords in ([by_dir[direction]] if direction in by_dir else list(by_dir.values())):
             out.append({"r": r.route_id, "l": str(r.ligne), "s": None, "e": UNMEASURED_LABEL,
-                        "g": mode_glyph(r.route_type), "c": grey, "t": _hex_rgb(BLACK_FOREST), "p": coords})
+                        "g": mode_glyph(r.route_type), "c": grey, "t": _hex_rgb(INK), "p": coords})
     for r in lines.sort_values("score_fiabilite", ascending=False).itertuples():
         by_dir = shapes.get(r.route_id) or {}
         direction = directions.get(r.route_id)
@@ -1880,8 +1879,8 @@ def stop_route_paths(lines: pd.DataFrame, shapes: dict, directions: dict,
         for coords in chosen:
             out.append({"r": r.route_id, "l": str(r.ligne), "s": round(float(r.score_fiabilite)),
                         "e": tier_label(float(r.score_fiabilite)), "g": mode_glyph(r.route_type),
-                        "c": _hex_rgb(palette_hex(float(r.score_fiabilite), "score")),
-                        "t": _hex_rgb(KPI_FILLS[palette_kpi_tier({"fiability": float(r.score_fiabilite)}, "fiability")]),
+                        "c": _hex_rgb(score_color(float(r.score_fiabilite))),
+                        "t": _hex_rgb(ink_on(score_color(float(r.score_fiabilite)))),
                         "p": coords})
     return out
 
@@ -2009,7 +2008,7 @@ GUIDE_STEPS = [
 ]
 
 def _logo_data_uri() -> str:
-    logo = Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-white.png"
+    logo = Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-color.png"
     try:
         return "data:image/png;base64," + base64.b64encode(logo.read_bytes()).decode("ascii")
     except OSError:
@@ -2052,25 +2051,18 @@ def remember_guide_seen() -> None:
     st.html(f"<script>document.cookie='{GUIDE_COOKIE}=1; max-age=31536000; path=/; SameSite=Lax'</script>",
             unsafe_allow_javascript=True)
 
-def _kpi_border(polarity: str) -> str:
-    if polarity in ("positif", "good"):
-        return OLIVE_LEAF
-    if polarity in ("negatif", "négatif", "bad"):
-        return COPPERWOOD
-    if polarity in ("moyen",):
-        return SUNLIT_CLAY
-    return "rgba(221, 161, 94, 0.50)"
-
-KPI_FILLS = {"positif": "#FEFAE0", "good": "#FEFAE0", "moyen": "#283618",
-             "negatif": "#FFFFFF", "négatif": "#FFFFFF", "bad": "#FFFFFF"}
+def _kpi_color(polarity: str) -> str | None:
+    """Couleur de la pastille d'une carte : palier, couleur explicite (#…), ou aucune si neutre."""
+    if polarity.startswith("#"):
+        return polarity
+    tier_name = {"good": "positif", "bad": "negatif", "négatif": "negatif"}.get(polarity, polarity)
+    return SCREEN_HEX.get(tier_name)
 
 
 def kpi_card(label: str, value: str, sublabel: str | None = None, polarity: str = "neutral",
              help: str | None = None) -> str:
-    border = _kpi_border(polarity)
-    filled = KPI_FILLS.get(polarity)
-    style = (f"border-left-color:{border}" if filled is None
-             else f"background:{border};border-color:{border};--kpi-ink:{filled};--kpi-bg:{border}")
+    color = _kpi_color(polarity)
+    dot = f'<span class="kpi-dot" style="background:{color}" aria-hidden="true"></span>' if color else ""
     sub = f'<div class="kpi-sublabel">{sublabel}</div>' if sublabel else ""
     term = next((HELP_TERMS[k] for k, text in HELP_TEXTS.items() if text == help), None)
     link = (f'<a href="{lexique_link(term)}" target="_blank" rel="noopener">Voir dans le lexique ↗</a>'
@@ -2078,9 +2070,9 @@ def kpi_card(label: str, value: str, sublabel: str | None = None, polarity: str 
     tip = (f' <span class="kpi-help" tabindex="0" role="button" aria-label="Aide : {html.escape(label, quote=True)}">'
            f'?<span class="kpi-tip" role="tooltip">{html.escape(help)}{link}</span></span>') if help else ""
     return (
-        f'<div class="kpi-card{"" if filled is None else " kpi-filled"}" style="{style}">'
+        f'<div class="kpi-card">'
         f'<div class="kpi-label">{label}{tip}</div>'
-        f'<div class="kpi-value">{value}</div>{sub}</div>'
+        f'<div class="kpi-value">{dot}{value}</div>{sub}</div>'
     )
 
 def render_kpis(items) -> None:
@@ -2295,14 +2287,12 @@ def network_score(ranking: pd.DataFrame) -> float:
     return 0.0 if pd.isna(score) else float(score)
 
 
-def _delta_polarity(delta: float | None) -> str:
-    if delta is None:
-        return "neutral"
-    if delta >= 2:
-        return "positif"
-    if delta <= -2:
-        return "negatif"
-    return "moyen"
+def evolution_words(delta: float) -> str:
+    """Évolution d'un score en mots, sans couleur d'état : « ▼ 0,8 point », « stable »."""
+    if abs(delta) < 0.05:
+        return "stable"
+    arrow = "▲" if delta > 0 else "▼"
+    return f"{arrow} {format_number(abs(delta), 1)} point{'s' if abs(delta) >= 2 else ''}"
 
 
 def _alerts_overlapping(history: pd.DataFrame, route_ids: set, bad_dates: list) -> pd.DataFrame:
@@ -2336,7 +2326,7 @@ def _render_alerts(alerts: pd.DataFrame) -> None:
         flag = " · <b>recoupe un jour dégradé</b>" if r.jour_degrade else ""
         st.markdown(
             f"**Ligne {html.escape(str(r.ligne))}** — {html.escape(r.header_text or '')}  \n"
-            f"<span style='color:{OLIVE_LEAF_70}'>{r.debut_effectif} → {r.fin_effective}{flag}</span>",
+            f"<span style='color:{INK_MUTED}'>{r.debut_effectif} → {r.fin_effective}{flag}</span>",
             unsafe_allow_html=True,
         )
     st.caption(CAUTION_TEXT)
@@ -2456,7 +2446,7 @@ def _render_stop_when(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
 def status_kpi(score: float, sublabel: str) -> tuple:
     """Carte « État » : le mot du palier en grand, le score sur 100 et sa référence en dessous."""
     return ("État", tier_label(score).capitalize(), f"score {score:.0f} / 100 · {sublabel}",
-            palette_kpi_tier({"fiability": score}, "fiability"), HELP_TEXTS["score"])
+            score_color(score), HELP_TEXTS["score"])
 
 
 def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
@@ -2464,8 +2454,8 @@ def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
         return ("Évolution", "—", "pas de période de comparaison", "neutral")
     if change is None:
         return ("Évolution", "—", f"pas de données sur {prev_label}", "neutral")
-    return ("Évolution", f"{format_number(change['delta'], 1, signed=True)} pts", f"vs {prev_label} ({change['previous']:.0f} / 100)",
-            _delta_polarity(change["delta"]))
+    return ("Évolution", evolution_words(change["delta"]), f"vs {prev_label} ({change['previous']:.0f} / 100)",
+            "neutral")
 
 
 def render_stop_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | None, stop_id: str,
@@ -2916,8 +2906,8 @@ def _row_icon(kind: str) -> str:
 
 
 def _tier_colors(score: float) -> tuple[str, str]:
-    color = palette_hex(score, "score")
-    return color, (CORNSILK if color in (OLIVE_LEAF, COPPERWOOD) else BLACK_FOREST)
+    color = score_color(score)
+    return color, ink_on(color)
 
 
 def line_badge_html(name: str, score: float) -> str:
@@ -2941,14 +2931,14 @@ def slope_svg(previous: float, score: float) -> str:
 
     x0, x1 = SLOPE_LABEL + 8, SLOPE_WIDTH - 8
     guides = "".join(f'<text x="0" y="{y(v) + 4}">{v}</text><line x1="{SLOPE_LABEL}" x2="{SLOPE_WIDTH}" y1="{y(v)}" '
-                     f'y2="{y(v)}" stroke="#DDA15E" stroke-width="1" stroke-dasharray="2 3"/>' for v in (80, 50))
+                     f'y2="{y(v)}" stroke="{INK_MUTED}" stroke-opacity=".45" stroke-width="1" stroke-dasharray="2 3"/>' for v in (80, 50))
     return (f'<svg class="pc-slope" width="{SLOPE_WIDTH}" height="{SLOPE_HEIGHT}" viewBox="0 0 {SLOPE_WIDTH} '
             f'{SLOPE_HEIGHT}" role="img" aria-label="Score passé de {format_number(previous, 1)} à '
             f'{format_number(score, 1)} sur 100">{guides}'
-            f'<line x1="{x0}" y1="{y(previous)}" x2="{x1}" y2="{y(score)}" stroke="#bc6c25" stroke-width="3" '
-            f'stroke-linecap="round"/><circle cx="{x0}" cy="{y(previous)}" r="5" fill="{palette_hex(previous, "score")}" '
+            f'<line x1="{x0}" y1="{y(previous)}" x2="{x1}" y2="{y(score)}" stroke="{INK_MUTED}" stroke-width="3" '
+            f'stroke-linecap="round"/><circle cx="{x0}" cy="{y(previous)}" r="5" fill="{score_color(previous)}" '
             f'stroke="#FFFFFF" stroke-width="2"/><circle cx="{x1}" cy="{y(score)}" r="6.5" '
-            f'fill="{palette_hex(score, "score")}" stroke="#FFFFFF" stroke-width="2"/></svg>')
+            f'fill="{score_color(score)}" stroke="#FFFFFF" stroke-width="2"/></svg>')
 
 
 def priority_cell_html(kind: str, item: dict | None, prev_label: str | None) -> str:
@@ -3004,17 +2994,14 @@ def _render_priorities(items: dict, prev_label: str | None) -> None:
 
 
 def map_legend_html() -> str:
-    """Légende de la carte : couleur (état), forme (mode), taille (passages)."""
-    tiers = "".join(
-        f'<span class="lg-item"><span class="lg-swatch" style="background:{color}"></span>'
-        f'{TIER_LABELS[name].capitalize()}</span>'
-        for name, color in (("negatif", COPPERWOOD), ("moyen", SUNLIT_CLAY), ("positif", OLIVE_LEAF)))
+    """Légende de la carte : couleur (état, dégradé continu des scores) et forme (mode)."""
+    scale = (f'<span class="tl-scale"><span class="tl-bar" style="background:{score_gradient_css()}"></span>'
+             '<span class="tl-ticks"><span style="left:25%">80 : fiable</span>'
+             '<span style="left:62.5%">50 : problématique</span></span></span>')
     shapes = "".join(f'<span class="lg-item"><span class="lg-glyph">{mode_glyph(rt)}</span>{label}</span>'
                      for rt, label in ((0, "Tramway"), (3, "Bus"), (4, "Ferry")))
-    sizes = ('<span class="lg-item"><span class="lg-size" style="width:8px;height:8px"></span>'
-             '<span class="lg-size" style="width:16px;height:16px"></span>peu → beaucoup de passages</span>')
-    return (f'<div class="map-legend"><div><b>Couleur (état de l\'arrêt)</b>{tiers}</div>'
-            f'<div><b>Forme (mode)</b>{shapes}</div><div><b>Taille</b>{sizes}</div></div>')
+    return (f'<div class="map-legend"><div><b>Couleur : score de l\'arrêt</b>{scale}</div>'
+            f'<div><b>Forme : mode</b>{shapes}</div></div>')
 
 
 def render_page_territory(c: PageContext) -> None:
@@ -3259,7 +3246,7 @@ def _when_over_time(c: PageContext) -> None:
                  f'<b>{format_number(now, 1)} / 100</b> ({_tier_word(now)} ; {missing}).')
     else:
         delta = now - before
-        arrow, color = ("▲", OLIVE_LEAF) if delta >= 0 else ("▼", COPPERWOOD)
+        arrow, color = ("▲", INK) if delta >= 0 else ("▼", INK)
         _verdict(f'Sur {html.escape(c.period.label)}, le score de fiabilité est de <b>{format_number(now, 1)} / 100</b> '
                  f'({_tier_word(now)}), soit <span style="color:{color}"><b>{arrow} '
                  f'{format_number(abs(delta), 1)} point(s)</b></span> par rapport à {html.escape(c.period.prev_label)}.')
@@ -3328,7 +3315,7 @@ def render_page_network(c: PageContext) -> None:
              f'pas les mêmes contraintes : les comparer aide à distinguer un problème de ligne d’un problème de mode.')
     card_html = '<div style="display:flex;gap:1rem;margin-bottom:.2rem;flex-wrap:wrap">'
     for r in mode_stats.itertuples():
-        ponct_color = palette_hex(r.pct_a_l_heure, "score")
+        ponct_color = score_color(r.pct_a_l_heure)
         card_html += (
             f'<div class="mode-card" style="border-left-color:{ponct_color}">'
             f'<div class="kpi-label">{mode_glyph(r.route_type)} {r.mode}</div>'
@@ -3419,7 +3406,7 @@ def render_page_perturbations(c: PageContext) -> None:
                     for x in inner:
                         st.markdown(
                             f"**{html.escape(x.header_text or '')}**  \n"
-                            f"<span style='color:{OLIVE_LEAF_70}'>{x.debut_effectif} → "
+                            f"<span style='color:{INK_MUTED}'>{x.debut_effectif} → "
                             f"{x.fin_effective} · {x.jours_couverts} j</span>",
                             unsafe_allow_html=True,
                         )

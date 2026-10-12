@@ -149,3 +149,61 @@ class TestMotsDesPaliers:
         assert set(palette.TIER_LABELS) == {palette.POSITIVE, palette.MEDIUM, palette.NEGATIVE}
         for word in palette.TIER_LABELS.values():
             assert not any(color in word.lower() for color in ("olive", "clay", "copper", "vert", "orange"))
+
+
+class TestCharteEcran:
+    def test_rapports_inchanges(self):
+        assert HEX == {POSITIVE: OLIVE_LEAF, MEDIUM: SUNLIT_CLAY, NEGATIVE: COPPERWOOD}
+
+    def test_dix_couleurs(self):
+        couleurs = {palette.INK, palette.INK_MUTED, palette.SURFACE, palette.LINE, palette.ACTION,
+                    *palette.SCALE, palette.SCREEN_NO_DATA}
+        assert len(couleurs) == 10
+
+    def test_paliers_ecran(self):
+        assert palette.screen_hex(90.0, "score") == palette.GARONNE
+        assert palette.screen_hex(60.0, "score") == palette.PIERRE
+        assert palette.screen_hex(20.0, "score") == palette.VIN
+
+
+class TestSecondesRetenues:
+    @pytest.mark.parametrize("s,pct,attendu", [
+        (100.0, 25.0, 15.0), (100.0, 50.0, 40.0), (100.0, 10.0, 6.0), (100.0, 60.0, 50.0),
+        (20.0, 80.0, 20.0), (-12.0, -30.0, -18.0),
+    ])
+    def test_plafond_par_part_du_temps_prevu(self, s, pct, attendu):
+        assert palette.retained_seconds(s, pct) == pytest.approx(attendu)
+
+    @pytest.mark.parametrize("s", [-30.0, 0.0, 14.9, 15.0, 22.0, 39.9, 40.0, 41.0, 90.0])
+    @pytest.mark.parametrize("pct", [-5.0, 0.0, 24.9, 25.0, 30.0, 49.9, 50.0, 51.0, 120.0])
+    def test_equivaut_aux_paliers_de_la_regle_b(self, s, pct):
+        palier = palette.troncon_tier(s, pct)
+        retenu = palette.retained_seconds(s, pct)
+        assert (palier == NEGATIVE) == (retenu >= 40.0)
+        assert (palier != POSITIVE) == (retenu >= 15.0)
+
+
+class TestDegrade:
+    def test_reperes_des_troncons(self):
+        assert palette.TRONCON_ANCHORS == (0.0, 15.0, 40.0, 60.0)
+        assert palette.scale_color(-20.0) == palette.GARONNE
+        assert palette.scale_color(15.0) == palette.PIERRE
+        assert palette.scale_color(40.0) == palette.VIN
+        assert palette.scale_color(300.0) == palette.LIE
+
+    def test_interpolation_a_mi_chemin(self):
+        assert palette.scale_color(27.5) == "#C9827C"
+
+    def test_reperes_des_scores_decroissants(self):
+        assert palette.score_color(90.0) == palette.GARONNE
+        assert palette.score_color(60.0) == palette.PIERRE
+        assert palette.score_color(50.0) == palette.VIN
+        assert palette.score_color(10.0) == palette.LIE
+
+    def test_couleur_forte_des_le_palier_problematique(self):
+        assert palette.score_color(49.0) != palette.score_color(51.0)
+        assert palette.tier(49.0, "score") == NEGATIVE
+
+    def test_troncon_color_passe_par_les_secondes_retenues(self):
+        assert palette.troncon_color(100.0, 25.0) == palette.PIERRE
+        assert palette.troncon_color(100.0, 50.0) == palette.VIN

@@ -209,3 +209,86 @@ def troncon_tier(median_s: float, median_pct: float) -> str:
     if s >= TRONCON_SECONDS[0] and pct >= TRONCON_PCT[0]:
         return MEDIUM
     return POSITIVE
+
+
+# --- Charte écran « Pierre et vin » (dashboard uniquement) ---------------------
+
+INK = "#2B2523"
+INK_MUTED = "#6A5F58"
+SURFACE = "#F6F1EA"
+LINE = "#E5DCD0"
+ACTION = "#351E8F"
+GARONNE = "#7FAAA6"
+PIERRE = "#E1C17E"
+VIN = "#B1437A"
+LIE = "#602D24"
+SCREEN_NO_DATA = "#D6D6D2"
+SCALE = (GARONNE, PIERRE, VIN, LIE)
+SCREEN_HEX = {POSITIVE: GARONNE, MEDIUM: PIERRE, NEGATIVE: VIN}
+
+SCORE_ANCHORS = (80.0, 60.0, 50.0, 35.0)
+TRONCON_ANCHORS = (0.0, TRONCON_SECONDS[0], TRONCON_SECONDS[1], 60.0)
+ANCHORS_REFERENCE = "rentrée 2026 (01/09 au 11/10/2026)"
+
+
+def screen_hex(value: float, kind: str) -> str:
+    """Couleur écran du palier d'une valeur (graphiques à paliers du dashboard)."""
+    return SCREEN_HEX[tier(value, kind)]
+
+
+def retained_seconds(median_s: float, median_pct: float) -> float:
+    """Secondes perdues plafonnées par l'équivalent en secondes de la part du temps prévu.
+
+    Les seuils de `troncon_tier` font correspondre 25 % à 15 s et 50 % à 40 s (proportionnel
+    entre les deux, et au-delà avec la même pente) : la valeur atteint 15 s exactement quand le
+    palier est moyen ou négatif, et 40 s exactement quand il est négatif.
+    """
+    (p0, p1), (s0, s1) = TRONCON_PCT, TRONCON_SECONDS
+    pct = float(median_pct)
+    cap = pct * s0 / p0 if pct <= p0 else s0 + (pct - p0) * (s1 - s0) / (p1 - p0)
+    return min(float(median_s), cap)
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    c = color.lstrip("#")
+    return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+
+
+def scale_color(value: float, anchors: tuple = TRONCON_ANCHORS, colors: tuple = SCALE) -> str:
+    """Couleur continue entre quatre repères fixes, interpolée en sRGB.
+
+    `anchors` peut être croissant (plus = pire, secondes perdues) ou décroissant (moins = pire,
+    score) ; avant le premier repère la couleur calme, après le dernier la couleur extrême.
+    """
+    sign = 1.0 if anchors[-1] >= anchors[0] else -1.0
+    v, a = sign * float(value), [sign * float(x) for x in anchors]
+    if v <= a[0]:
+        return colors[0]
+    for i in range(1, len(a)):
+        if v <= a[i]:
+            t = (v - a[i - 1]) / (a[i] - a[i - 1])
+            lo, hi = _rgb(colors[i - 1]), _rgb(colors[i])
+            return "#" + "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(lo, hi))
+    return colors[-1]
+
+
+def ink_on(color: str) -> str:
+    """Texte lisible sur un fond donné : encre sur les fonds clairs, blanc sur les fonds foncés."""
+    def lum(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lum(x) for x in _rgb(color))
+    y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    ink = _rgb(INK)
+    y_ink = 0.2126 * lum(ink[0]) + 0.7152 * lum(ink[1]) + 0.0722 * lum(ink[2])
+    return INK if (y + 0.05) / (y_ink + 0.05) >= 1.05 / (y + 0.05) else "#FFFFFF"
+
+
+def score_color(score: float) -> str:
+    """Couleur écran d'un score de fiabilité sur 100 (repères `SCORE_ANCHORS`)."""
+    return scale_color(score, SCORE_ANCHORS)
+
+
+def troncon_color(median_s: float, median_pct: float) -> str:
+    """Couleur écran d'un tronçon mesuré (repères `TRONCON_ANCHORS` en secondes retenues)."""
+    return scale_color(retained_seconds(median_s, median_pct), TRONCON_ANCHORS)

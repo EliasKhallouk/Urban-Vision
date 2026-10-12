@@ -35,6 +35,31 @@ function rgb(hex, alpha = 255) {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), alpha];
 }
 
+function scaleHex(value, scale) {
+  const a = scale.anchors;
+  const c = scale.colors;
+  if (value <= a[0]) return c[0];
+  for (let i = 1; i < a.length; i += 1) {
+    if (value <= a[i]) {
+      const t = (value - a[i - 1]) / (a[i] - a[i - 1]);
+      const lo = rgb(c[i - 1]);
+      const hi = rgb(c[i]);
+      return `#${[0, 1, 2].map((k) => Math.round(lo[k] + (hi[k] - lo[k]) * t).toString(16).padStart(2, "0")).join("")}`;
+    }
+  }
+  return c[c.length - 1];
+}
+
+const TIER_RANGE = { v: [-Infinity, 14.9], o: [15, 39.9], c: [40, Infinity] };
+
+function segHex(seg, slot, data) {
+  const code = seg.t[slot];
+  const value = seg.v[slot];
+  if (!value || value.length < 5 || value[4] === null || !TIER_RANGE[code]) return data.colors[code];
+  const [lo, hi] = TIER_RANGE[code];
+  return scaleHex(Math.min(hi, Math.max(lo, value[4])), data.scale);
+}
+
 function seconds(s) {
   const a = Math.abs(s);
   return a < 60 ? `${a} s` : `${Math.floor(a / 60)} min ${String(a % 60).padStart(2, "0")} s`;
@@ -180,12 +205,12 @@ function worstHour(seg) {
   return best;
 }
 
-function hourStrip(seg, slot, colors) {
+function hourStrip(seg, slot, data) {
   const cells = [];
   for (let h = 0; h < WHOLE_DAY; h += 1) {
     const code = seg.t[h];
     const ok = measuredAt(seg, h);
-    const color = ok ? colors[code] : "#E4E4DE";
+    const color = ok ? segHex(seg, h, data) : "#E4E4DE";
     let label = code === "-" ? "aucun passage" : "non mesuré";
     if (ok) label = seg.v[h][0] > 0 ? `${seconds(seg.v[h][0])} perdues` : "pas de temps perdu";
     cells.push(`<span class="${h === slot ? "now" : ""}" style="background:${color}" title="${clockText(h)} : ${label}"></span>`);
@@ -194,7 +219,7 @@ function hourStrip(seg, slot, colors) {
     + '<div class="uvt-strip-axis"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>';
 }
 
-function panelHtml(seg, slot, colors) {
+function panelHtml(seg, slot, data) {
   const code = seg.t[slot];
   let body;
   if (measuredAt(seg, slot)) {
@@ -217,7 +242,7 @@ function panelHtml(seg, slot, colors) {
   if (worst && DATE) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y ont perdu le plus de temps ce jour-là (${seconds(worst.s)}).</p>`;
   else if (worst) worstText = `<p>C'est vers <b>${worst.h} h</b> que les bus y perdent le plus de temps (${seconds(worst.s)}).</p>`;
   return `<button class="uvt-close" type="button" aria-label="Fermer">×</button><h3>${esc(seg.n)}</h3>`
-    + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, colors)}`;
+    + `<div class="uvt-lines">${lineText(seg, true)}</div>${body}${worstText}${hourStrip(seg, slot, data)}`;
 }
 
 function minutes(s) {
@@ -249,11 +274,16 @@ function tramPanelHtml(line, slot) {
     + (trips ? `<p class="uvt-foot">Valeur habituelle sur ${trips} trajets complets de la période scolaire.</p>` : "");
 }
 
-function legendHtml(colors) {
-  const item = (cls, color, long, short) => `<span class="${cls}" style="background:${color}"><b class="lg">${long}</b><b class="sh">${short}</b></span>`;
-  return `<div class="uvt-bar">${item("", colors.v, "ne perdent pas de temps", "pas de perte")}`
-    + `${item("o", colors.o, "perdent un peu de temps", "un peu")}${item("", colors.c, "perdent beaucoup de temps", "beaucoup")}</div>`
-    + '<span class="uvt-key keep"><span class="uvt-swatch"></span>gris : non mesuré</span>'
+function legendHtml(data) {
+  const a = data.scale.anchors;
+  const c = data.scale.colors;
+  const span = a[a.length - 1] - a[0];
+  const pos = (v) => `${(((v - a[0]) / span) * 100).toFixed(1)}%`;
+  const stops = a.map((v, i) => `${c[i]} ${pos(v)}`).join(", ");
+  const ticks = a.map((v, i) => `<span style="left:${pos(v)}">${i === a.length - 1 ? `${v} s et plus` : `${v} s`}</span>`).join("");
+  return `<div class="uvt-scale"><div class="uvt-words">Temps perdu entre deux arrêts</div>`
+    + `<div class="uvt-grad" style="background:linear-gradient(90deg, ${stops})"></div><div class="uvt-sticks">${ticks}</div></div>`
+    + '<span class="uvt-key keep"><span class="uvt-swatch"></span>pointillé gris : pas assez de données</span>'
     + '<span class="uvt-key"><span class="uvt-swatch bus"></span>bus</span>'
     + '<span class="uvt-key"><span class="uvt-swatch ferry"></span>ferry</span>'
     + '<span class="uvt-key keep"><span class="uvt-swatch tram"></span>tram : mesure par tronçon indisponible</span>';
@@ -268,16 +298,16 @@ function buildLayers(deck, state) {
   const focused = data.focused;
   const colorOf = (seg) => {
     const code = seg.t[slot];
-    if (!seg.c) return measuredAt(seg, slot) ? rgb(colors[code], focused ? 40 : 55) : rgb(colors.grey, focused ? 35 : 50);
+    if (!seg.c) return measuredAt(seg, slot) ? rgb(segHex(seg, slot, data), focused ? 40 : 55) : rgb(colors.grey, focused ? 35 : 50);
     if (data.unmeasured) return rgb(colors.grey, 245);
-    if ("voc".includes(code)) return rgb(colors[code], 255);
+    if ("voc".includes(code)) return rgb(segHex(seg, slot, data), 255);
     return rgb(colors.grey, focused ? 240 : 210);
   };
   const widthOf = (seg) => {
     if (focused && !seg.c) return 1.2;
     if (data.unmeasured) return 5;
     if (focused) return "voc".includes(seg.t[slot]) ? 6 : 3.5;
-    return "voc".includes(seg.t[slot]) ? 4.5 : 2.2;
+    return "voc".includes(seg.t[slot]) ? 4.5 : 1.8;
   };
   const common = { getPath: (d) => d.p, widthUnits: "pixels", capRounded: true, jointRounded: true, parameters: { depthTest: false } };
   const layers = [
@@ -292,10 +322,10 @@ function buildLayers(deck, state) {
       getWidth: (d) => widthOf(d) + 3, getColor: [255, 255, 255, 235],
     }),
     new deck.PathLayer({
-      id: "troncons", ...common, data: sorted, pickable: true, autoHighlight: true, highlightColor: [40, 54, 24, 140],
+      id: "troncons", ...common, data: sorted, pickable: true, autoHighlight: true, highlightColor: [53, 30, 143, 140],
       getWidth: widthOf, getColor: colorOf,
-      getDashArray: (d) => (d.m === FERRY ? [3, 2] : [0, 0]), extensions: [dashed],
-      updateTriggers: { getColor: slot, getWidth: slot },
+      getDashArray: (d) => (d.m === FERRY ? [3, 2] : "voc".includes(d.t[slot]) ? [0, 0] : [2, 2.5]), extensions: [dashed],
+      updateTriggers: { getColor: slot, getWidth: slot, getDashArray: slot },
     }),
   ];
   if (state.selected && state.selected.tram) {
@@ -348,7 +378,7 @@ function render(state) {
   state.allDay.setAttribute("aria-pressed", slot === WHOLE_DAY ? "true" : "false");
   if (state.selected) {
     const tram = state.selected.tram && data.tram_lines[state.selected.tram];
-    state.panel.innerHTML = tram ? tramPanelHtml(tram, slot) : panelHtml(state.selected, slot, data.colors);
+    state.panel.innerHTML = tram ? tramPanelHtml(tram, slot) : panelHtml(state.selected, slot, data);
     state.panel.style.display = "block";
     state.panel.querySelector(".uvt-close").onclick = () => { state.selected = null; render(state); };
   } else {
@@ -455,7 +485,7 @@ export default async function (component) {
     state.lastHour = data.slot === WHOLE_DAY ? 8 : data.slot;
     state.selected = null;
   }
-  state.legend.innerHTML = legendHtml(data.colors);
+  state.legend.innerHTML = legendHtml(data);
 
   let deck;
   let maplibregl;

@@ -19,15 +19,21 @@ _SRC_PALETTE = str(Path(__file__).resolve().parents[1] / "reports")
 if _SRC_PALETTE not in sys.path:
     sys.path.insert(0, _SRC_PALETTE)
 from palette import (  # noqa: E402
-    BLACK_FOREST,
-    COPPERWOOD,
-    CORNSILK,
+    ACTION,
+    GARONNE,
+    INK,
+    INK_MUTED,
+    LIE,
     MEDIUM,
     NEGATIVE,
-    NO_DATA,
-    OLIVE_LEAF,
+    PIERRE,
     POSITIVE,
-    SUNLIT_CLAY,
+    SCALE,
+    SCREEN_NO_DATA,
+    SURFACE,
+    TRONCON_ANCHORS,
+    VIN,
+    retained_seconds,
 )
 
 SLOTS = 25
@@ -40,74 +46,80 @@ COMMUNE_ZOOM = 12.5
 TIER_CODES = {POSITIVE: "v", MEDIUM: "o", NEGATIVE: "c"}
 STATUS_CODES = {"peu": "p", "terminus": "t", "douteux": "d"}
 ABSENT = "-"
-COLORS = {"v": OLIVE_LEAF, "o": SUNLIT_CLAY, "c": COPPERWOOD, "grey": NO_DATA}
+COLORS = {"v": GARONNE, "o": PIERRE, "c": VIN, "x": LIE, "grey": SCREEN_NO_DATA}
+SCALE_PAYLOAD = {"anchors": list(TRONCON_ANCHORS), "colors": list(SCALE)}
 
 _JS = Path(__file__).with_name("carte_troncons.js").read_text(encoding="utf-8")
 _CSS = f"""
 .uvt {{ position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #F2F2EE;
-       border: 1px solid rgba(40, 54, 24, .18); font-family: 'Source Sans', 'Source Sans 3', sans-serif; color: {BLACK_FOREST}; }}
+       border: 1px solid rgba(43, 37, 35, .18); font-family: 'Source Sans', 'Source Sans 3', sans-serif; color: {INK}; }}
 .uvt-canvas {{ position: absolute !important; inset: 0; }}
 .uvt canvas {{ outline: none; }}
 .uvt-head {{ position: absolute; z-index: 3; top: 12px; left: 12px; max-width: min(440px, calc(100% - 90px));
             background: rgba(255, 255, 255, .95); border-radius: 10px; padding: 11px 14px 10px;
-            box-shadow: 0 2px 10px rgba(40, 54, 24, .12); }}
+            box-shadow: 0 2px 10px rgba(43, 37, 35, .12); }}
 .uvt-label {{ font-size: 22px; font-weight: 700; line-height: 1.15; margin-bottom: 4px; letter-spacing: -.01em; }}
 .uvt-verdict {{ font-size: 16px; font-weight: 600; line-height: 1.35; }}
-.uvt-sub {{ color: #606c38; font-size: 12.5px; margin-top: 4px; }}
+.uvt-sub {{ color: {INK_MUTED}; font-size: 12.5px; margin-top: 4px; }}
 .uvt-bottom {{ position: absolute; z-index: 3; left: 12px; right: 12px; bottom: 12px; background: rgba(255, 255, 255, .96);
-              border-radius: 10px; padding: 10px 14px 9px; box-shadow: 0 2px 10px rgba(40, 54, 24, .12); }}
+              border-radius: 10px; padding: 10px 14px 9px; box-shadow: 0 2px 10px rgba(43, 37, 35, .12); }}
 .uvt-controls {{ display: flex; align-items: center; gap: 16px; }}
 .uvt-clock {{ min-width: 128px; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }}
 .uvt-range-box {{ flex: 1; }}
-.uvt-range {{ width: 100%; accent-color: {BLACK_FOREST}; cursor: pointer; margin: 0; }}
+.uvt-range {{ width: 100%; accent-color: {ACTION}; cursor: pointer; margin: 0; }}
 .uvt-range.off {{ opacity: .4; }}
-.uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-play:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {SUNLIT_CLAY}; outline-offset: 2px; }}
-.uvt-ticks {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11.5px; margin-top: 1px; }}
-.uvt-allday {{ flex: none; border: 1.5px solid {BLACK_FOREST}; border-radius: 999px; background: #FFFFFF; color: {BLACK_FOREST};
+.uvt-range:focus-visible, .uvt-allday:focus-visible, .uvt-play:focus-visible, .uvt-close:focus-visible {{ outline: 2px solid {ACTION}; outline-offset: 2px; }}
+.uvt-ticks {{ display: flex; justify-content: space-between; color: {INK_MUTED}; font-size: 11.5px; margin-top: 1px; }}
+.uvt-allday {{ flex: none; border: 1.5px solid {ACTION}; border-radius: 999px; background: #FFFFFF; color: {ACTION};
               padding: 6px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }}
-.uvt-allday[aria-pressed="true"] {{ background: {BLACK_FOREST}; color: #FEFAE0; }}
-.uvt-play {{ flex: none; border: none; border-radius: 999px; background: #F2F2EE; color: {BLACK_FOREST}; padding: 7px 14px;
+.uvt-allday[aria-pressed="true"] {{ background: {ACTION}; border-color: {ACTION}; color: #FFFFFF; }}
+.uvt-play {{ flex: none; border: none; border-radius: 999px; background: #F2F2EE; color: {INK}; padding: 7px 14px;
             font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }}
-.uvt-play[aria-pressed="true"] {{ background: {CORNSILK}; box-shadow: inset 0 0 0 1.5px {BLACK_FOREST}; }}
+.uvt-play[aria-pressed="true"] {{ background: {SURFACE}; box-shadow: inset 0 0 0 1.5px {ACTION}; }}
 .uvt-legend {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; padding-top: 8px;
-              border-top: 1px solid rgba(40, 54, 24, .12); font-size: 12.5px; }}
-.uvt-bar {{ display: flex; align-items: stretch; border-radius: 6px; overflow: hidden; }}
-.uvt-bar span {{ padding: 3px 9px; color: #FFFFFF; font-weight: 600; white-space: nowrap; }}
-.uvt-bar span.o {{ color: {BLACK_FOREST}; }}
-.uvt-key {{ display: inline-flex; align-items: center; gap: 6px; color: #606c38; }}
-.uvt-swatch {{ display: inline-block; width: 24px; height: 0; border-top: 4px solid {NO_DATA}; }}
-.uvt-swatch.ferry {{ border-top: 4px dashed {BLACK_FOREST}; }}
-.uvt-swatch.bus {{ border-top: 3px solid {BLACK_FOREST}; }}
+              border-top: 1px solid rgba(43, 37, 35, .12); font-size: 12.5px; }}
+.uvt-scale {{ display: inline-flex; flex-direction: column; min-width: 230px; flex: 0 1 300px; }}
+.uvt-grad {{ height: 10px; border-radius: 3px; }}
+.uvt-sticks {{ position: relative; height: 16px; color: {INK_MUTED}; font-size: 11.5px; }}
+.uvt-sticks span {{ position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }}
+.uvt-sticks span:first-child {{ transform: none; }}
+.uvt-sticks span:last-child {{ transform: translateX(-100%); }}
+.uvt-sticks span::before {{ content: ""; position: absolute; left: 50%; top: -3px; width: 1px; height: 4px; background: {INK_MUTED}; }}
+.uvt-sticks span:first-child::before {{ left: 0; }}
+.uvt-sticks span:last-child::before {{ left: 100%; }}
+.uvt-words {{ color: {INK}; font-size: 12.5px; font-weight: 600; margin-bottom: 3px; }}
+.uvt-key {{ display: inline-flex; align-items: center; gap: 6px; color: {INK_MUTED}; }}
+.uvt-swatch {{ display: inline-block; width: 24px; height: 0; border-top: 3px dashed #A8A8A2; }}
+.uvt-swatch.ferry {{ border-top: 4px dashed {INK}; }}
+.uvt-swatch.bus {{ border-top: 3px solid {INK}; }}
 .uvt-swatch.tram {{ border-top: 6px dotted #A9A9A0; }}
 .uvt-tip {{ position: absolute; z-index: 5; display: none; pointer-events: none; max-width: 300px; background: #FFFFFF;
-           border: 1px solid rgba(40, 54, 24, .2); border-radius: 10px; padding: 9px 11px;
-           box-shadow: 0 8px 22px rgba(40, 54, 24, .16); font-size: 13px; line-height: 1.4; }}
+           border: 1px solid rgba(43, 37, 35, .2); border-radius: 10px; padding: 9px 11px;
+           box-shadow: 0 8px 22px rgba(43, 37, 35, .16); font-size: 13px; line-height: 1.4; }}
 .uvt-tip b {{ display: block; font-size: 14px; }}
-.uvt-tip .l {{ color: #606c38; font-size: 12px; margin-bottom: 4px; }}
-.uvt-tip .m {{ color: #606c38; font-size: 12px; margin-top: 4px; }}
+.uvt-tip .l {{ color: {INK_MUTED}; font-size: 12px; margin-bottom: 4px; }}
+.uvt-tip .m {{ color: {INK_MUTED}; font-size: 12px; margin-top: 4px; }}
 .uvt-tip .n {{ font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }}
 .uvt-panel {{ position: absolute; z-index: 4; display: none; top: 12px; right: 56px; width: 330px;
              max-height: calc(100% - 175px); overflow: auto; background: #FFFFFF; border-radius: 12px; padding: 14px 16px 12px;
-             border: 1px solid rgba(40, 54, 24, .2); box-shadow: 0 10px 28px rgba(40, 54, 24, .2); font-size: 13.5px; line-height: 1.45; }}
+             border: 1px solid rgba(43, 37, 35, .2); box-shadow: 0 10px 28px rgba(43, 37, 35, .2); font-size: 13.5px; line-height: 1.45; }}
 .uvt-panel h3 {{ margin: 0 26px 2px 0; font-size: 16px; line-height: 1.25; }}
 .uvt-panel p {{ margin: 6px 0; }}
-.uvt-lines {{ color: #606c38; font-size: 12.5px; }}
-.uvt-figure {{ margin-top: 10px; font-size: 28px; font-weight: 700; line-height: 1.1; color: {COPPERWOOD}; }}
-.uvt-figure.ok {{ font-size: 20px; color: {OLIVE_LEAF}; }}
-.uvt-figure.t-v {{ color: {OLIVE_LEAF}; }}
-.uvt-figure.t-o {{ color: #9a6420; }}
+.uvt-lines {{ color: {INK_MUTED}; font-size: 12.5px; }}
+.uvt-figure {{ margin-top: 10px; font-size: 28px; font-weight: 700; line-height: 1.1; color: {INK}; }}
+.uvt-figure.ok {{ font-size: 20px; }}
 .uvt-grey-reason {{ margin-top: 10px !important; font-weight: 600; }}
-.uvt-foot {{ color: #606c38; font-size: 12px; }}
+.uvt-foot {{ color: {INK_MUTED}; font-size: 12px; }}
 .uvt-tram-row {{ display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; align-items: baseline; }}
 .uvt-tram-row b {{ font-size: 18px; white-space: nowrap; }}
-.uvt-tram-row b.na {{ font-size: 13px; font-weight: 600; color: #606c38; }}
+.uvt-tram-row b.na {{ font-size: 13px; font-weight: 600; color: {INK_MUTED}; }}
 .uvt-tram-row + .uvt-foot {{ margin-top: 0 !important; }}
 .uvt-close {{ position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 50%;
-             background: #F2F2EE; color: {BLACK_FOREST}; font-size: 18px; line-height: 1; cursor: pointer; }}
+             background: #F2F2EE; color: {INK}; font-size: 18px; line-height: 1; cursor: pointer; }}
 .uvt-strip {{ display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin-top: 10px; }}
 .uvt-strip span {{ height: 16px; border-radius: 2px; }}
-.uvt-strip span.now {{ outline: 2px solid {BLACK_FOREST}; outline-offset: 1px; }}
-.uvt-strip-axis {{ display: flex; justify-content: space-between; color: #606c38; font-size: 11px; margin-top: 3px; }}
+.uvt-strip span.now {{ outline: 2px solid {INK}; outline-offset: 1px; }}
+.uvt-strip-axis {{ display: flex; justify-content: space-between; color: {INK_MUTED}; font-size: 11px; margin-top: 3px; }}
 .uvt-error {{ padding: 24px; font-size: 14px; }}
 .uvt-bar b {{ font-weight: 600; }}
 .uvt-bar .sh {{ display: none; }}
@@ -239,7 +251,8 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
         if r.statut == "mesure":
             part = getattr(r, "part_2min", None)
             seg["values"][i] = [int(round(r.mediane_s)), int(round(r.mediane_pct)), int(r.passages),
-                                int(round(part)) if part is not None and part == part else 0]
+                                int(round(part)) if part is not None and part == part else 0,
+                                round(retained_seconds(r.mediane_s, r.mediane_pct), 1)]
         elif r.statut == "peu":
             seg["values"][i] = [None, None, int(r.passages), None]
     segments, lons, lats, all_lons, all_lats = [], [], [], [], []
@@ -297,7 +310,7 @@ def troncons_payload(geo: pd.DataFrame, cells: pd.DataFrame, lines: dict, names:
             "place": scope.get("place") or "sur le réseau", "label": scope.get("label") or "", "focused": focused,
             "unmeasured": bool(scope.get("unmeasured")), "date": date_info,
             "mode": date_info["day"] if date_info else "type",
-            "colors": COLORS, "height": MAP_HEIGHT}
+            "colors": COLORS, "scale": SCALE_PAYLOAD, "height": MAP_HEIGHT}
 
 
 def carte_troncons(payload: dict, key: str) -> None:
