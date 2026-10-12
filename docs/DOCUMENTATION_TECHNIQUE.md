@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 676 tests pytest
+└── tests/                          # 29 fichiers, 677 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -365,7 +365,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 676 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 677 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -516,6 +516,7 @@ source des tailles ; test `TestEchelleTypographique`) :
 
 | Variable | Taille | Usage |
 |---|---|---|
+| `--fs-hero` | 4,2 rem, gras | score du bloc principal de l'accueil (un seul usage) |
 | `--fs-page` | 1,75 rem (28 px), gras | titre de page (`st.title`) |
 | `--fs-figure` | 1,6 rem, gras | valeur des cartes indicateurs |
 | `--fs-section` | 1,3 rem, gras | titre de section (`###`), titre de fiche, nom du site |
@@ -566,7 +567,7 @@ cartes ; aucune couleur codée en dur ailleurs.
 | `ACTION` | `#351E8F` | tout ce qui se clique : liens, boutons, élément de menu actif, curseur (12,1:1, texte blanc) |
 | `GARONNE` | `#7FAAA6` | repère calme de l'échelle |
 | `PIERRE` | `#E1C17E` | repère « un peu » |
-| `VIN` | `#B1437A` | repère « beaucoup / problématique » |
+| `VIN` | `#A55F73` | repère « beaucoup / problématique » (prune adouci, texte blanc à 4,7:1) |
 | `LIE` | `#602D24` | repère extrême |
 | `SCREEN_NO_DATA` | `#D6D6D2` | pas assez de données, toujours en pointillé fin |
 
@@ -596,12 +597,16 @@ moins 40 s exactement pour « beaucoup » (81 cas testés,
 la règle de mesure. Côté navigateur, la couleur est en plus bornée à
 l'intervalle du palier (`segHex`, valeurs envoyées arrondies).
 
-Contrôle des couleurs (CIELAB, simulation Machado 2009) : écart entre repères
-successifs d'au moins 30 en vision normale, deutéranopie, protanopie et
-tritanopie (vin et lie : 35 en protanopie) ; aucune couleur à moins de 22
-d'une couleur de TBM (`#039CD2`, `#075E82`, `#FF5B45`, `#E2007A`) ou de
-Keolis (`#E16433`, `#9233A1`, `#00AAC3`, `#20405F`, `#5F006E`), relevées sur
-leurs sites le 12/10/2026.
+Contrôle des couleurs (CIELAB, simulation Machado 2009) : écart minimal entre
+repères successifs, toutes visions confondues (normale, deutéranopie,
+protanopie, tritanopie), de 40 (Garonne et pierre), 34 (pierre et vin) et 24
+(vin et lie ; 29 en protanopie). Couleurs de TBM (`#039CD2`, `#075E82`,
+`#FF5B45`, `#E2007A`) et de Keolis (`#E16433`, `#9233A1`, `#00AAC3`,
+`#20405F`, `#5F006E`) relevées sur leurs sites le 12/10/2026 : l'écart le plus
+faible est de 22 (bouton violet encre et prune de Keolis). Le vin était
+d'abord un framboise `#B1437A`, de la même teinte que le magenta de TBM
+(351° contre 359°, écart de 2,5 seulement en protanopie) ; le prune adouci
+s'en écarte de 47 en vision normale et de 17 en protanopie.
 
 Seuils (même valeur partout)
 
@@ -1467,9 +1472,14 @@ séparés (semaine, samedi, dimanche).
 une seconde de pause entre deux jours ; `build_map` calcule les médianes
 exactes en Python, par paquets d'arrêts de départ (dernier chiffre de
 `from_stop_id`, `PARTITIONS`) pour limiter la mémoire ; `build_geometry`
-découpe le tracé de `route_shapes` entre les projections des deux arrêts
-(`segment_geometry`, à moins de 150 m et dans le bon ordre), sinon un segment
-droit. Les calculs sont faits avant d'écrire : chaque écriture est une
+découpe le tracé de `route_shapes` entre les deux arrêts (`segment_geometry`) :
+chaque passage du tracé à moins de 150 m d'un arrêt est un candidat
+(`passes` : un tracé en boucle passe deux fois près d'un même arrêt), et la
+portion retenue est la plus courte qui va du premier arrêt au second dans le
+bon ordre ; sinon un segment droit. Avant le 13/10/2026, seul le point du tracé
+le plus proche de chaque arrêt était essayé : sur une boucle de terminus
+(ligne H2 à Cenon Gare), le tronçon « Cenon Gare (Tram A) vers Cenon Gare
+(Guesde) » prenait presque toute la ligne (4 tronçons concernés). Les calculs sont faits avant d'écrire : chaque écriture est une
 transaction courte (`with conn`), le collecteur n'attend jamais un calcul.
 Mesuré en développement sur la copie de production : 5,5 s par jour, dont
 0,7 s d'écriture (verrou) ; carte 69 s et géométrie 10 s, écrites chacune en
@@ -1614,32 +1624,54 @@ lecteur qui n'est pas analyste :
   guide n'est plus ouvert automatiquement par ce navigateur (cookie
   `uv_guide_vu`, un an, posé par `remember_guide_seen`, lu par
   `st.context.cookies`) ;
+- **lexique** : il s'ouvre sur « Comment se calcule le score de fiabilité »
+  (`SCORE_EXPLAINED` : passages prévus, passages assurés, à l'heure, formule,
+  ce qui n'est pas compté, comment on additionne, lecture et marge) ;
 - **vocabulaire** : « arrêt non desservi » remplace « arrêt sauté » partout
   (dashboard et rapports) ; le lexique (`LEXIQUE`) est la première vue de
   « Méthode et lexique ».
 
-1. **Accueil** (`render_page_home`) — bandeau (`render_home_header` : titre,
-   phrase verdict du réseau ou de la commune, quatre cartes, note des jours et
-   lignes écartés), puis :
-   - **À retenir** (`key_points`) : trois phrases, chacune fondée sur un écart
-     qui dépasse la marge d'incertitude à 95 % : l'évolution du score du
-     périmètre (« stable » si l'écart reste dans la marge) ; la ligne dont la
-     baisse dépasse le plus sa marge combinée (√(m₁² + m₂²), scores et marges
-     de `indicateurs.route_indicators`, loader `load_route_indicators`) ; la
-     ligne la moins fiable dont le score, marge comprise, reste sous celui du
+1. **Accueil** (`render_page_home`) — une page à lire d'un coup d'œil, peu de
+   texte :
+   - **bloc principal** (`render_home_header`) : titre « Le réseau en septembre
+     2026 » (ou la commune), score en très grand (`--fs-hero`) avec une
+     pastille à sa couleur, l'état en un mot, « 75 passages sur 100 assurés et
+     à l'heure », et une pastille d'évolution jugée contre la marge
+     (`evolution_chip` : « ▼ 3,2 points depuis août 2026 », bordée d'encre, avec
+     « plus que la marge d'incertitude (± 1,7) », ou « stable depuis… », « écart
+     −0,3, dans la marge ») ; à droite, le score **jour par jour** de la période
+     (`score_sparkline` : courbe à l'encre, points à la couleur du score,
+     repères 80 et 50 en pointillés) ; dessous, trois cartes (À l'heure,
+     Retard moyen, Arrêts non desservis) et la note des jours et lignes
+     écartés ;
+   - **À retenir** (`key_points`, `_key_tiles`) : trois tuiles à gros chiffre
+     (« ▼ 3,2 pts », « 73 → 42 », « 19/100 »), un libellé court (« Ligne 951 :
+     la plus forte baisse ») et une précision (« −31,1 points, au-delà de sa
+     marge (± 9,7) »), chacune fondée sur un écart qui dépasse la marge
+     d'incertitude à 95 % : l'évolution du score du périmètre (« Stable » si
+     l'écart reste dans la marge) ; la ligne dont la baisse dépasse le plus sa
+     marge combinée (√(m₁² + m₂²), scores et marges de
+     `indicateurs.route_indicators`, loader `load_route_indicators`) ; la ligne
+     la moins fiable dont le score, marge comprise, reste sous celui du
      périmètre, marge comprise. Les lignes au temps réel douteux sont
-     écartées ; sans écart réel, la phrase le dit (« Aucune ligne n'a baissé
-     plus que sa marge d'incertitude… »). Un bouton « Voir la ligne » ouvre la
-     fiche ;
-   - **Arrêts à traiter en premier** (`stops_to_treat`) : les 5 arrêts (quais
-     regroupés par nom et commune, au moins `MIN_OBSERVATIONS` passages) qui
-     ratent le plus de passages : passages attendus moins passages assurés et
-     à l'heure (colonnes `attendus` et `rates` de `load_territorial`), ce qui
-     combine le score et le nombre de passages ; pastille à la couleur du
-     score, « 15 721 passages ratés sur 50 562 prévus, score 69 sur 100 », bouton
-     « Voir l'arrêt » (fiche sur la carte, quai qui rate le plus) ;
+     écartées ; sans écart réel, la tuile dit « Aucune ». Lien « Voir la ligne
+     › ». La règle est dans l'aide « ? » du titre ;
+   - **Arrêts à traiter en premier** (`stops_to_treat`, `_stop_rows`) : les
+     arrêts **problématiques** (score sous 50, `PROBLEM_SCORE`, quais regroupés
+     par nom et commune, au moins `MIN_OBSERVATIONS` passages), les 5 qui ratent
+     le plus de passages (passages attendus moins passages assurés et à
+     l'heure : colonnes `attendus` et `rates` de `load_territorial`). Une ligne
+     par arrêt : score dans une pastille à sa couleur, nom et commune, barre
+     proportionnelle aux passages ratés, « 954 passages ratés sur 1 644 », lien
+     « Voir › » (fiche sur la carte, quai qui rate le plus). Sans arrêt
+     problématique : « Aucun arrêt problématique ici sur la période. » Avant le
+     13/10/2026, la liste prenait tous les arrêts classés par passages ratés :
+     de gros arrêts à peine sous le réseau (Palais de Justice, 69) passaient
+     devant tous les arrêts rouges, et le titre ne tenait pas sa promesse ;
    - **Voir le détail** (`home_detail`, aucune vue par défaut) : « Quand ? »,
-     « Modes de transport », « Perturbations » (points 4 à 6).
+     « Modes de transport », « Perturbations » (points 4 à 6) et « Arrêts qui
+     ratent le plus de passages » (les 10 premiers de tous les arrêts, classés
+     par passages ratés, `stops_to_treat(max_score=None)`).
 2. **Carte** (`render_page_map`) — deux vues (`map_view`, `MAP_VIEWS`) :
    « État des arrêts » (par défaut) et « Temps perdu entre arrêts ».
    **État des arrêts** (`render_page_territory`) :
@@ -1665,6 +1697,12 @@ lecteur qui n'est pas analyste :
      (`marker_atlas`, 4 formes × 19 teintes + halo de sélection, dessiné avec
      Pillow ; clé `icon_key` « forme|couleur ») ; les moins fiables sont
      dessinés au-dessus ;
+   - **survol** : les lignes qui desservent l'arrêt ou le groupe survolé
+     (`stop_direction`, `load_stop_route_keys`, tracés de `route_shapes`
+     arrondis à 1 m, `hover_routes` / `map_routes`) sont dessinées à la couleur
+     de leur état, sur un liseré blanc, et les autres arrêts s'estompent
+     (opacité 0,35) ; seules les lignes des arrêts affichés sont envoyées
+     (148 tracés pour le réseau, données de la carte 1,6 Mo) ;
    - **infobulle** (HTML propre au composant) : nom, une ligne par quai
      (pastille de couleur, direction, score, part > 5 min ; le quai survolé
      ou le moins fiable en tête), lignes desservies, passages, « Cliquer pour
@@ -1823,7 +1861,12 @@ lecteur qui n'est pas analyste :
    périmètre (`lines_table` : ligne, score, retards > 5 min, arrêts non
    desservis, passages ; une sélection ouvre la fiche). Avec une ligne
    choisie (recherche, graphique, tableau, « À retenir »,
-   `st.session_state["line_id"]`) : la **fiche ligne** d'abord (§11.7),
+   `st.session_state["line_id"]`) : la **fiche ligne** d'abord (§11.7), avec
+   sa **carte** sous les cartes d'indicateurs (`render_line_map` : tracé de la
+   ligne à la couleur de son état, arrêts de la ligne à la couleur du score
+   de la ligne à chacun, arrêts non estompés, carte cadrée sur l'étendue de la
+   ligne : `map_payload(fit=True)` ; un clic sur un arrêt ouvre sa fiche sur
+   « Carte »),
    calculée sur toute la ligne quel que soit le filtre de commune, puis le
    classement dans un bloc repliable « Classement des lignes ». Aucune fiche
    n'est ouverte d'office. Toute ouverture de fiche ligne fait défiler la page
@@ -2725,7 +2768,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 676 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 677 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -3187,7 +3230,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 676, isolés (suite `pytest` complète : 676 passed), flux synthétiques
+- Tests : 677, isolés (suite `pytest` complète : 677 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3271,7 +3314,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
-| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (676 après la phase 2 de la refonte) |
+| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (677 à la fin de la phase 2 de la refonte) |
 | I31 | Charte du dashboard : trois paliers en aplats ocre et cuivre (carte des arrêts presque entièrement ocre pour un réseau à 75), « à surveiller » et « problématique » trop proches (ΔE 22, 18 en deutéranopie), texte blanc sur cuivre à 3,95:1, gris « non mesuré » à 1,74:1 sur le fond de carte, évolutions colorées comme des états, taille des arrêts selon le nombre de passages lue comme une fréquentation | Charte écran « Pierre et vin » et dégradé à repères fixes (§6.4), texte choisi par `ink_on`, gris en pointillé, évolutions neutres, taille constante ; rapports PDF inchangés ; tests `TestCharteEcran`, `TestSecondesRetenues`, `TestDegrade`, `TestCarte`, `TestIcones` |
 | I32 | Navigation : 9 entrées de même poids ; bandeau du réseau répété au-dessus des fiches de ligne et d'arrêt (deux verdicts) ; barre de contexte affichant une ligne ou un arrêt que la page ignorait ; fiche de la ligne la moins fiable ouverte d'office sur « Lignes » ; arrêts proposés par quai et direction, avec des doublons ; aucune liste des tronçons les plus lents ; défilement automatique qui cachait le titre de la fiche sous la barre collante | Trois entrées et pied de menu, recherche unique, fil d'Ariane, phrase verdict, « À retenir » fondé sur la marge d'incertitude, « Arrêts à traiter en premier », 5 pires tronçons, heures à peu de passages en gris, défilement à `scroll-margin-top` (§11.3) ; tests `TestFilDAriane`, `TestTerritoireEtFiches`, `TestCreneauxEtGroupes` |
 | I33 | Fiche d'une ligne dont le retard médian est négatif (S35, −3 min 21 s, 76 % des départs avec plus d'une minute d'avance) : type de retard « Retards fréquents mais courts », car la zone de risque utilise la valeur absolue | Libellé neutre « Écart à l'horaire publié » avec les seuls chiffres, sans phrase d'interprétation (`diagnostic.display_zone`) ; la zone de risque et le score ne changent pas |

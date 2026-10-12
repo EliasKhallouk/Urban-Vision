@@ -491,6 +491,31 @@ def groups_hourly_chart(df: pd.DataFrame, groups: list[str]) -> dict:
     }
 
 
+def score_sparkline(daily: pd.DataFrame) -> dict:
+    """Score de fiabilité jour par jour sur la période (accueil) : courbe à l'encre, points à la couleur du
+    score, repères 80 et 50 en pointillés ; `daily` : date_service, score_fiabilite (ensemble du périmètre)."""
+    df = daily.dropna(subset=["score_fiabilite"]).sort_values("date_service")
+    data = [{"x": int(pd.Timestamp(d).timestamp() * 1000), "y": round(float(v), 1), "color": score_color(float(v))}
+            for d, v in zip(df["date_service"], df["score_fiabilite"])]
+    low = min([p["y"] for p in data] + [50.0])
+    guide = {"color": INK_MUTED, "dashStyle": "Dot", "width": 1, "zIndex": 2}
+    return {
+        "chart": {"type": "spline", "height": 190, "spacing": [8, 8, 4, 4]},
+        "title": {"text": None},
+        "xAxis": {"type": "datetime", "labels": {"format": "{value:%e %b}"}, "tickLength": 0},
+        "yAxis": {"title": {"text": None}, "min": max(0, int(low // 10 * 10) - 5), "max": 100, "tickInterval": 25,
+                  "plotLines": [{**guide, "value": 80, "label": {"text": "80 fiable", "align": "right", "x": -4,
+                                                                  "style": {"color": INK_MUTED, "fontSize": "12px"}}},
+                                {**guide, "value": 50, "label": {"text": "50 problématique", "align": "right", "x": -4,
+                                                                  "style": {"color": INK_MUTED, "fontSize": "12px"}}}]},
+        "legend": {"enabled": False},
+        "series": [{"name": "Score de fiabilité", "data": data, "color": INK, "lineWidth": 2,
+                    "marker": {"enabled": True, "radius": 4, "lineColor": "#FFFFFF", "lineWidth": 1},
+                    "tooltip": {"pointFormat": "Score : <b>{point.y:,.0f} / 100</b><br/>", "xDateFormat": "%A %e %B"}}],
+        "lexique": "score-de-fiabilite",
+    }
+
+
 def period_mode_chart(df: pd.DataFrame) -> dict:
     categories = list(dict.fromkeys(df["période"]))
     series = []

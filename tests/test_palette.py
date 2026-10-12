@@ -192,7 +192,7 @@ class TestDegrade:
         assert palette.scale_color(300.0) == palette.LIE
 
     def test_interpolation_a_mi_chemin(self):
-        assert palette.scale_color(27.5) == "#C9827C"
+        assert palette.scale_color(27.5) == "#C39078"
 
     def test_reperes_des_scores_decroissants(self):
         assert palette.score_color(90.0) == palette.GARONNE

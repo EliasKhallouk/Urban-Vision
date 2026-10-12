@@ -31,8 +31,8 @@ class TestIcones:
         assert len(mapping) == 4 * 19 + 1
         img = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
         assert img.size == (4 * carte.MARKER_CELL, 20 * carte.MARKER_CELL)
-        cell = mapping["square|#B1437A"]
-        assert img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))[:3] == (0xB1, 0x43, 0x7A)
+        cell = mapping["square|#A55F73"]
+        assert img.getpixel((cell["x"] + cell["width"] // 2, cell["y"] + cell["height"] // 2))[:3] == (0xA5, 0x5F, 0x73)
         halo = mapping["halo"]
         center = img.getpixel((halo["x"] + halo["width"] // 2, halo["y"] + halo["height"] // 2))
         assert all(abs(a - b) <= 2 for a, b in zip(center[:3], (0xF6, 0xF1, 0xEA)))

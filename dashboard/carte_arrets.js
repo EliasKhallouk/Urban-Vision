@@ -96,6 +96,14 @@ function tooltipHtml(data, object) {
     + '<div class="uv-cta">Cliquer pour ouvrir la fiche →</div>';
 }
 
+function hoverRoutes(data, object) {
+  const routes = data.routes || {};
+  const members = object.m ? object.m.map((i) => data.stops[i]) : [object];
+  const keys = new Set();
+  members.forEach((s) => (s && s.r ? s.r : []).forEach((k) => keys.add(k)));
+  return [...keys].map((k) => routes[k]).filter(Boolean);
+}
+
 function pathTooltip(object) {
   return `<div class="uv-title">${esc(object.g)} Ligne ${esc(object.l)}</div>`
     + `<div class="uv-row"><span class="uv-chip" style="background:rgb(${object.c.join(",")})"></span>`
@@ -187,9 +195,16 @@ function buildLayers(deck, state) {
   };
   const layers = [];
   const paths = data.paths || [];
+  if (state.hoverPaths && state.hoverPaths.length) {
+    const hover = { data: state.hoverPaths, getPath: (d) => d.p, widthUnits: "pixels", capRounded: true,
+      jointRounded: true, parameters: { depthTest: false } };
+    layers.push(new deck.PathLayer({ id: "survol-lisere", ...hover, getColor: [255, 255, 255, 220], getWidth: 7 }));
+    layers.push(new deck.PathLayer({ id: "survol", ...hover, getColor: (d) => [...d.c, 235], getWidth: 4 }));
+    iconProps.opacity = 0.35;
+  }
   if (paths.length) {
     layers.push(...pathLayers(deck, paths));
-    iconProps.opacity = 0.45;
+    if (data.dim_stops !== false) iconProps.opacity = 0.45;
   }
   if (grouped) {
     layers.push(new deck.IconLayer({ id: "groupes", data: data.groups, getPosition: (d) => [d.x, d.y], ...iconProps }));
@@ -324,6 +339,9 @@ export default async function (component) {
     });
     state.map.touchZoomRotate.disableRotation();
     state.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    if (data.bounds && !(state.selectedStop && data.focus_on_load)) {
+      state.map.fitBounds(data.bounds, { padding: 40, duration: 0, maxZoom: 15 });
+    }
     state.overlay = new deck.MapboxOverlay({
       interleaved: false,
       layers: [],
@@ -331,6 +349,12 @@ export default async function (component) {
         const hit = info.object && info.layer && !info.layer.id.startsWith("selection");
         const onPath = hit && info.layer.id.startsWith("lignes");
         state.map.getCanvas().style.cursor = hit && !onPath ? "pointer" : "";
+        const hoverKey = hit && !onPath ? (info.object.m ? `g${info.object.w}` : info.object.i) : null;
+        if (hoverKey !== state.hoverKey) {
+          state.hoverKey = hoverKey;
+          state.hoverPaths = hoverKey ? hoverRoutes(state.data, info.object) : [];
+          refresh();
+        }
         if (!hit) {
           state.tip.style.display = "none";
           return;
@@ -361,10 +385,18 @@ export default async function (component) {
       state.lastZoom = zoom;
       if (crossed || (bucketChanged && zoom >= split)) refresh();
     });
-    state.root.addEventListener("mouseleave", () => { state.tip.style.display = "none"; });
+    state.root.addEventListener("mouseleave", () => {
+      state.tip.style.display = "none";
+      if (state.hoverKey) {
+        state.hoverKey = null;
+        state.hoverPaths = [];
+        refresh();
+      }
+    });
   } else if (data.view_key !== state.viewKey) {
     state.viewKey = data.view_key;
-    state.map.jumpTo({ center: [data.view.longitude, data.view.latitude], zoom: data.view.zoom });
+    if (data.bounds) state.map.fitBounds(data.bounds, { padding: 40, duration: 0, maxZoom: 15 });
+    else state.map.jumpTo({ center: [data.view.longitude, data.view.latitude], zoom: data.view.zoom });
   } else if (state.selectedStop && data.selected !== previousSelection && data.selected !== state.lastClicked) {
     flyTo(state.selectedStop, Math.max(state.map.getZoom(), data.focus_zoom));
   }

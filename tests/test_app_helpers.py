@@ -82,7 +82,7 @@ class TestCouleurs:
 class TestKpiCard:
     def test_pastille_par_polarite(self):
         assert app_mod._kpi_color("positif") == "#7FAAA6"
-        assert app_mod._kpi_color("negatif") == "#B1437A"
+        assert app_mod._kpi_color("negatif") == "#A55F73"
         assert app_mod._kpi_color("moyen") == "#E1C17E"
         assert app_mod._kpi_color("#123456") == "#123456"
         assert app_mod._kpi_color("neutral") is None
@@ -342,7 +342,7 @@ class TestGrilleJourHeure:
     def test_cases_colorees_encadrement_et_marges(self):
         html = app_mod.week_hour_grid_html(self._table(), {"weekday": 4, "hour": 9})
         assert html.count("<tr>") == 9
-        assert 'style="background:#B1437A;color:#FFFFFF;outline:2px solid #2B2523' in html
+        assert 'style="background:#A55F73;color:#FFFFFF;outline:2px solid #2B2523' in html
         assert "Vendredi 9 h–10 h : 60 % de passages à plus de 5 min · 30 passages · dégradé 3 fois sur 3" in html
         assert '<th>Ven.</th>' in html and "<th>Tous</th>" in html
         assert ">30</td>" in html
@@ -796,6 +796,7 @@ class TestTerritoireEtFiches:
         assert len(points) == 3
         assert "a <b>baissé de 3,3 points</b> par rapport à août 2026" in points[0]["text"]
         assert points[1]["route_id"] == "0" and "La ligne <b>5</b> a le plus baissé" in points[1]["text"]
+        assert (points[0]["figure"], points[1]["figure"], points[2]["figure"]) == ("▼ 3,3 pts", "72 → 60", "40/100")
         assert points[2]["route_id"] == "2" and "La ligne <b>S35</b> est la moins fiable" in points[2]["text"]
 
     def test_trois_choses_sans_ecart_reel(self):
@@ -805,22 +806,26 @@ class TestTerritoireEtFiches:
         before = self._lines([75.0, 70.0], [2.0, 30.0])
         points = app_mod.key_points("Mérignac", "de Mérignac", change, "Août 2026", now, before, {})
         assert "<b>stable</b>" in points[0]["text"]
-        assert points[1] == {"text": "Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à août 2026.",
-                             "route_id": None}
+        assert points[1]["text"] == "Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à août 2026."
+        assert (points[1]["figure"], points[1]["route_id"]) == ("Aucune", None)
+        assert points[0]["figure"] == "Stable" and "dans la marge (± 1,7)" in points[0]["detail"]
         assert points[2]["route_id"] is None and "nettement en dessous de Mérignac" in points[2]["text"]
         assert "Le score de Mérignac est <b>stable</b>" in points[0]["text"]
         assert app_mod._scope_words(None) == ("le réseau", "du réseau")
         assert app_mod._scope_words("Eysines")[1] == "d'Eysines"
 
-    def test_arrets_a_traiter_par_passages_rates(self):
+    def test_arrets_a_traiter_problematiques_par_passages_rates(self):
         territorial = pd.DataFrame({
             "stop_id": ["a1", "a2", "b1", "c1"], "stop_name": ["Gare", "Gare", "Parc", "Port"],
             "observations": [400, 600, 60, 10], "attendus": [400.0, 600.0, 60.0, 10.0],
             "rates": [40.0, 110.0, 50.0, 9.0], "route_type": [3, 3, 3, 3]})
-        top = app_mod.stops_to_treat(territorial, {"a1": "Bordeaux", "a2": "Bordeaux", "b1": "Pessac"})
-        assert top["stop_name"].tolist() == ["Gare", "Parc"]
-        assert top.iloc[0]["stop_id"] == "a2" and top.iloc[0]["rates"] == 150.0
-        assert round(top.iloc[0]["score"], 1) == 85.0
+        communes = {"a1": "Bordeaux", "a2": "Bordeaux", "b1": "Pessac"}
+        top = app_mod.stops_to_treat(territorial, communes)
+        assert top["stop_name"].tolist() == ["Parc"] and round(top.iloc[0]["score"], 1) == 16.7
+        everything = app_mod.stops_to_treat(territorial, communes, max_score=None)
+        assert everything["stop_name"].tolist() == ["Gare", "Parc"]
+        assert everything.iloc[0]["stop_id"] == "a2" and everything.iloc[0]["rates"] == 150.0
+        assert round(everything.iloc[0]["score"], 1) == 85.0
         assert app_mod.stops_to_treat(territorial.head(0), {}).empty
 
     def test_legende_de_la_carte(self):

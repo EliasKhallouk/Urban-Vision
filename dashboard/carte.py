@@ -153,14 +153,18 @@ def map_view(stops: pd.DataFrame, commune: str | None) -> dict:
 
 
 def map_payload(stops: pd.DataFrame, groups: pd.DataFrame, selected_id: str | None, commune: str | None,
-                focus_on_load: bool = False, paths: list | None = None) -> dict:
+                focus_on_load: bool = False, paths: list | None = None, routes: dict | None = None,
+                stop_routes: dict | None = None, dim_stops: bool = True, fit: bool = False) -> dict:
     """Données transmises au composant : arrêts, regroupements, arrêt sélectionné et réglages.
 
     `stops` : un arrêt par ligne (stop_id, stop_name, direction, lat, lon,
     route_type, score_fiabilite, pct_retard_5min, observations, lignes) ;
     `groups` : sortie de group_stops (members = stop_id du groupe, stop_id =
     sens le moins fiable). Les listes sont triées du plus fiable au moins
-    fiable : deck.gl dessine les moins fiables par-dessus.
+    fiable : deck.gl dessine les moins fiables par-dessus. `routes` (clé « ligne|sens » -> couleur et
+    tracé) et `stop_routes` (arrêt -> clés) servent à dessiner les lignes d'un arrêt survolé ; seules les
+    lignes des arrêts affichés sont envoyées. `dim_stops=False` garde les arrêts opaques sous les tracés ;
+    `fit=True` cadre la carte sur l'étendue des arrêts (`bounds`), par exemple pour la carte d'une ligne.
     """
     ordered = stops.sort_values("score_fiabilite", ascending=False).reset_index(drop=True)
     index = {sid: i for i, sid in enumerate(ordered["stop_id"])}
@@ -175,19 +179,35 @@ def map_payload(stops: pd.DataFrame, groups: pd.DataFrame, selected_id: str | No
         out_groups.append({"x": round(float(g.lon), 6), "y": round(float(g.lat), 6),
                            "k": icon_key(g.route_type, g.score_fiabilite), "z": _size_m(g.observations),
                            "w": g.stop_id, "m": members, "o": int(g.observations)})
+    stop_routes = stop_routes or {}
     out_stops = [{"i": r.stop_id, "n": r.stop_name, "d": r.direction or "", "y": round(float(r.lat), 6),
                   "x": round(float(r.lon), 6), "k": icon_key(r.route_type, r.score_fiabilite),
                   "s": round(float(r.score_fiabilite), 1), "p": round(float(r.pct_retard_5min), 1),
-                  "o": int(r.observations), "l": r.lignes, "g": group_of[i], "z": _size_m(r.observations)}
+                  "o": int(r.observations), "l": r.lignes, "g": group_of[i], "z": _size_m(r.observations),
+                  "r": [k for k in stop_routes.get(r.stop_id, []) if routes and k in routes]}
                  for i, r in enumerate(ordered.itertuples())]
+    used = {k for s in out_stops for k in s["r"]}
+    hover_routes = {k: v for k, v in (routes or {}).items() if k in used}
     uri, mapping = marker_atlas()
     return {
         "stops": out_stops, "groups": out_groups, "selected": selected_id if selected_id in index else None,
-        "paths": paths or [],
+        "paths": paths or [], "routes": hover_routes, "dim_stops": dim_stops,
+        "bounds": ([[float(stops["lon"].min()), float(stops["lat"].min())],
+                    [float(stops["lon"].max()), float(stops["lat"].max())]] if fit and not stops.empty else None),
         "view": map_view(stops, commune), "view_key": commune or "__reseau__", "focus_on_load": focus_on_load,
         "atlas": {"url": uri, "mapping": mapping}, "size_px": list(STOP_SIZE_PIXELS), "split_zoom": SPLIT_ZOOM,
         "focus_zoom": FOCUS_ZOOM, "min_sep_px": MIN_SEP_PX, "height": MAP_HEIGHT,
     }
+
+
+def hover_routes(shapes: dict, colors: dict, names: dict, default_color: list) -> dict:
+    """Tracés pour le survol : clé « ligne|sens » -> couleur (état de la ligne), nom et tracé arrondi à 1 m."""
+    out = {}
+    for route_id, by_dir in shapes.items():
+        for direction, coords in by_dir.items():
+            out[f"{route_id}|{direction}"] = {"c": colors.get(route_id, default_color), "l": names.get(route_id, route_id),
+                                              "p": [[round(x, 5), round(y, 5)] for x, y in coords]}
+    return out
 
 
 def carte_arrets(payload: dict, key: str, on_click) -> None:

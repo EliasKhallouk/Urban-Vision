@@ -188,6 +188,13 @@ class TestGeometrie:
         assert tr.segment_geometry([self.LINE], (-0.585, 44.84), (-0.595, 44.84)) == [[-0.585, 44.84], [-0.595, 44.84]]
 
 
+    def test_trace_en_boucle_portion_la_plus_courte(self):
+        loop = [[-0.60, 44.84], [-0.58, 44.84], [-0.58, 44.85], [-0.60, 44.85], [-0.60, 44.8402], [-0.61, 44.8402]]
+        part = tr.segment_geometry([loop], (-0.601, 44.8401), (-0.605, 44.8401))
+        assert len(part) <= 3 and all(abs(lat - 44.8402) < 0.0003 for _, lat in part)
+        assert len(tr.passes(loop, (-0.60, 44.8401))) == 2
+
+
 class TestComposant:
     def test_decalage_a_droite_du_sens(self):
         east = ct.offset_right([[-0.60, 44.84], [-0.59, 44.84]], 10)
@@ -220,7 +227,7 @@ class TestComposant:
         first, second = payload["segments"]
         assert first["t"][8] == "c" and first["t"][ct.WHOLE_DAY_SLOT] == "o" and len(first["t"]) == ct.SLOTS
         assert first["v"][8] == [60, 67, 24, 12, 57.0] and first["v"][ct.WHOLE_DAY_SLOT] == [20, 30, 300, 5, 20.0]
-        assert payload["scale"] == {"anchors": [0.0, 15.0, 40.0, 60.0], "colors": ["#7FAAA6", "#E1C17E", "#B1437A", "#602D24"]}
+        assert payload["scale"] == {"anchors": [0.0, 15.0, 40.0, 60.0], "colors": ["#7FAAA6", "#E1C17E", "#A55F73", "#602D24"]}
         assert (first["n"], first["l"], first["c"], first["m"]) == ("Gare vers Parc", "1, 16", 1, 3)
         assert second["t"][8] == "p" and second["v"][8] == [None, None, 3, None]
         assert second["c"] == 0 and second["m"] == 4

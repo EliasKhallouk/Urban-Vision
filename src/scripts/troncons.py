@@ -418,17 +418,42 @@ def cut(points: list, s0: float, s1: float, lat0: float) -> list:
     return [[round(x, 6), round(y, 6)] for x, y in out]
 
 
+def passes(points: list, p: tuple, snap: float = SNAP_METERS) -> list[tuple[float, float]]:
+    """Chaque passage du tracé à moins de `snap` mètres de p : (abscisse curviligne, distance) du point le
+    plus proche, un par suite de segments consécutifs proches (un tracé en boucle passe deux fois)."""
+    lat0 = p[1]
+    xy = [_xy(lon, lat, lat0) for lon, lat in points]
+    px, py = _xy(p[0], p[1], lat0)
+    out, current, s = [], None, 0.0
+    for (ax, ay), (bx, by) in zip(xy[:-1], xy[1:]):
+        dx, dy = bx - ax, by - ay
+        length = math.hypot(dx, dy)
+        t = 0.0 if length == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length ** 2))
+        d = math.hypot(ax + t * dx - px, ay + t * dy - py)
+        if d <= snap:
+            if current is None or d < current[1]:
+                current = (s + t * length, d)
+        elif current is not None:
+            out.append(current)
+            current = None
+        s += length
+    if current is not None:
+        out.append(current)
+    return out
+
+
 def segment_geometry(shapes: list, a: tuple, b: tuple) -> list:
-    """Tracé d'un tronçon : portion du premier tracé de ligne qui passe près des deux arrêts dans le bon
-    ordre (à moins de SNAP_METERS), sinon segment droit entre les deux arrêts."""
+    """Tracé d'un tronçon : la portion la plus courte d'un tracé de ligne qui passe près des deux arrêts dans le
+    bon ordre (à moins de SNAP_METERS ; sur un tracé en boucle, chaque passage est essayé), sinon segment droit
+    entre les deux arrêts."""
     best = None
     for points in shapes:
         if len(points) < 2:
             continue
-        s0, d0 = project(points, a)
-        s1, d1 = project(points, b)
-        if d0 <= SNAP_METERS and d1 <= SNAP_METERS and s1 > s0 and (best is None or d0 + d1 < best[0]):
-            best = (d0 + d1, points, s0, s1)
+        for s0, d0 in passes(points, a):
+            for s1, d1 in passes(points, b):
+                if s1 > s0 and (best is None or (s1 - s0, d0 + d1) < best[0]):
+                    best = ((s1 - s0, d0 + d1), points, s0, s1)
     if best is not None:
         part = cut(best[1], best[2], best[3], a[1])
         if len(part) >= 2:

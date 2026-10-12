@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from carte import carte_arrets, map_payload
+from carte import carte_arrets, hover_routes, map_payload
 from carte_troncons import carte_troncons, tram_lines_payload, troncons_payload
 from graphique import graphique_cliquable
 
@@ -51,6 +51,7 @@ from highcharts import (
     groups_trend_chart,
     period_score_chart,
     render as hc_render,
+    score_sparkline,
     ranking_chart,
     scatter_chart,
     commune_ranking_chart,
@@ -456,7 +457,7 @@ def inject_style() -> None:
         f"""
         <style>
         :root {{
-            --fs-page: 1.75rem; --fs-figure: 1.6rem; --fs-section: 1.3rem; --fs-block: 1.0625rem;
+            --fs-hero: 4.2rem; --fs-page: 1.75rem; --fs-figure: 1.6rem; --fs-section: 1.3rem; --fs-block: 1.0625rem;
             --fs-body: 1rem; --fs-small: .875rem; --fs-label: .8125rem; --fs-micro: .75rem;
             --lh-title: 1.2; --lh-body: 1.55; --lh-small: 1.45;
             --ink: {INK}; --ink-2: {INK_MUTED}; --surface: {SURFACE}; --line: {LINE}; --action: {ACTION};
@@ -475,7 +476,7 @@ def inject_style() -> None:
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {{ display: none; }}
         [data-testid="stSidebar"] > div:first-child {{ padding-top: 1.2rem; }}
         .sidebar-brand {{ display: flex; flex-direction: column; align-items: flex-start; gap: .55rem; margin: .1rem 0 1rem; }}
-        .sidebar-brand img {{ height: 74px; width: auto; max-width: 100%; mix-blend-mode: multiply; }}
+        .sidebar-brand img {{ height: 120px; width: auto; max-width: 100%; mix-blend-mode: multiply; }}
         .sidebar-brand span {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; letter-spacing: -.01em; line-height: var(--lh-title); }}
         .sidebar-nav-label {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin: .8rem 0 .4rem; }}
         [data-testid="stSidebar"] [data-testid="stButton"] button {{ background: #FFFFFF; border-color: var(--line); }}
@@ -548,14 +549,33 @@ def inject_style() -> None:
         .st-key-crumbs [data-testid="stElementContainer"] {{ margin: 0 !important; width: auto !important; }}
         .st-key-crumbs [data-testid="stButton"] button {{ min-height: 0; height: auto; padding: 0; line-height: 1.45; }}
         .st-key-crumbs [data-testid="stButton"] button p {{ color: var(--action); font-size: var(--fs-small); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }}
-        [class*="st-key-retenir_"], [class*="st-key-atraiter_"] {{ border-bottom: 1px solid var(--line); padding: .55rem 0; }}
-        .kp-text {{ color: var(--ink); font-size: var(--fs-body); line-height: var(--lh-body); max-width: 70ch; }}
-        .st-row {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; }}
-        .st-dot {{ flex: none; width: .7rem; height: .7rem; border-radius: 50%; align-self: center; box-shadow: 0 0 0 1px rgba(43, 37, 35, .18); }}
-        .st-name {{ color: var(--ink); font-size: var(--fs-body); font-weight: 700; }}
-        .st-fig {{ color: var(--ink-2); font-size: var(--fs-small); }}
-        [class*="st-key-retenir_btn_"] button, [class*="st-key-atraiter_btn_"] button {{ background: #FFFFFF; border-color: var(--action); }}
-        [class*="st-key-retenir_btn_"] button p, [class*="st-key-atraiter_btn_"] button p {{ color: var(--action); font-weight: 600; }}
+        .hero {{ padding: .4rem 0; }}
+        .hero-kicker {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; }}
+        .hero-score {{ display: flex; align-items: center; gap: .6rem; color: var(--ink); font-size: var(--fs-hero); font-weight: 700; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; margin: .35rem 0 .2rem; }}
+        .hero-dot {{ flex: none; width: .42em; height: .42em; border-radius: 50%; box-shadow: 0 0 0 1px rgba(43, 37, 35, .18); }}
+        .hero-max {{ color: var(--ink-2); font-size: var(--fs-section); font-weight: 600; letter-spacing: 0; align-self: flex-end; margin-bottom: .45rem; }}
+        .hero-word {{ color: var(--ink); font-size: var(--fs-section); font-weight: 700; }}
+        .hero-sub {{ color: var(--ink-2); font-size: var(--fs-small); margin-top: .15rem; }}
+        .hero-evo {{ display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; margin-top: .7rem; }}
+        .hero-chip {{ display: inline-block; padding: .2rem .6rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); font-size: var(--fs-small); font-weight: 600; }}
+        .hero-chip.strong {{ border-color: var(--ink); }}
+        .hero-why {{ color: var(--ink-2); font-size: var(--fs-label); }}
+        .hero-curve-title {{ color: var(--ink-2); font-size: var(--fs-small); font-weight: 600; margin-bottom: -.2rem; }}
+        [class*="st-key-tile_"]:not([class*="st-key-tile_btn"]) {{ background: var(--surface); border-radius: 10px; padding: 1rem 1.1rem .8rem; min-height: 9.5rem; gap: .5rem; }}
+        [class*="st-key-tile_btn"] {{ margin-top: auto; }}
+        .tile-figure {{ color: var(--ink); font-size: var(--fs-figure); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }}
+        .tile-label {{ color: var(--ink); font-size: var(--fs-body); font-weight: 600; margin-top: .3rem; line-height: var(--lh-small); }}
+        .tile-detail {{ color: var(--ink-2); font-size: var(--fs-small); line-height: var(--lh-small); margin-top: .15rem; }}
+        [class*="st-key-tile_btn"] button, [class*="_btn_"] button[kind="tertiary"] {{ padding: 0; min-height: 0; }}
+        [class*="st-key-tile_btn"] button p, [class*="st-key-atraiter_btn"] button p, [class*="st-key-plusrates_btn"] button p {{ color: var(--action); font-weight: 600; font-size: var(--fs-small); }}
+        .sr {{ border-bottom: 1px solid var(--line); padding: .55rem 0; display: grid; grid-template-columns: 2.4rem minmax(9rem, 1.2fr) minmax(4rem, 1fr) auto; align-items: center; gap: .3rem .8rem; }}
+        .sr-score {{ display: inline-flex; justify-content: center; border-radius: 6px; padding: .12rem 0; font-size: var(--fs-small); font-weight: 700; font-variant-numeric: tabular-nums; }}
+        .sr-name {{ color: var(--ink); font-size: var(--fs-body); font-weight: 700; line-height: var(--lh-small); }}
+        .sr-where {{ display: block; color: var(--ink-2); font-size: var(--fs-label); font-weight: 400; }}
+        .sr-bar {{ display: block; height: .5rem; border-radius: 3px; background: var(--ink-2); opacity: .55; }}
+        .sr-fig {{ color: var(--ink-2); font-size: var(--fs-small); white-space: nowrap; font-variant-numeric: tabular-nums; }}
+        @media (max-width: 640px) {{ .sr {{ grid-template-columns: 2.4rem 1fr; }} .sr-bar {{ grid-column: 2; }} .sr-fig {{ grid-column: 2; white-space: normal; }} }}
+        .empty-ok {{ color: var(--ink); font-size: var(--fs-body); padding: .6rem .9rem; background: var(--surface); border-radius: 8px; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
         .lg-item {{ display: inline-flex; align-items: center; gap: .35rem; }}
@@ -1888,8 +1908,66 @@ def selected_stop_paths(conn, cutoff: int, since_ts: int | None, end_ts: int | N
     return stop_route_paths(stop_lines_table(daily), shapes, directions, unmeasured)
 
 
+@st.cache_data(ttl=3600)
+def load_stop_route_keys(_conn) -> dict:
+    """Lignes et sens qui desservent chaque arrêt (table stop_direction) : stop_id -> [« ligne|sens »]."""
+    try:
+        rows = _conn.execute("SELECT stop_id, route_id, direction_id FROM stop_direction").fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict = {}
+    for stop_id, route_id, direction in rows:
+        out.setdefault(stop_id, []).append(f"{route_id}|{int(direction)}")
+    return out
+
+
+def map_routes(conn, ranking: pd.DataFrame) -> dict:
+    """Tracés de survol de toutes les lignes, à la couleur de leur score (gris sans mesure)."""
+    colors = {str(r.route_id): _hex_rgb(score_color(float(r.score_fiabilite))) for r in ranking.itertuples()}
+    names = {str(r.route_id): str(r.ligne) for r in ranking.itertuples()}
+    return hover_routes(load_route_shapes(conn), colors, names, _hex_rgb(SCREEN_NO_DATA))
+
+
+def _on_line_map_click() -> None:
+    state = st.session_state.get("carte_ligne") or {}
+    clicked = state.get("clicked") if hasattr(state, "get") else getattr(state, "clicked", None)
+    if clicked:
+        open_stop(clicked)
+
+
+def line_map_stops(line_stops: pd.DataFrame, network: pd.DataFrame, route_type, ligne: str) -> pd.DataFrame:
+    """Arrêts d'une ligne pour sa carte : position des arrêts, score de la ligne à chaque arrêt."""
+    if line_stops.empty or network.empty:
+        return pd.DataFrame(columns=["stop_id", "stop_name", "direction", "lat", "lon", "route_type",
+                                     "score_fiabilite", "pct_retard_5min", "observations", "lignes"])
+    pos = network.drop_duplicates("stop_id").set_index("stop_id")[["lat", "lon"]]
+    df = line_stops.join(pos, on="stop_id", how="inner")
+    return pd.DataFrame({
+        "stop_id": df["stop_id"], "stop_name": df["stop_name"], "direction": df["direction"].fillna(""),
+        "lat": df["lat"], "lon": df["lon"], "route_type": route_type,
+        "score_fiabilite": df["score_fiabilite"].fillna(0.0), "pct_retard_5min": df["pct_retard_5min"].fillna(0.0),
+        "observations": df["obs"].astype(int), "lignes": ligne}).reset_index(drop=True)
+
+
+def render_line_map(conn, cutoff: int, since_ts: int | None, end_ts: int | None, line: pd.Series) -> None:
+    """Carte de la ligne dans sa fiche : son tracé à la couleur de son état et ses arrêts à la couleur du score
+    de la ligne à chacun ; un clic sur un arrêt ouvre sa fiche sur la carte."""
+    stops = line_map_stops(load_line_stops(conn, cutoff, since_ts, end_ts, line["route_id"]),
+                           load_territorial(conn, cutoff, since_ts, end_ts, commune=None),
+                           line["route_type"], str(line["ligne"]))
+    if stops.empty:
+        return
+    paths = stop_route_paths(pd.DataFrame([line[["route_id", "ligne", "route_type", "score_fiabilite"]]]),
+                             load_route_shapes(conn), {})
+    carte_arrets(map_payload(stops, group_stops(stops), None, f"Ligne {line['ligne']}", paths=paths,
+                             dim_stops=False, fit=True),
+                 key="carte_ligne", on_click=_on_line_map_click)
+    st.caption("Couleur des arrêts : le score de la ligne à chaque arrêt. Cliquez sur un arrêt pour ouvrir sa fiche.")
+
+
 def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | None,
-                     selected_id: str | None, paths: list | None = None) -> None:
+                     selected_id: str | None, paths: list | None = None, routes: dict | None = None,
+                     stop_routes: dict | None = None) -> None:
     """Carte des arrêts (composant `carte.carte_arrets`, deck.gl).
 
     Couleur = palier du score de fiabilité de l'arrêt (fiable ≥ 80/100,
@@ -1902,7 +1980,7 @@ def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | N
         st.info("Aucun arrêt exploitable sur ce périmètre pour la période.")
         return
     carte_arrets(map_payload(stops, groups, selected_id, commune, focus_on_load=selected_id is not None,
-                             paths=paths),
+                             paths=paths, routes=routes, stop_routes=stop_routes),
                  key="carte_arrets", on_click=_on_map_click)
     if paths:
         names = ", ".join(dict.fromkeys(f"{p['g']} {p['l']} ({p['e']})" for p in reversed(paths)))
@@ -1920,7 +1998,7 @@ MAIN_PAGES = NAV_ITEMS[:3]
 VIEW_STOPS = "État des arrêts"
 VIEW_CONTENTION = "Temps perdu entre arrêts"
 MAP_VIEWS = [VIEW_STOPS, VIEW_CONTENTION]
-HOME_DETAILS = ["Quand ?", "Modes de transport", "Perturbations"]
+HOME_DETAILS = ["Quand ?", "Modes de transport", "Perturbations", "Arrêts qui ratent le plus de passages"]
 HELP_TEXTS = {
     "score": "Score sur 100 : sur 100 passages prévus, combien ont été assurés (ni arrêt non desservi, ni "
              "course supprimée) et à l'heure. Fiable à partir de 80, problématique sous 50.",
@@ -2775,6 +2853,7 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
              palette_kpi_tier({"ponctualite": line["pct_a_l_heure"]}, "ponctualite"), HELP_TEXTS["ponctualite"]),
             ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "), "neutral"),
         ])
+        render_line_map(conn, cutoff, since_ts, end_ts, line)
         _render_zone_banner(line["retard_median_s"], float(line["pct_retard_5min"]))
         _render_brief(summary, hints)
         st.caption(DETAIL_HINT)
@@ -2792,6 +2871,7 @@ def render_line_panel(conn, cutoff: int, since_ts: int | None, end_ts: int | Non
         ("Courses supprimées", f"{cancelled}", f"sur {trips:,} courses connues".replace(",", " "),
          "neutral"),
     ])
+    render_line_map(conn, cutoff, since_ts, end_ts, line)
     _render_zone_banner(line["retard_median_s"], float(line["pct_retard_5min"]))
     v2_text = method_v2_caption(load_method_v2(conn, cutoff, since_ts, end_ts, route_id=route_id), route_id)
     if v2_text:
@@ -2922,7 +3002,8 @@ def render_page_territory(c: PageContext) -> None:
     st.markdown(map_legend_html(), unsafe_allow_html=True)
     selected = st.session_state.get("stop_id")
     _territorial_map(territorial, groups, c.commune, selected,
-                     selected_stop_paths(c.conn, c.cutoff, c.since_ts, c.end_ts, selected))
+                     selected_stop_paths(c.conn, c.cutoff, c.since_ts, c.end_ts, selected),
+                     routes=map_routes(c.conn, c.ranking_net), stop_routes=load_stop_route_keys(c.conn))
     if st.session_state.get("stop_id"):
         render_stop_panel(c.conn, c.cutoff, c.since_ts, c.end_ts, st.session_state["stop_id"],
                           territorial_network,
@@ -3446,13 +3527,37 @@ def _render_collection(c: PageContext) -> None:
             hc_render(hourly_distribution_chart(hourly), height=280)
 
 
+SCORE_EXPLAINED = (
+    "Le score répond à une question : **sur 100 passages prévus, combien ont eu lieu, et à l'heure ?**\n\n"
+    "1. **Passages prévus** : chaque départ prévu d'un bus, d'un tram ou d'un bateau à un arrêt, y compris "
+    "les arrêts où le véhicule ne s'est pas arrêté et les passages des courses supprimées (une course "
+    "supprimée puis remplacée le même jour sur la ligne ne compte pas).\n"
+    "2. **Passages assurés** : les passages prévus, moins les arrêts non desservis et les passages des "
+    "courses supprimées.\n"
+    "3. **À l'heure** : un passage part entre 1 minute d'avance et 5 minutes de retard sur l'horaire publié.\n"
+    "4. **Score** = 100 × passages assurés et à l'heure ÷ passages prévus. Les passages assurés et à l'heure "
+    "sont les passages assurés multipliés par la part des passages mesurés qui sont à l'heure.\n\n"
+    "**Ce qui n'est pas compté** : les jours où la collecte est incomplète, les lignes dont le temps réel est "
+    "douteux et les lignes Flex' (à la demande). Les trajets sans temps réel comptent dans les passages "
+    "assurés, mais pas dans la ponctualité.\n\n"
+    "**Comment on additionne** : le calcul se fait par ligne et par jour (par arrêt, ligne et jour pour un "
+    "arrêt) ; on additionne ensuite les passages sur la période et le territoire choisis, puis on calcule le "
+    "score. On ne fait jamais la moyenne de plusieurs scores.\n\n"
+    "**Lecture** : fiable à partir de 80, à surveiller de 50 à 80, problématique sous 50. La **marge** (±) dit "
+    "de combien le score peut varier d'un jour à l'autre : un écart plus petit que la marge peut venir du hasard."
+)
+
+
 def _render_lexique(c: PageContext) -> None:
     st.markdown("### Lexique")
     st.markdown("Les mots utilisés dans le tableau de bord et les rapports, en langage courant.")
+    with st.container(key="score_explained"):
+        st.markdown("#### Comment se calcule le score de fiabilité")
+        st.markdown(SCORE_EXPLAINED)
     focus = st.session_state.get("lexique_focus")
     items = "".join(
         f'<div class="lexique-item{" lexique-focus" if lexique_slug(term) == focus else ""}" id="{lexique_slug(term)}">'
-        f'<b>{html.escape(term)}</b> — {html.escape(definition)}</div>'
+        f'<b>{html.escape(term)}</b> : {html.escape(definition)}</div>'
         for term, definition in LEXIQUE)
     st.markdown(f'<div class="lexique">{items}</div>', unsafe_allow_html=True)
     if focus:
@@ -3741,7 +3846,9 @@ def render_page_about(c: PageContext) -> None:
         "[transport.data.gouv.fr](https://transport.data.gouv.fr).\n"
         "- **Données dérivées** (rapports, exports CSV) : Licence Ouverte 2.0, à citer « Urban Vision, d'après "
         "les données TBM ».\n"
-        "- **Code source** : [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html), "
+        "- **Code source** : libre et ouvert. Chacun peut le lire, le réutiliser et le modifier, à condition de "
+        "publier ses modifications sous la même licence (licence GNU AGPL 3.0, "
+        "[texte de la licence](https://www.gnu.org/licenses/agpl-3.0.html)) ; dépôt : "
         "[github.com/EliasKhallouk/Urban-Vision](https://github.com/EliasKhallouk/Urban-Vision).\n"
         "- **Bibliothèques et services** : Streamlit (Apache 2.0) ; Highcharts (Highsoft AS, licence gratuite "
         "pour un usage non commercial) ; deck.gl (MIT) et MapLibre GL JS (BSD-3-Clause) ; fond de carte © CARTO, "
@@ -3834,23 +3941,33 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
     1. L'évolution du score du périmètre (stable si l'écart reste dans la marge) ;
     2. la ligne dont la baisse dépasse le plus sa marge combinée (√(m₁² + m₂²)) ;
     3. la ligne la moins fiable dont le score, marge comprise, reste sous celui du périmètre marge comprise.
-    Les lignes au temps réel douteux sont écartées. Chaque point : {"text": html, "route_id": … ou None}.
+    Les lignes au temps réel douteux sont écartées. Chaque point : chiffre (`figure`), libellé court
+    (`label`), précision (`detail`), phrase complète (`text`) et `route_id` (ou None).
     """
     out = []
     prev = html.escape(_lower_first(prev_label)) if prev_label else None
-    cmp = (change or {}).get("compare")
     if change is None:
         return out
+    cmp = change.get("compare")
     if cmp is None or cmp["significatif"] is None:
-        out.append({"text": f"Le score {of_scope} est de <b>{change['score']:.0f} sur 100</b>"
+        out.append({"figure": f"{change['score']:.0f}/100", "label": f"Score {of_scope}",
+                    "detail": f"pas de comparaison possible avec {prev}" if prev else "pas de période de comparaison",
+                    "text": f"Le score {of_scope} est de <b>{change['score']:.0f} sur 100</b>"
                             + (f" (pas de comparaison possible avec {prev})." if prev else "."), "route_id": None})
     elif cmp["significatif"]:
-        verb = "baissé" if cmp["ecart"] < 0 else "progressé"
-        out.append({"text": f"Le score {of_scope} a <b>{verb} de {_points(cmp['ecart'])}</b> par rapport à {prev} "
-                            f"({change['previous']:.0f} puis {change['score']:.0f} sur 100), plus que la marge "
-                            f"d'incertitude de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
+        down = cmp["ecart"] < 0
+        out.append({"figure": f"{'▼' if down else '▲'} {format_number(abs(cmp['ecart']), 1)} pt{'s' if abs(cmp['ecart']) >= 2 else ''}",
+                    "label": f"Score {'en baisse' if down else 'en hausse'} depuis {prev}",
+                    "detail": f"{change['previous']:.0f} puis {change['score']:.0f} sur 100, au-delà de la marge "
+                              f"(± {format_number(cmp['marge'], 1)})",
+                    "text": f"Le score {of_scope} a <b>{'baissé' if down else 'progressé'} de {_points(cmp['ecart'])}</b> "
+                            f"par rapport à {prev} ({change['previous']:.0f} puis {change['score']:.0f} sur 100), "
+                            f"plus que la marge d'incertitude de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
     else:
-        out.append({"text": f"Le score {of_scope} est <b>stable</b> par rapport à {prev} : l'écart "
+        out.append({"figure": "Stable", "label": f"Score stable depuis {prev}",
+                    "detail": f"écart de {format_number(cmp['ecart'], 1, signed=True)}, dans la marge "
+                              f"(± {format_number(cmp['marge'], 1)})",
+                    "text": f"Le score {of_scope} est <b>stable</b> par rapport à {prev} : l'écart "
                             f"({format_number(cmp['ecart'], 1, signed=True)}) reste dans la marge d'incertitude "
                             f"de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
     now = lines_now[~lines_now["temps_reel_douteux"].astype(bool)] if not lines_now.empty else lines_now
@@ -3861,12 +3978,18 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
         both["marge_ecart"] = (both["marge_v2"] ** 2 + both["marge_v2_avant"] ** 2) ** 0.5
         drops = both[both["ecart"] < -both["marge_ecart"]].sort_values("ecart")
         if drops.empty:
-            out.append({"text": f"Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à {prev}.",
+            out.append({"figure": "Aucune", "label": "ligne en baisse au-delà de sa marge",
+                        "detail": f"par rapport à {prev}",
+                        "text": f"Aucune ligne n'a baissé plus que sa marge d'incertitude par rapport à {prev}.",
                         "route_id": None})
         else:
             r = drops.iloc[0]
             name = html.escape(line_names.get(r["route_id"], r["route_id"]))
-            out.append({"text": f"La ligne <b>{name}</b> a le plus baissé : {r['score_v2_avant']:.0f} puis "
+            out.append({"figure": f"{r['score_v2_avant']:.0f} → {r['score_v2']:.0f}",
+                        "label": f"Ligne {name} : la plus forte baisse",
+                        "detail": f"{format_number(r['ecart'], 1, signed=True)} points, au-delà de sa marge "
+                                  f"(± {format_number(r['marge_ecart'], 1)})",
+                        "text": f"La ligne <b>{name}</b> a le plus baissé : {r['score_v2_avant']:.0f} puis "
                                 f"<b>{r['score_v2']:.0f} sur 100</b>, une baisse de {_points(r['ecart'])}, plus que "
                                 f"sa marge d'incertitude de ± {format_number(r['marge_ecart'], 1)}.",
                         "route_id": str(r["route_id"])})
@@ -3875,20 +3998,29 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
         clear = now.dropna(subset=["score_v2", "marge_v2"])
         clear = clear[clear["score_v2"] + clear["marge_v2"] < floor]
         if clear.empty:
-            out.append({"text": f"Aucune ligne n'est nettement en dessous {of_scope} une fois la marge "
+            out.append({"figure": "Aucune", "label": f"ligne nettement en dessous {of_scope}",
+                        "detail": "une fois la marge d'incertitude prise en compte",
+                        "text": f"Aucune ligne n'est nettement en dessous {of_scope} une fois la marge "
                                 "d'incertitude prise en compte.", "route_id": None})
         else:
             r = clear.assign(haut=clear["score_v2"] + clear["marge_v2"]).sort_values("haut").iloc[0]
             name = html.escape(line_names.get(r["route_id"], r["route_id"]))
-            out.append({"text": f"La ligne <b>{name}</b> est la moins fiable, même en tenant compte de "
+            out.append({"figure": f"{r['score_v2']:.0f}/100", "label": f"Ligne {name} : la moins fiable",
+                        "detail": f"± {format_number(r['marge_v2'], 1)}, contre {change['score']:.0f} pour {scope}",
+                        "text": f"La ligne <b>{name}</b> est la moins fiable, même en tenant compte de "
                                 f"l'incertitude : <b>{r['score_v2']:.0f} sur 100</b> (± {format_number(r['marge_v2'], 1)}), "
                                 f"contre {change['score']:.0f} pour {scope}.", "route_id": str(r["route_id"])})
     return out[:3]
 
 
-def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 5) -> pd.DataFrame:
-    """Arrêts à traiter en premier : quais regroupés par nom et commune, classés par passages ratés
-    (attendus moins assurés et à l'heure), qui combinent le score et le nombre de passages.
+PROBLEM_SCORE = 50.0
+
+
+def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 5,
+                   max_score: float | None = PROBLEM_SCORE) -> pd.DataFrame:
+    """Arrêts à traiter en premier : quais regroupés par nom et commune ; seuls les arrêts problématiques
+    (score sous `max_score`, seuil du palier négatif) sont retenus, puis classés par passages ratés (attendus
+    moins assurés et à l'heure). `max_score=None` : tous les arrêts, classés par passages ratés.
     `stop_id` désigne le quai qui rate le plus de passages."""
     columns = ["stop_id", "stop_name", "commune", "rates", "attendus", "score", "route_type"]
     df = territorial[territorial["observations"] >= MIN_OBSERVATIONS] if not territorial.empty else territorial
@@ -3903,7 +4035,10 @@ def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 
         rows.append({"stop_id": rep["stop_id"], "stop_name": name, "commune": commune, "rates": missed,
                      "attendus": expected, "score": 100 * (expected - missed) / expected if expected else float("nan"),
                      "route_type": rep["route_type"]})
-    return pd.DataFrame(rows, columns=columns).sort_values("rates", ascending=False).head(limit).reset_index(drop=True)
+    out = pd.DataFrame(rows, columns=columns)
+    if max_score is not None:
+        out = out[out["score"] < max_score]
+    return out.sort_values("rates", ascending=False).head(limit).reset_index(drop=True)
 
 
 def _scope_words(commune: str | None) -> tuple[str, str]:
@@ -3914,26 +4049,88 @@ def _scope_words(commune: str | None) -> tuple[str, str]:
     return name, (f"d'{name}" if name[:1].lower() in "aeiouyéèêâîôûh" else f"de {name}")
 
 
+def evolution_chip(change: dict | None, prev_label: str | None) -> str:
+    """Pastille d'évolution du bloc principal : neutre, jugée contre la marge (« écart réel » ou « stable »)."""
+    cmp = (change or {}).get("compare")
+    if not prev_label or not cmp:
+        return '<span class="hero-chip">pas de comparaison</span>'
+    prev = html.escape(_lower_first(prev_label))
+    if cmp["significatif"] is None:
+        return f'<span class="hero-chip">{evolution_words(cmp["ecart"])} depuis {prev}</span>'
+    if cmp["significatif"]:
+        return (f'<span class="hero-chip strong">{evolution_words(cmp["ecart"])} depuis {prev}</span>'
+                f'<span class="hero-why">plus que la marge d\'incertitude (± {format_number(cmp["marge"], 1)})</span>')
+    return (f'<span class="hero-chip">stable depuis {prev}</span>'
+            f'<span class="hero-why">écart {format_number(cmp["ecart"], 1, signed=True)}, dans la marge '
+            f'(± {format_number(cmp["marge"], 1)})</span>')
+
+
 def render_home_header(c: PageContext) -> None:
     ranking = c.ranking
     total = int(ranking["observations"].sum())
     on_time = float((ranking["observations"] * ranking["pct_a_l_heure"]).sum() / max(total, 1))
     delay = float((ranking["observations"] * ranking["retard_moyen_s"]).sum() / max(total, 1))
-    skipped_total = int(ranking["skipped"].sum())
-    eligible_total = int(ranking["eligible"].sum())
-    skip_rate = skipped_total / max(eligible_total, 1) * 100
+    skip_rate = int(ranking["skipped"].sum()) / max(int(ranking["eligible"].sum()), 1) * 100
     score = network_score(ranking)
-    st.markdown('<div class="eyebrow">Observatoire de la fiabilité, Bordeaux Métropole</div>', unsafe_allow_html=True)
-    st.title(f"La fiabilité de {c.commune}, en un coup d’œil." if c.commune else
-             "La fiabilité du réseau, en un coup d’œil.")
     change = load_score_change(c.conn, c.cutoff, c.since_ts, c.end_ts, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
-    subject, _ = _scope_words(c.commune)
-    _verdict(verdict_sentence(subject, c.period.label, score, (change or {}).get("compare"), c.period.prev_label))
-    render_kpis(header_kpis(score, on_time, delay, skip_rate, total, len(ranking), skipped_total, eligible_total,
-                            c.commune is not None, c.detailed))
+    st.title(f"{c.commune or 'Le réseau'} en {_lower_first(c.period.label)}")
+    hero, curve = st.columns([1, 1.7], gap="large", vertical_alignment="center")
+    with hero:
+        st.markdown(
+            f'<div class="hero" role="group" aria-label="Score de fiabilité">'
+            f'<div class="hero-kicker">Score de fiabilité</div>'
+            f'<div class="hero-score"><span class="hero-dot" style="background:{score_color(score)}"></span>'
+            f'{score:.0f}<span class="hero-max">/100</span></div>'
+            f'<div class="hero-word">{tier_label(score).capitalize()}</div>'
+            f'<div class="hero-sub">{score:.0f} passages sur 100 assurés et à l\'heure</div>'
+            f'<div class="hero-evo">{evolution_chip(change, c.period.prev_label)}</div></div>',
+            unsafe_allow_html=True)
+    with curve:
+        daily = load_daily_metrics(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
+        daily = daily[daily["groupe"] == GROUP_ALL] if not daily.empty else daily
+        if not daily.empty and "score_fiabilite" in daily:
+            st.markdown('<div class="hero-curve-title">Jour par jour</div>', unsafe_allow_html=True)
+            hc_render(score_sparkline(daily), height=190)
+    render_kpis([
+        ("À l'heure", f"{on_time:.0f} %", "de 1 min d'avance à 5 min de retard",
+         palette_kpi_tier({"ponctualite": on_time}, "ponctualite"), HELP_TEXTS["ponctualite"]),
+        ("Retard moyen", format_seconds(delay, signed=True), "par passage",
+         palette_kpi_tier({"retard": delay}, "retard"), HELP_TEXTS["retard"]),
+        ("Arrêts non desservis", f"{format_number(skip_rate, 1)} %", "des arrêts prévus",
+         palette_kpi_tier({"skip_rate": skip_rate}, "skip_rate"), HELP_TEXTS["skip"]),
+    ])
     note = exclusion_note(load_exclusions(c.conn, *_day_bounds(c.since_ts, c.end_ts, c.cutoff)))
     if note:
         st.caption(note)
+
+
+def _key_tiles(points: list[dict]) -> None:
+    cols = st.columns(len(points) or 1, gap="medium")
+    for i, (col, point) in enumerate(zip(cols, points)):
+        with col.container(key=f"tile_{i}"):
+            st.markdown(f'<div class="tile-figure">{html.escape(point["figure"])}</div>'
+                        f'<div class="tile-label">{point["label"]}</div>'
+                        f'<div class="tile-detail">{html.escape(point["detail"])}</div>', unsafe_allow_html=True)
+            if point["route_id"]:
+                st.button("Voir la ligne ›", key=f"tile_btn_{i}", on_click=open_line, args=(point["route_id"],),
+                          type="tertiary")
+
+
+def _stop_rows(top: pd.DataFrame, prefix: str) -> None:
+    peak = float(top["rates"].max()) if not top.empty else 1.0
+    for r in top.itertuples():
+        with st.container(key=f"{prefix}_{r.Index}"):
+            left, right = st.columns([6, 1.1], vertical_alignment="center")
+            where = f'<span class="sr-where">{html.escape(r.commune)}</span>' if r.commune else ""
+            left.markdown(
+                f'<div class="sr"><span class="sr-score" style="background:{score_color(r.score)};'
+                f'color:{ink_on(score_color(r.score))}">{r.score:.0f}</span>'
+                f'<span class="sr-name">{html.escape(r.stop_name)}{where}</span>'
+                f'<span class="sr-bar" style="width:{max(4, r.rates / peak * 100):.0f}%"></span>'
+                f'<span class="sr-fig">{fmt_int(r.rates)} passages ratés sur {fmt_int(r.attendus)}</span></div>',
+                unsafe_allow_html=True)
+            right.button("Voir ›", key=f"{prefix}_btn_{r.Index}", on_click=open_stop, args=(r.stop_id,),
+                         type="tertiary", help=f"Ouvrir la fiche de {r.stop_name} sur la carte")
 
 
 def render_page_home(c: PageContext) -> None:
@@ -3944,37 +4141,22 @@ def render_page_home(c: PageContext) -> None:
     lines_before = (load_route_indicators(c.conn, c.cutoff, c.prev_since_ts, c.prev_end_ts, commune=c.commune)
                     if c.prev_since_ts is not None else None)
     names = {str(r.route_id): str(r.ligne) for r in c.ranking_net.itertuples()}
-    points = key_points(scope, of_scope, change, c.period.prev_label, lines_now, lines_before, names)
-    st.markdown("### À retenir")
-    for i, point in enumerate(points):
-        with st.container(key=f"retenir_{i}"):
-            left, right = st.columns([5, 1.3], vertical_alignment="center")
-            left.markdown(f'<div class="kp-text">{point["text"]}</div>', unsafe_allow_html=True)
-            if point["route_id"]:
-                right.button("Voir la ligne", key=f"retenir_btn_{i}", on_click=open_line, args=(point["route_id"],))
-    st.caption("Un écart n'est retenu que s'il dépasse la marge d'incertitude à 95 %, due aux différences d'un "
-               "jour à l'autre : en dessous, il peut venir du hasard.")
+    st.markdown("### À retenir", help="Un écart n'est retenu que s'il dépasse la marge d'incertitude à 95 %, due "
+                                      "aux différences d'un jour à l'autre : en dessous, il peut venir du hasard.")
+    _key_tiles(key_points(scope, of_scope, change, c.period.prev_label, lines_now, lines_before, names))
 
-    st.markdown("### Arrêts à traiter en premier")
     territorial = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
     _, stop_communes = load_place_names(c.conn)
+    st.markdown("### Arrêts à traiter en premier",
+                help="Les arrêts problématiques (score sous 50), classés par passages ratés : course supprimée, "
+                     "arrêt non desservi ou départ hors de la plage −1 min / +5 min. Les quais d'un même arrêt sont "
+                     "comptés ensemble.")
     top = stops_to_treat(territorial, stop_communes)
     if top.empty:
-        st.info("Pas assez de passages pour classer les arrêts sur cette période.")
-    for r in top.itertuples():
-        with st.container(key=f"atraiter_{r.Index}"):
-            left, right = st.columns([5, 1.3], vertical_alignment="center")
-            where = f", {html.escape(r.commune)}" if r.commune else ""
-            left.markdown(
-                f'<div class="st-row"><span class="st-dot" style="background:{score_color(r.score)}"></span>'
-                f'<span class="st-name">{html.escape(r.stop_name)}{where}</span>'
-                f'<span class="st-fig">{fmt_int(r.rates)} passages ratés sur {fmt_int(r.attendus)} prévus, '
-                f'score {r.score:.0f} sur 100</span></div>', unsafe_allow_html=True)
-            right.button("Voir l'arrêt", key=f"atraiter_btn_{r.Index}", on_click=open_stop, args=(r.stop_id,))
-    if not top.empty:
-        st.caption("Classés par passages ratés (course supprimée, arrêt non desservi ou départ hors de la plage "
-                   "−1 min / +5 min), tous quais confondus : un arrêt très fréquenté un peu en retard peut passer "
-                   "devant un petit arrêt très en retard.")
+        st.markdown('<div class="empty-ok">Aucun arrêt problématique ici sur la période.</div>',
+                    unsafe_allow_html=True)
+    else:
+        _stop_rows(top, "atraiter")
 
     st.markdown("### Voir le détail")
     detail = st.segmented_control("Détail", HOME_DETAILS, key="home_detail", label_visibility="collapsed")
@@ -3984,6 +4166,10 @@ def render_page_home(c: PageContext) -> None:
         render_page_network(c)
     elif detail == "Perturbations":
         render_page_perturbations(c)
+    elif detail == "Arrêts qui ratent le plus de passages":
+        st.caption("Tous les arrêts, classés par nombre de passages ratés : les gros arrêts un peu en dessous du "
+                   "réseau passent devant les petits arrêts très en retard.")
+        _stop_rows(stops_to_treat(territorial, stop_communes, limit=10, max_score=None), "plusrates")
 
 
 def render_page_map(c: PageContext) -> None:

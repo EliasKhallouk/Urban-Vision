@@ -25,7 +25,7 @@ Détail complet : `docs/DOCUMENTATION_TECHNIQUE.md` § 6.4.
 | `ACTION` | #351E8F | tout ce qui se clique (liens, boutons, menu actif) et rien d'autre |
 | `GARONNE` | #7FAAA6 | repère calme |
 | `PIERRE` | #E1C17E | repère « un peu » |
-| `VIN` | #B1437A | repère « beaucoup / problématique » |
+| `VIN` | #A55F73 | repère « beaucoup / problématique » (prune adouci, pas de framboise : trop proche du magenta TBM) |
 | `LIE` | #602D24 | repère extrême, cas vraiment rares |
 | `SCREEN_NO_DATA` | #D6D6D2 | pas assez de données, toujours en pointillé |
 
