@@ -589,6 +589,11 @@ def inject_style() -> None:
         .sr-bar {{ display: block; flex: none; height: .5rem; border-radius: 3px; background: var(--ink-2); opacity: .55; }}
         .sr-fig {{ color: var(--ink-2); font-size: var(--fs-small); white-space: nowrap; font-variant-numeric: tabular-nums; }}
         @media (max-width: 640px) {{ .sr-right {{ flex-wrap: wrap; }} .sr-fig {{ white-space: normal; }} }}
+        [class*="st-key-bienligne_"]:not([class*="_btn_"]), [class*="st-key-bienarret_"]:not([class*="_btn_"]) {{ border-bottom: 1px solid var(--line); padding: .4rem 0; }}
+        [class*="st-key-bienligne_"] [data-testid="stColumn"] [data-testid="stVerticalBlock"],
+        [class*="st-key-bienarret_"] [data-testid="stColumn"] [data-testid="stVerticalBlock"] {{ gap: 0; }}
+        [class*="st-key-bienligne_btn"] button p, [class*="st-key-bienarret_btn"] button p {{ color: var(--ink) !important; font-size: var(--fs-body) !important; font-weight: 700 !important; text-align: left; }}
+        [class*="st-key-bienligne_btn"] button:hover p, [class*="st-key-bienarret_btn"] button:hover p {{ color: var(--action) !important; text-decoration: underline; }}
         .empty-ok {{ color: var(--ink); font-size: var(--fs-body); padding: .6rem .9rem; background: var(--surface); border-radius: 8px; }}
         .map-legend {{ display: flex; flex-wrap: wrap; gap: .35rem 1.6rem; margin: .2rem 0 .6rem; color: var(--ink); font-size: var(--fs-small); line-height: var(--lh-small); }}
         .map-legend > div {{ display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .7rem; }}
@@ -640,6 +645,9 @@ def inject_style() -> None:
             .st-key-ctx_back button p {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }}
             .st-key-ctx_back button::before {{ content: "←"; color: inherit; font-size: var(--fs-section); line-height: 1; }}
             :root {{ --fs-hero: 3.4rem; }}
+            [class*="st-key-bienligne_"] [data-testid="stHorizontalBlock"], [class*="st-key-bienarret_"] [data-testid="stHorizontalBlock"] {{ flex-flow: row nowrap !important; gap: .6rem !important; }}
+            [class*="st-key-bienligne_"] [data-testid="stColumn"]:nth-child(1), [class*="st-key-bienarret_"] [data-testid="stColumn"]:nth-child(1) {{ flex: 0 0 2.6rem !important; width: 2.6rem !important; min-width: 2.6rem !important; }}
+            [class*="st-key-bienligne_"] [data-testid="stColumn"]:nth-child(2), [class*="st-key-bienarret_"] [data-testid="stColumn"]:nth-child(2) {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
             [class*="st-key-atraiter_"]:not([class*="_btn_"]), [class*="st-key-plusrates_"]:not([class*="_btn_"]) {{ border-bottom: none; padding: .2rem 0; }}
             .sr-right {{ border-bottom: 1px solid var(--line); padding-bottom: .55rem; }}
             [class*="st-key-atraiter_"] [data-testid="stHorizontalBlock"], [class*="st-key-plusrates_"] [data-testid="stHorizontalBlock"] {{ flex-flow: row wrap !important; gap: .2rem .6rem !important; }}
@@ -3117,13 +3125,26 @@ def _on_ranking_click() -> None:
         show_line(clicked)
 
 
+RANKING_SIDES = ["Les moins fiables", "Les plus fiables"]
+
+
+def ranking_side(ranking: pd.DataFrame, best: bool, n: int = 15) -> pd.DataFrame:
+    """Les `n` lignes les moins fiables (de la pire à la meilleure) ou les plus fiables (de la meilleure à la
+    moins bonne) ; à score égal, la ligne aux plus nombreux passages d'abord."""
+    order = ranking.sort_values(["score_fiabilite", "observations"], ascending=[not best, False])
+    return order.head(n).copy()
+
+
 def _ranking_block(c: PageContext) -> None:
-    st.markdown("#### Les 15 lignes les moins fiables")
+    side = st.segmented_control("Classement", RANKING_SIDES, key="ranking_side", default=RANKING_SIDES[0],
+                                label_visibility="collapsed") or RANKING_SIDES[0]
+    best = side == RANKING_SIDES[1]
+    st.markdown(f"#### Les 15 lignes les {'plus' if best else 'moins'} fiables")
     render_tier_legend()
-    chart_data = c.visible_ranking.head(15).sort_values("score_fiabilite").copy()
+    chart_data = ranking_side(c.visible_ranking, best)
     chart_data["ligne_plot"] = [f"⚠ {l}" if rid in c.disturbed else l
                                 for l, rid in zip(chart_data["ligne"], chart_data["route_id"])]
-    graphique_cliquable(ranking_chart(chart_data), key="ranking_chart", on_click=_on_ranking_click, height=420)
+    graphique_cliquable(ranking_chart(chart_data, best_first=best), key="ranking_chart", on_click=_on_ranking_click, height=420)
 
 
 def _lines_overview(c: PageContext) -> None:
@@ -3977,6 +3998,19 @@ def verdict_sentence(subject: str, period_label: str, score: float, comparison: 
                    f"marge d'incertitude de ± {format_number(margin, 1)}.")
 
 
+def _measured(lines: pd.DataFrame) -> pd.DataFrame:
+    return lines[~lines["temps_reel_douteux"].astype(bool)] if not lines.empty else lines
+
+
+def line_changes(lines_now: pd.DataFrame, lines_before: pd.DataFrame) -> pd.DataFrame:
+    """Écart de score de chaque ligne entre deux périodes et sa marge combinée (√(m₁² + m₂²))."""
+    both = lines_now.merge(lines_before[["route_id", "score_v2", "marge_v2"]], on="route_id", suffixes=("", "_avant"))
+    both = both.dropna(subset=["score_v2", "marge_v2", "score_v2_avant", "marge_v2_avant"])
+    both["ecart"] = both["score_v2"] - both["score_v2_avant"]
+    both["marge_ecart"] = (both["marge_v2"] ** 2 + both["marge_v2_avant"] ** 2) ** 0.5
+    return both
+
+
 def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str | None, lines_now: pd.DataFrame,
                lines_before: pd.DataFrame | None, line_names: dict) -> list[dict]:
     """Trois choses à retenir, chacune fondée sur un écart qui dépasse la marge d'incertitude à 95 %.
@@ -4013,12 +4047,9 @@ def key_points(scope: str, of_scope: str, change: dict | None, prev_label: str |
                     "text": f"Le score {of_scope} est <b>stable</b> par rapport à {prev} : l'écart "
                             f"({format_number(cmp['ecart'], 1, signed=True)}) reste dans la marge d'incertitude "
                             f"de ± {format_number(cmp['marge'], 1)}.", "route_id": None})
-    now = lines_now[~lines_now["temps_reel_douteux"].astype(bool)] if not lines_now.empty else lines_now
+    now = _measured(lines_now)
     if lines_before is not None and not lines_before.empty and not now.empty:
-        both = now.merge(lines_before[["route_id", "score_v2", "marge_v2"]], on="route_id", suffixes=("", "_avant"))
-        both = both.dropna(subset=["score_v2", "marge_v2", "score_v2_avant", "marge_v2_avant"])
-        both["ecart"] = both["score_v2"] - both["score_v2_avant"]
-        both["marge_ecart"] = (both["marge_v2"] ** 2 + both["marge_v2_avant"] ** 2) ** 0.5
+        both = line_changes(now, lines_before)
         drops = both[both["ecart"] < -both["marge_ecart"]].sort_values("ecart")
         if drops.empty:
             out.append({"figure": "Aucune", "label": "ligne en baisse au-delà de sa marge",
@@ -4066,6 +4097,15 @@ def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 
     (score sous `max_score`, seuil du palier négatif) sont retenus, puis classés par passages ratés (attendus
     moins assurés et à l'heure). `max_score=None` : tous les arrêts, classés par passages ratés.
     `stop_id` désigne le quai qui rate le plus de passages."""
+    out = stop_groups(territorial, stop_communes)
+    if max_score is not None:
+        out = out[out["score"] < max_score]
+    return out.sort_values("rates", ascending=False).head(limit).reset_index(drop=True)
+
+
+def stop_groups(territorial: pd.DataFrame, stop_communes: dict) -> pd.DataFrame:
+    """Quais regroupés par nom et commune (au moins `MIN_OBSERVATIONS` passages par quai) : passages attendus,
+    ratés et score ; `stop_id` désigne le quai qui rate le plus de passages."""
     columns = ["stop_id", "stop_name", "commune", "rates", "attendus", "score", "route_type"]
     df = territorial[territorial["observations"] >= MIN_OBSERVATIONS] if not territorial.empty else territorial
     if df.empty:
@@ -4079,10 +4119,63 @@ def stops_to_treat(territorial: pd.DataFrame, stop_communes: dict, limit: int = 
         rows.append({"stop_id": rep["stop_id"], "stop_name": name, "commune": commune, "rates": missed,
                      "attendus": expected, "score": 100 * (expected - missed) / expected if expected else float("nan"),
                      "route_type": rep["route_type"]})
-    out = pd.DataFrame(rows, columns=columns)
-    if max_score is not None:
-        out = out[out["score"] < max_score]
-    return out.sort_values("rates", ascending=False).head(limit).reset_index(drop=True)
+    return pd.DataFrame(rows, columns=columns)
+
+
+GOOD_SCORE = 80.0
+
+
+def reliable_busy_stops(groups: pd.DataFrame, limit: int = 5, min_score: float = GOOD_SCORE) -> pd.DataFrame:
+    """Grands arrêts fiables : arrêts au score d'au moins `min_score`, classés par passages attendus (on ne
+    connaît pas le nombre de voyageurs : un grand arrêt est un arrêt très desservi)."""
+    out = groups[groups["score"] >= min_score] if not groups.empty else groups
+    return out.sort_values("attendus", ascending=False).head(limit).reset_index(drop=True)
+
+
+def best_lines(lines_now: pd.DataFrame, route_ids: set, limit: int = 5, min_score: float = GOOD_SCORE) -> pd.DataFrame:
+    """Grandes lignes fiables : fiables même marge d'incertitude déduite (score − marge ≥ `min_score`), classées
+    par passages (les plus desservies d'abord). Lignes au temps réel douteux écartées."""
+    now = _measured(lines_now)
+    now = now[now["route_id"].astype(str).isin(route_ids)].dropna(subset=["score_v2", "marge_v2"]) if not now.empty else now
+    if now.empty:
+        return now
+    now = now[now["score_v2"] - now["marge_v2"] >= min_score]
+    return now.sort_values(["passages", "score_v2"], ascending=False).head(limit).reset_index(drop=True)
+
+
+def good_points(prev_label: str | None, lines_now: pd.DataFrame, lines_before: pd.DataFrame | None,
+                route_ids: set, line_names: dict, groups: pd.DataFrame) -> list[dict]:
+    """Ce qui va bien : lignes fiables, plus forte progression au-delà de la marge, part des arrêts fiables."""
+    out = []
+    now = _measured(lines_now)
+    now = now[now["route_id"].astype(str).isin(route_ids)].dropna(subset=["score_v2"]) if not now.empty else now
+    if not now.empty:
+        good = int((now["score_v2"] >= GOOD_SCORE).sum())
+        out.append({"figure": f"{good} sur {len(now)}", "label": f"ligne{'s' if good > 1 else ''} fiable{'s' if good > 1 else ''}",
+                    "detail": "score de 80 ou plus", "route_id": None})
+    if prev_label and lines_before is not None and not lines_before.empty and not now.empty:
+        prev = html.escape(_lower_first(prev_label))
+        both = line_changes(now, lines_before)
+        rises = both[both["ecart"] > both["marge_ecart"]].sort_values("ecart", ascending=False)
+        if rises.empty:
+            out.append({"figure": "Aucune", "label": "ligne en nette hausse",
+                        "detail": f"par rapport à {prev}, au-delà de la marge", "route_id": None})
+        else:
+            r = rises.iloc[0]
+            name = line_names.get(r["route_id"], r["route_id"])
+            out.append({"figure": f"{r['score_v2_avant']:.0f} → {r['score_v2']:.0f}",
+                        "label": f"Ligne {html.escape(name)} : la plus forte progression",
+                        "detail": f"{format_number(r['ecart'], 1, signed=True)} points depuis {prev}, au-delà de sa "
+                                  f"marge (± {format_number(r['marge_ecart'], 1)})",
+                        "route_id": str(r["route_id"]), "line": name})
+    if not groups.empty:
+        scored = groups.dropna(subset=["score"])
+        good = int((scored["score"] >= GOOD_SCORE).sum())
+        if len(scored):
+            out.append({"figure": f"{good / len(scored) * 100:.0f} %", "label": "des arrêts sont fiables",
+                        "detail": f"{fmt_int(good)} arrêts sur {fmt_int(len(scored))}, score de 80 ou plus",
+                        "route_id": None})
+    return out
 
 
 def _scope_words(commune: str | None) -> tuple[str, str]:
@@ -4148,15 +4241,15 @@ def render_home_header(c: PageContext) -> None:
         st.caption(note)
 
 
-def _key_tiles(points: list[dict]) -> None:
+def _key_tiles(points: list[dict], prefix: str = "") -> None:
     cols = st.columns(len(points) or 1, gap="medium")
     for i, (col, point) in enumerate(zip(cols, points)):
-        with col.container(key=f"tile_{i}"):
+        with col.container(key=f"tile_{prefix}{i}"):
             st.markdown(f'<div class="tile-figure">{html.escape(point["figure"])}</div>'
                         f'<div class="tile-label">{point["label"]}</div>'
                         f'<div class="tile-detail">{html.escape(point["detail"])}</div>', unsafe_allow_html=True)
             if point["route_id"]:
-                st.button(f"Voir la ligne {point['line']} ›", key=f"tile_btn_{i}", on_click=open_line,
+                st.button(f"Voir la ligne {point['line']} ›", key=f"tile_btn_{prefix}{i}", on_click=open_line,
                           args=(point["route_id"],), type="tertiary")
 
 
@@ -4179,6 +4272,51 @@ def _stop_rows(top: pd.DataFrame, prefix: str) -> None:
                          f'</span></div>', unsafe_allow_html=True)
 
 
+def _good_rows(rows: list[tuple], prefix: str) -> None:
+    """Liste courte de ce qui va bien : score en pastille, nom cliquable, précision en dessous."""
+    for i, (score, label, detail, opener, arg) in enumerate(rows):
+        with st.container(key=f"{prefix}_{i}"):
+            badge, name = st.columns([0.45, 4.0], vertical_alignment="center", gap="small")
+            badge.markdown(f'<span class="sr-score" style="background:{score_color(score)};'
+                           f'color:{ink_on(score_color(score))}" aria-label="score {score:.0f} sur 100">'
+                           f'{score:.0f}</span>', unsafe_allow_html=True)
+            with name:
+                st.button(f"{label} ›", key=f"{prefix}_btn_{i}", on_click=opener, args=(arg,), type="tertiary")
+                st.markdown(f'<span class="sr-where">{html.escape(detail)}</span>', unsafe_allow_html=True)
+
+
+def render_good_news(c: PageContext, lines_now: pd.DataFrame, lines_before: pd.DataFrame | None, names: dict,
+                     groups: pd.DataFrame) -> None:
+    st.markdown("### Ce qui va bien", help="Lignes et arrêts dont le score atteint 80 (fiable). Une progression "
+                                           "n'est retenue que si elle dépasse la marge d'incertitude à 95 %.")
+    route_ids = set(c.ranking["route_id"].astype(str))
+    _key_tiles(good_points(c.period.prev_label, lines_now, lines_before, route_ids, names, groups), prefix="bien")
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.markdown("#### Les grandes lignes fiables",
+                    help="Les lignes les plus desservies (passages) qui restent au-dessus de 80 même en retirant la "
+                         "marge d'incertitude. Le classement par score est sur la page « Lignes », « Les plus fiables ».")
+        best = best_lines(lines_now, route_ids)
+        if best.empty:
+            st.markdown('<div class="empty-ok">Aucune ligne n\'atteint 80 sur la période.</div>',
+                        unsafe_allow_html=True)
+        else:
+            _good_rows([(r.score_v2, f"Ligne {names.get(r.route_id, r.route_id)}",
+                         f"{fmt_int(r.passages)} passages, marge ± {format_number(r.marge_v2, 1)}", open_line,
+                         str(r.route_id)) for r in best.itertuples()], "bienligne")
+    with right:
+        st.markdown("#### Les grands arrêts fiables",
+                    help="Les arrêts les plus desservis (passages prévus) dont le score atteint 80. On ne connaît "
+                         "pas le nombre de voyageurs : « grand » veut dire beaucoup de passages de bus ou de tram.")
+        busy = reliable_busy_stops(groups)
+        if busy.empty:
+            st.markdown('<div class="empty-ok">Aucun arrêt n\'atteint 80 sur la période.</div>',
+                        unsafe_allow_html=True)
+        else:
+            _good_rows([(r.score, r.stop_name, f"{r.commune + ', ' if r.commune else ''}{fmt_int(r.attendus)} "
+                         "passages prévus", open_stop, r.stop_id) for r in busy.itertuples()], "bienarret")
+
+
 def render_page_home(c: PageContext) -> None:
     render_home_header(c)
     scope, of_scope = _scope_words(c.commune)
@@ -4193,6 +4331,7 @@ def render_page_home(c: PageContext) -> None:
 
     territorial = load_territorial(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
     _, stop_communes = load_place_names(c.conn)
+    render_good_news(c, lines_now, lines_before, names, stop_groups(territorial, stop_communes))
     st.markdown("### Arrêts à traiter en premier",
                 help="Les arrêts problématiques (score sous 50), classés par passages ratés : course supprimée, "
                      "arrêt non desservi ou départ hors de la plage −1 min / +5 min. Les quais d'un même arrêt sont "

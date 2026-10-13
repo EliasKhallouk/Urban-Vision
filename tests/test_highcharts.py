@@ -32,6 +32,11 @@ class TestRankingChart:
         assert config["series"][0]["data"][1]["y"] == 85.3
         _assert_json_serializable(config)
 
+    def test_meilleures_lignes_en_tete(self):
+        config = hc.ranking_chart(_ranking_df(), best_first=True)
+        assert config["xAxis"]["categories"] == ["Ligne B", "⚠ Ligne A"]
+        assert [d["y"] for d in config["series"][0]["data"]] == [85.3, 42.0]
+
     def test_couleur_par_palier_score(self):
         config = hc.ranking_chart(_ranking_df())
         assert config["series"][0]["data"][0]["color"] == score_color(42.0)

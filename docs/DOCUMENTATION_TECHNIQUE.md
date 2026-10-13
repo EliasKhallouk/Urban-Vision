@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 680 tests pytest
+└── tests/                          # 29 fichiers, 683 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -365,7 +365,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 680 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 683 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -1687,6 +1687,21 @@ lecteur qui n'est pas analyste :
      périmètre, marge comprise. Les lignes au temps réel douteux sont
      écartées ; sans écart réel, la tuile dit « Aucune ». Lien « Voir la ligne
      › ». La règle est dans l'aide « ? » du titre ;
+   - **Ce qui va bien** (`render_good_news`, `good_points`, seuil
+     `GOOD_SCORE` = 80, palier positif) : trois tuiles (`_key_tiles`, préfixe
+     `bien`) : nombre de lignes fiables sur les lignes mesurées (« 38 sur
+     120 ») ; la ligne dont la hausse dépasse le plus sa marge combinée
+     (`line_changes`, symétrique de la plus forte baisse ; « Aucune » sinon,
+     absente sans période de comparaison) ; part des arrêts fiables (quais
+     regroupés par `stop_groups`). Dessous, deux listes de 5 (`_good_rows`,
+     pastille de score, nom cliquable, précision) : **les grandes lignes
+     fiables** (`best_lines` : score moins marge d'au moins 80, classées par
+     passages ; temps réel douteux et lignes hors périmètre écartés ; le
+     classement par score seul ne montrait que de petites lignes S, il reste
+     sur « Lignes », « Les plus fiables ») et **les grands arrêts fiables** (`reliable_busy_stops` :
+     arrêts au score d'au moins 80, classés par passages prévus). On ne
+     connaît pas le nombre de voyageurs : « grand » veut dire très desservi,
+     ce que dit l'aide « ? » ;
    - **Arrêts à traiter en premier** (`stops_to_treat`, `_stop_rows`) : les
      arrêts **problématiques** (score sous 50, `PROBLEM_SCORE`, quais regroupés
      par nom et commune, au moins `MIN_OBSERVATIONS` passages), les 5 qui ratent
@@ -1896,8 +1911,11 @@ lecteur qui n'est pas analyste :
      verdict « La ligne 123 n'est pas mesurable : son temps réel est absent ou
      non fiable. » (`unmeasured` dans les données du composant).
 3. **Lignes** (`render_page_lines`) — sans ligne choisie : « Les lignes », une
-   phrase qui invite à chercher sa ligne en haut de la page, puis les 15 lignes
-   les moins fiables (`ranking_chart` affiché par
+   phrase qui invite à chercher sa ligne en haut de la page, un choix « Les
+   moins fiables » / « Les plus fiables » (`ranking_side`, clé
+   `ranking_side` ; à score égal, la ligne aux plus nombreux passages
+   d'abord), puis les 15 lignes correspondantes (`ranking_chart`,
+   `best_first=True` pour les plus fiables, la meilleure en haut, affiché par
    `graphique.graphique_cliquable` : l'infobulle se termine par « Cliquer pour
    analyser cette ligne ↓ » et un clic sur une barre ouvre la fiche,
    `_on_ranking_click`) ; en vue détaillée, tableau de toutes les lignes du
@@ -2823,7 +2841,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 680 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 683 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -3285,7 +3303,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 680, isolés (suite `pytest` complète : 680 passed), flux synthétiques
+- Tests : 683, isolés (suite `pytest` complète : 683 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3303,7 +3321,8 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à traiter, 5 pires
   tronçons, heures à peu de passages en gris) ; transitions et clavier ;
   typographie, textes, états vides et téléphone ; graphiques sans iframe et
-  préchauffage du cache.
+  préchauffage du cache. Ajout du 13/10/2026 : « Ce qui va bien » sur
+  l'accueil et classement des lignes les plus fiables (§11.3).
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -3370,7 +3389,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
-| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (680 à la fin de la refonte) |
+| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (683 à la fin de la refonte) |
 | I31 | Charte du dashboard : trois paliers en aplats ocre et cuivre (carte des arrêts presque entièrement ocre pour un réseau à 75), « à surveiller » et « problématique » trop proches (ΔE 22, 18 en deutéranopie), texte blanc sur cuivre à 3,95:1, gris « non mesuré » à 1,74:1 sur le fond de carte, évolutions colorées comme des états, taille des arrêts selon le nombre de passages lue comme une fréquentation | Charte écran « Pierre et vin » et dégradé à repères fixes (§6.4), texte choisi par `ink_on`, gris en pointillé, évolutions neutres, taille constante ; rapports PDF inchangés ; tests `TestCharteEcran`, `TestSecondesRetenues`, `TestDegrade`, `TestCarte`, `TestIcones` |
 | I32 | Navigation : 9 entrées de même poids ; bandeau du réseau répété au-dessus des fiches de ligne et d'arrêt (deux verdicts) ; barre de contexte affichant une ligne ou un arrêt que la page ignorait ; fiche de la ligne la moins fiable ouverte d'office sur « Lignes » ; arrêts proposés par quai et direction, avec des doublons ; aucune liste des tronçons les plus lents ; défilement automatique qui cachait le titre de la fiche sous la barre collante | Trois entrées et pied de menu, recherche unique, fil d'Ariane, phrase verdict, « À retenir » fondé sur la marge d'incertitude, « Arrêts à traiter en premier », 5 pires tronçons, heures à peu de passages en gris, défilement à `scroll-margin-top` (§11.3) ; tests `TestFilDAriane`, `TestTerritoireEtFiches`, `TestCreneauxEtGroupes` |
 | I33 | Fiche d'une ligne dont le retard médian est négatif (S35, −3 min 21 s, 76 % des départs avec plus d'une minute d'avance) : type de retard « Retards fréquents mais courts », car la zone de risque utilise la valeur absolue | Libellé neutre « Écart à l'horaire publié » avec les seuls chiffres, sans phrase d'interprétation (`diagnostic.display_zone`) ; la zone de risque et le score ne changent pas |
@@ -3378,6 +3397,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I35 | Carte des tronçons : sur un tracé en boucle, un tronçon pouvait prendre presque toute la ligne (« Cenon Gare (Tram A) vers Cenon Gare (Guesde) », ligne H2), car seul le point du tracé le plus proche de chaque arrêt était essayé | Tous les passages du tracé près des deux arrêts sont essayés, la portion la plus courte dans le bon ordre est retenue (`troncons.passes`, `segment_geometry`) ; 4 tronçons corrigés ; test `test_trace_en_boucle_portion_la_plus_courte` |
 | I36 | Le zoom vers un arrêt (`flyTo`) ignorait le réglage « réduire les animations » (`essential: true`), la carte n'était pas recentrée après un clic, ses commandes s'annonçaient en anglais et un bloc vide était focalisable ; cinq boutons « Voir › » identiques pour les lecteurs d'écran | Durée nulle si le système demande moins de mouvement, recentrage doux au clic, libellés français, bloc retiré de la tabulation, nom de l'arrêt comme libellé du bouton (§11.3) ; tests `TestMouvementEtClavier` |
 | I37 | Chaque graphique était une iframe `st.components.v1.html` (API annoncée comme retirée après le 01/06/2026) qui rechargeait Highcharts ; le premier affichage après une expiration du cache recalculait tout | Composant `st.components.v2` unique (`graphique.afficher`, `highcharts.chart_payload`) ; fil de préchauffage tant que le tableau de bord est consulté (`start_warmup`, §11.2) ; tests `TestComposantGraphique`, `TestPrechauffage` |
+| I38 | L'accueil et la page « Lignes » ne montraient que ce qui va mal (baisses, lignes et arrêts les moins fiables) : aucune ligne ni aucun arrêt fiable n'était mis en avant | Section « Ce qui va bien » de l'accueil (lignes fiables, plus forte progression au-delà de la marge, part des arrêts fiables, grandes lignes fiables, grands arrêts fiables) et choix « Les plus fiables » sur « Lignes » (§11.3) ; tests `test_ce_qui_va_bien`, `test_classement_des_deux_cotes`, `test_meilleures_lignes_en_tete` |
 | I29 | Deux scores coexistaient : le score de fiabilité (ponctualité ≤ 5 min − 2 × arrêts non desservis) partout, et le score 2.0 « en test » dans « Méthode », la fiche ligne et une page du rapport ; « à l'heure » comptait les départs très en avance ; les courses supprimées n'entraient pas dans le score ; les jours incomplets et les lignes au temps réel douteux n'étaient écartés que du score 2.0 ; la carte « Courses supprimées » de la fiche ligne ne comptait pas les mêmes courses que le score ; le rapport mêlait point et virgule décimale et tronquait le score de sa carte « Fiabilité » | Un seul score (section 10.3), calculé par `indicateurs.add_components` / `score_of` dans le dashboard, les rapports et l'open data ; « à l'heure » = −1 à +5 min partout ; exclusions appliquées à tous les indicateurs ; `agg_hourly(_stop).cnt_lt60` et son rattrapage ; décomposition exacte des points perdus ; nombres du rapport à la française ; tests `TestComposantesPartagees`, `TestDepartsEnAvanceParHeure`, `TestExclusionsDuRapport`, `TestRegles`, `test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score` |
 
 ### 26.4 Dette documentaire

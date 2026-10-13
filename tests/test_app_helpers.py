@@ -873,6 +873,34 @@ class TestTerritoireEtFiches:
         assert round(everything.iloc[0]["score"], 1) == 85.0
         assert app_mod.stops_to_treat(territorial.head(0), {}).empty
 
+    def test_ce_qui_va_bien(self):
+        now = self._lines([95.0, 88.0, 86.0, 70.0, 99.0], [9.0, 1.5, 2.0, 2.0, 1.0],
+                          [False, False, False, False, True]).assign(passages=[300, 50000, 20000, 9000, 4000])
+        before = self._lines([90.0, 87.5, 78.0, 72.0, 99.0], [7.0, 1.5, 2.0, 2.0, 1.0])
+        names = {"0": "S43", "1": "74", "2": "66", "3": "5", "4": "X"}
+        kept = {"0", "1", "2", "3", "4"}
+        assert app_mod.best_lines(now, kept)["route_id"].tolist() == ["1", "2", "0"]
+        assert app_mod.best_lines(now.assign(marge_v2=[16.0, 1.5, 2.0, 2.0, 1.0]), kept)["route_id"].tolist() == ["1", "2"]
+        assert app_mod.best_lines(now, {"0", "3"})["route_id"].tolist() == ["0"]
+        groups = pd.DataFrame({"stop_id": ["a", "b", "c", "d"], "stop_name": ["Gare", "Parc", "Port", "Lac"],
+                               "commune": ["Bordeaux", "Pessac", "", "Bègles"],
+                               "attendus": [5000.0, 900.0, 8000.0, 3000.0], "score": [91.0, 85.0, 62.0, 80.0]})
+        assert app_mod.reliable_busy_stops(groups)["stop_name"].tolist() == ["Gare", "Lac", "Parc"]
+        points = app_mod.good_points("Août 2026", now, before, kept, names, groups)
+        assert [p["figure"] for p in points] == ["3 sur 4", "78 → 86", "75 %"]
+        assert points[1]["route_id"] == "2" and points[1]["label"] == "Ligne 66 : la plus forte progression"
+        assert "depuis août 2026, au-delà de sa marge (± 2,8)" in points[1]["detail"]
+        assert points[2]["detail"] == "3 arrêts sur 4, score de 80 ou plus"
+        flat = app_mod.good_points("Août 2026", now, now, kept, names, groups.head(0))
+        assert [p["figure"] for p in flat] == ["3 sur 4", "Aucune"] and flat[1]["route_id"] is None
+        assert [p["figure"] for p in app_mod.good_points(None, now, None, kept, names, groups)] == ["3 sur 4", "75 %"]
+
+    def test_classement_des_deux_cotes(self):
+        ranking = pd.DataFrame({"route_id": list("abcd"), "score_fiabilite": [40.0, 90.0, 90.0, 70.0],
+                                "observations": [10, 100, 500, 50]})
+        assert app_mod.ranking_side(ranking, best=False, n=2)["route_id"].tolist() == ["a", "d"]
+        assert app_mod.ranking_side(ranking, best=True, n=3)["route_id"].tolist() == ["c", "b", "d"]
+
     def test_legende_de_la_carte(self):
         legend = app_mod.map_legend_html()
         for text in ("Couleur", "Forme", "80 : fiable", "50 : problématique", "linear-gradient",

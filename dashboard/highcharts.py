@@ -197,8 +197,8 @@ def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
     afficher(chart_payload(config, height, use_stock), height=height)
 
 
-def ranking_chart(df: pd.DataFrame) -> dict:
-    df = df.sort_values("score_fiabilite")
+def ranking_chart(df: pd.DataFrame, best_first: bool = False) -> dict:
+    df = df.sort_values("score_fiabilite", ascending=not best_first, kind="stable")
     data = [{"y": round(r["score_fiabilite"], 1), "color": score_color(r["score_fiabilite"]),
              "id": r.get("route_id")}
             for _, r in df.iterrows()]
