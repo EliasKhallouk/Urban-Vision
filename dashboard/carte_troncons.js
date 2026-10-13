@@ -330,7 +330,8 @@ function buildLayers(deck, state) {
       getWidth: widthOf, getColor: colorOf,
       getDashArray: (d) => (d.m === FERRY ? [3, 2] : "voc".includes(d.t[slot]) ? [0, 0] : [2, 2.5]), extensions: [dashed],
       updateTriggers: { getColor: slot, getWidth: slot, getDashArray: slot },
-      transitions: REDUCED_MOTION ? {} : { getColor: { duration: COLOR_FADE_MS }, getWidth: { duration: COLOR_FADE_MS } },
+      transitions: REDUCED_MOTION || !state.fadeReady ? {}
+        : { getColor: { duration: COLOR_FADE_MS }, getWidth: { duration: COLOR_FADE_MS } },
     }),
   ];
   if (state.selected && state.selected.tram) {
@@ -444,7 +445,10 @@ function render(state) {
   } else {
     state.panel.style.display = "none";
   }
-  if (state.overlay && state.deck) state.overlay.setProps({ layers: buildLayers(state.deck, state) });
+  if (state.overlay && state.deck) {
+    state.overlay.setProps({ layers: buildLayers(state.deck, state) });
+    if (!state.fadeReady) window.setTimeout(() => { state.fadeReady = true; }, 0);
+  }
   if (state.top) {
     const list = topSegments(data, slot);
     state.top.innerHTML = topHtml(data, slot, list);

@@ -245,7 +245,7 @@ Urban-Vision/
 │   │   ├── sauvegarde.py           # sauvegarde quotidienne, contrôle, restauration
 │   │   ├── veille_collecte.py      # veille de la collecte + alertes email
 │   │   └── veille_visiteurs.py     # veille des visiteurs humains (logs nginx)
-└── tests/                          # 29 fichiers, 679 tests pytest
+└── tests/                          # 29 fichiers, 680 tests pytest
     ├── conftest.py                 # fixtures base temporaire
     ├── gtfs_factory.py             # generateurs de flux synthétiques
     └── test_*.py
@@ -365,7 +365,7 @@ ouvrir http://127.0.0.1:8501.
 ### 5.6 Exécution des tests
 
 ```bash
-.venv/bin/python -m pytest        # 679 tests (config : pytest.ini, -q)
+.venv/bin/python -m pytest        # 680 tests (config : pytest.ini, -q)
 ```
 
 Les tests n'utilisent aucune donnée réelle : bases SQLite temporaires
@@ -1575,6 +1575,15 @@ par exécution, la ferme dans un `finally` ; les garde-fous : base absente →
 - Modules partagés via `sys.path` : `reports/` (palette) et `src/scripts/`.
 - **Cache Streamlit** : tous les loaders sont décorés
   `@st.cache_data(ttl=60)` (le premier paramètre `_conn` n'est pas haché).
+- **Préchauffage** (`start_warmup`, `st.cache_resource` : un seul fil par
+  serveur, lancé à la première visite) : toutes les 50 s
+  (`WARMUP_INTERVAL_SECONDS`, juste avant l'expiration du cache), tant que le
+  tableau de bord a été consulté dans les 30 dernières minutes
+  (`should_warm`, `WARMUP_IDLE_SECONDS`), le fil recalcule les chargements
+  lourds de la période par défaut (`warm_up` : passages, arrêts,
+  regroupements, jour par jour, score et marge, lignes de la période et de la
+  précédente) sur sa propre connexion. Le visiteur suivant les trouve en
+  cache ; aucun calcul la nuit quand personne ne consulte.
 - Seuil de fraîcheur : `cutoff = MAX(last_seen_at) − 20 min`
   (`FRESHNESS_BUFFER_SECONDS`).
 
@@ -1800,7 +1809,9 @@ lecteur qui n'est pas analyste :
      le périmètre (`worst_slot`) ;
    - **fondu des couleurs** : d'une heure à l'autre, la couleur et l'épaisseur
      des tronçons passent en fondu de 300 ms (`transitions` de deck.gl,
-     `COLOR_FADE_MS`), coupé quand le système demande moins de mouvement ; les
+     `COLOR_FADE_MS`), coupé quand le système demande moins de mouvement et
+     activé seulement après le premier affichage (`fadeReady` : le préparer dès
+     le chargement retardait l'affichage de la carte d'environ 3 s) ; les
      tronçons sont dessinés dans un ordre fixe pour un même jeu de données (les
      plus lents de la journée par-dessus), pour que le fondu ne mélange pas les
      couleurs de deux tronçons ;
@@ -2037,9 +2048,16 @@ sinon remis à zéro par Streamlit).
 
 ### 11.4 Graphiques Highcharts (`dashboard/highcharts.py`)
 
-Injection de HTML via `st.components.v1.html` : charge
-`highstock.js` (et `highcharts-more.js` pour les bulles) depuis jsDelivr,
-version figée 13.1.1 (`HIGHCHARTS_CDN`). `code.highcharts.com` n'est plus
+Tous les graphiques passent par un seul composant `st.components.v2`
+(`dashboard/graphique.py`, `afficher`), sans iframe : `highcharts.render`
+construit ses données (`chart_payload` : configuration avec accessibilité et
+description, constructeur `chart` ou `stockChart`, thème, pied de lexique,
+hauteur) ; le composant charge une seule fois dans la page `highstock.js` (qui
+contient le cœur), `highcharts-more.js` (bulles) et `modules/accessibility.js`
+depuis jsDelivr, version figée 13.1.1 (`HIGHCHARTS_CDN`), et la police Source
+Sans 3. Avant le 13/10/2026, chaque graphique était une iframe
+`st.components.v1.html` qui rechargeait Highcharts, API annoncée comme retirée
+après le 01/06/2026. `code.highcharts.com` n'est plus
 utilisé : son usage en production n'est pas prévu par l'éditeur, et il
 refuse les navigateurs sans interface (« Violation of license/fair-usage
 policy »), ce qui empêchait aussi les contrôles automatiques de rendu ;
@@ -2051,20 +2069,16 @@ Chaque infobulle nomme ce qu'elle montre et porte son unité (`unit_tooltip` :
 heures en « De 7 h à 7 h 59 », `HOUR_HEADER`). Chaque graphique désigne un
 terme du lexique (clé `lexique` de sa configuration, retirée avant l'envoi à
 Highcharts) : l'infobulle se termine par « Définitions dans le lexique ↗ »,
-lien absolu vers l'application calculé depuis la page parente, et reste
+lien absolu vers l'application calculé depuis l'adresse de la page, et reste
 ouverte quand la souris s'y pose (`stickOnContact`). Fonctions : `ranking_chart`, `scatter_chart`,
 `commune_ranking_chart`, `mode_comparison_chart`, `period_score_chart`,
 `period_mode_chart`, `groups_trend_chart`, `groups_hourly_chart`, `engagement_progression_chart`,
 `delay_distribution_chart`, `collection_minutely_chart` (Stock), et
-`hourly_distribution_chart`. Les couleurs par palier sont calculées par
-`palette.hex(value, kind)` — cohérentes avec les rapports.
+`hourly_distribution_chart`, `score_sparkline` (accueil).
 
-Graphique cliquable (`dashboard/graphique.py`) : les graphiques de
-`st.components.v1.html` ne renvoient rien à Python. `graphique_cliquable`
-affiche une configuration Highcharts dans un composant `st.components.v2`
-(Highcharts chargé depuis `HIGHCHARTS_CDN`, thème `LIGHT_THEME`) ; un clic
-sur un point renvoie son `id` (`setTriggerValue("clicked", …)`) au callback
-`on_click`. Pied d'infobulle : « Cliquer pour analyser cette ligne ↓ »
+Graphique cliquable (`graphique_cliquable`, même composant, `clickable`) : un
+clic sur un point renvoie son `id` (`setTriggerValue("clicked", …)`) au
+callback `on_click`. Pied d'infobulle : « Cliquer pour analyser cette ligne ↓ »
 (`CLICK_FOOTER`). Utilisé par le classement des lignes (les points de
 `ranking_chart` portent `id` = `route_id`). Après modification du JavaScript,
 redémarrer Streamlit.
@@ -2809,7 +2823,7 @@ plans/contours.
 .venv/bin/python -m pytest
 ```
 
-Suite complète 679 tests, sans réseau ni données réelles (fixtures bases
+Suite complète 680 tests, sans réseau ni données réelles (fixtures bases
 temporaires, flux synthétiques). Les zones sensibles à couvrir lors d'un
 changement de schéma : `test_refresh_aggregates.py` (exactitude des agrégats),
 `test_refresh_segments.py` (tronçons),
@@ -3271,7 +3285,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Accessibilité dashboard : `<html lang="fr">`, module `accessibility.js`
   Highcharts (non-Stock), description auto des graphiques, légende textuelle
   sous la carte des arrêts.
-- Tests : 679, isolés (suite `pytest` complète : 679 passed), flux synthétiques
+- Tests : 680, isolés (suite `pytest` complète : 680 passed), flux synthétiques
   (`gtfs_factory`), fixtures `tmp_path`.
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
@@ -3284,13 +3298,12 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   méthode 2.0, `915fde6`, le 02/10/2026 à 0 h 09 ; protection des données,
   `3afe0d3`, le 01/10/2026 à 22 h 20). Branche locale `refonte-ui` (refonte de
   l'interface pour les non-initiés, depuis le 12/10/2026) : non poussée, non
-  déployée ; phase 1 (charte écran « Pierre et vin », dégradé à repères fixes,
-  arrêts de taille constante, évolutions neutres) et phase 2 (trois entrées,
-  recherche unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à
-  traiter, 5 pires tronçons, heures à peu de passages en gris) et phase 3
-  (transitions, clavier) et phase 4 (échelle typographique des graphiques et
-  des cartes, textes sans tirets, états vides, barre repliée sur téléphone)
-  terminées le 13/10/2026.
+  déployée. Terminée le 13/10/2026 en cinq étapes : charte écran « Pierre et
+  vin » et dégradé à repères fixes ; navigation (trois entrées, recherche
+  unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à traiter, 5 pires
+  tronçons, heures à peu de passages en gris) ; transitions et clavier ;
+  typographie, textes, états vides et téléphone ; graphiques sans iframe et
+  préchauffage du cache.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -3326,7 +3339,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 à I36 le 13/10/2026 sur la branche `refonte-ui`) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 à I37 le 13/10/2026 sur la branche `refonte-ui`) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
@@ -3357,13 +3370,14 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 | I26 | Dashboard : nombres affichés avec un point décimal (« 75.1 ») ; infobulles de graphiques sans unité (« > 5 min : 12.3 », heures « 7 »), dates d'infobulle en anglais ; pastille « ? » de 15 px peu visible, à infobulle native sans lien ; étiquettes de lignes superposées sur la carte | `format_number` / `number_formatter` (virgule, signe −) dans tout le dashboard ; `lang` français et unités dans chaque infobulle Highcharts ; pastilles « ? » de 20 px avec bulle et lien vers le lexique ; étiquettes réparties et filtrées par collision ; tests `TestNombresALaFrancaise`, `TestLexique`, `TestInfobulles` |
 | I27 | Typographie du dashboard : 14 tailles différentes ; titres de bloc (15 px) plus petits que le texte (16 px) ; étiquettes en capitales espacées ; texte secondaire à 70 % d'opacité ; graphiques en 10-11 px dans une police non chargée (Inter) | Échelle de 8 variables CSS appliquée partout (§6.4), police de l'application dans les graphiques, capitales retirées ; tests `TestEchelleTypographique` |
 | I28 | Retour utilisateur du 11/10/2026 : phrases d'introduction et de méthode redondantes sur « Mon territoire » ; « Priorités du moment » mêlant baisses et retards sans repère visuel ; recherche d'arrêt absente de la carte et légende en une phrase ; classement des lignes non cliquable ; type de retard caché dans « Contexte » ; ponctualité par créneau au lieu du score ; graphiques réseau et mode en double entre « Quand ? » et « Réseau & modes » | Quatre priorités à icônes (`diagnostic.priorities`), recherche et légende de la carte, classement cliquable (`dashboard/graphique.py`), bandeau « Type de retard », score par créneau, indicateur et modes au choix dans « Quand ? », page « Modes de transport » unique (§11.3) ; tests `TestPriorites`, `TestCreneauxEtGroupes`, `TestIndicateursParGroupe`, `TestTerritoireEtFiches` |
-| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (679 à la fin de la phase 3 de la refonte) |
+| I30 | Sections 5.6 et 18 : la suite de tests était annoncée à 431 tests, contre 583 en réalité (section 3 et README) | Comptes alignés sur la suite réelle (680 à la fin de la refonte) |
 | I31 | Charte du dashboard : trois paliers en aplats ocre et cuivre (carte des arrêts presque entièrement ocre pour un réseau à 75), « à surveiller » et « problématique » trop proches (ΔE 22, 18 en deutéranopie), texte blanc sur cuivre à 3,95:1, gris « non mesuré » à 1,74:1 sur le fond de carte, évolutions colorées comme des états, taille des arrêts selon le nombre de passages lue comme une fréquentation | Charte écran « Pierre et vin » et dégradé à repères fixes (§6.4), texte choisi par `ink_on`, gris en pointillé, évolutions neutres, taille constante ; rapports PDF inchangés ; tests `TestCharteEcran`, `TestSecondesRetenues`, `TestDegrade`, `TestCarte`, `TestIcones` |
 | I32 | Navigation : 9 entrées de même poids ; bandeau du réseau répété au-dessus des fiches de ligne et d'arrêt (deux verdicts) ; barre de contexte affichant une ligne ou un arrêt que la page ignorait ; fiche de la ligne la moins fiable ouverte d'office sur « Lignes » ; arrêts proposés par quai et direction, avec des doublons ; aucune liste des tronçons les plus lents ; défilement automatique qui cachait le titre de la fiche sous la barre collante | Trois entrées et pied de menu, recherche unique, fil d'Ariane, phrase verdict, « À retenir » fondé sur la marge d'incertitude, « Arrêts à traiter en premier », 5 pires tronçons, heures à peu de passages en gris, défilement à `scroll-margin-top` (§11.3) ; tests `TestFilDAriane`, `TestTerritoireEtFiches`, `TestCreneauxEtGroupes` |
 | I33 | Fiche d'une ligne dont le retard médian est négatif (S35, −3 min 21 s, 76 % des départs avec plus d'une minute d'avance) : type de retard « Retards fréquents mais courts », car la zone de risque utilise la valeur absolue | Libellé neutre « Écart à l'horaire publié » avec les seuls chiffres, sans phrase d'interprétation (`diagnostic.display_zone`) ; la zone de risque et le score ne changent pas |
 | I34 | « Arrêts à traiter en premier » classait tous les arrêts par passages ratés : aucun arrêt rouge dans la liste de septembre (Palais de Justice, 69, en tête), alors que le titre annonçait les pires | Seuls les arrêts problématiques (score sous 50) sont classés par passages ratés ; le classement complet passe dans « Voir le détail » (`stops_to_treat`) |
 | I35 | Carte des tronçons : sur un tracé en boucle, un tronçon pouvait prendre presque toute la ligne (« Cenon Gare (Tram A) vers Cenon Gare (Guesde) », ligne H2), car seul le point du tracé le plus proche de chaque arrêt était essayé | Tous les passages du tracé près des deux arrêts sont essayés, la portion la plus courte dans le bon ordre est retenue (`troncons.passes`, `segment_geometry`) ; 4 tronçons corrigés ; test `test_trace_en_boucle_portion_la_plus_courte` |
 | I36 | Le zoom vers un arrêt (`flyTo`) ignorait le réglage « réduire les animations » (`essential: true`), la carte n'était pas recentrée après un clic, ses commandes s'annonçaient en anglais et un bloc vide était focalisable ; cinq boutons « Voir › » identiques pour les lecteurs d'écran | Durée nulle si le système demande moins de mouvement, recentrage doux au clic, libellés français, bloc retiré de la tabulation, nom de l'arrêt comme libellé du bouton (§11.3) ; tests `TestMouvementEtClavier` |
+| I37 | Chaque graphique était une iframe `st.components.v1.html` (API annoncée comme retirée après le 01/06/2026) qui rechargeait Highcharts ; le premier affichage après une expiration du cache recalculait tout | Composant `st.components.v2` unique (`graphique.afficher`, `highcharts.chart_payload`) ; fil de préchauffage tant que le tableau de bord est consulté (`start_warmup`, §11.2) ; tests `TestComposantGraphique`, `TestPrechauffage` |
 | I29 | Deux scores coexistaient : le score de fiabilité (ponctualité ≤ 5 min − 2 × arrêts non desservis) partout, et le score 2.0 « en test » dans « Méthode », la fiche ligne et une page du rapport ; « à l'heure » comptait les départs très en avance ; les courses supprimées n'entraient pas dans le score ; les jours incomplets et les lignes au temps réel douteux n'étaient écartés que du score 2.0 ; la carte « Courses supprimées » de la fiche ligne ne comptait pas les mêmes courses que le score ; le rapport mêlait point et virgule décimale et tronquait le score de sa carte « Fiabilité » | Un seul score (section 10.3), calculé par `indicateurs.add_components` / `score_of` dans le dashboard, les rapports et l'open data ; « à l'heure » = −1 à +5 min partout ; exclusions appliquées à tous les indicateurs ; `agg_hourly(_stop).cnt_lt60` et son rattrapage ; décomposition exacte des points perdus ; nombres du rapport à la française ; tests `TestComposantesPartagees`, `TestDepartsEnAvanceParHeure`, `TestExclusionsDuRapport`, `TestRegles`, `test_le_tableau_de_bord_et_la_methode_donnent_le_meme_score` |
 
 ### 26.4 Dette documentaire
@@ -3376,14 +3390,11 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
 - Intégration continue en place (`.github/workflows/tests.yml`) ; le contrôle
   `ruff` se limite aux erreurs bloquantes, sans formatage ni typage, et le dépôt
   n'a pas de `pyproject.toml`.
-- Streamlit 1.60 (figé dans `requirements.txt`) signale deux API dépréciées
-  utilisées par le dashboard : `st.components.v1.html`, annoncée comme retirée
-  « après le 01/06/2026 » et appelée à un seul endroit (`highcharts.py`,
-  rendu des graphiques non cliquables), et `use_container_width` (à remplacer
-  par `width`). Migration prévue : faire passer tous les graphiques par le
-  composant `st.components.v2` déjà utilisé pour le classement cliquable
-  (`dashboard/graphique.py`), plutôt que par `st.iframe`, dans une phase
-  séparée en fin de refonte (décision du 13/10/2026).
+- Streamlit 1.60 est figé dans `requirements.txt` ; le dashboard n'utilise plus
+  d'API annoncée comme dépréciée (`st.components.v1.html` remplacé par le
+  composant `st.components.v2` de `graphique.py`, `use_container_width`
+  absent). Monter de version reste à faire après un test du rendu des
+  graphiques et des cartes.
 - Les modules se chargent par `sys.path` inséré au runtime
   (`reports/`, `src/scripts/`, `dashboard/`) sans packaging — fragile mais
   fonctionnel ; un regroupement en paquets installerables simplifierait les
@@ -3424,14 +3435,7 @@ Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I1
    médiane, de −0,9 à +9,8, 12 lignes au-delà de +2 points (surtout des lignes
    scolaires et Arena) ; 3 lignes changeraient de palier (7 et 82 passeraient
    de 79,5 et 79,7 à 80,0 et 80,1 ; S60 de 77,0 à 86,7).
-9. **Préchauffer le cache du dashboard au démarrage** : le premier affichage
-    après un redémarrage prend 10 à 12 s, dont environ 4,3 s pour trois
-    chargements (`load_network_data`, `load_territorial`,
-    `grouped_territorial`) ; les lancer pour la période par défaut dans un
-    fil d'exécution au démarrage du serveur ramènerait le premier visiteur au
-    temps d'une page déjà en cache (environ 2,8 s). Priorité basse, simple et
-    testé (accord du 13/10/2026).
-10. **Prendre un nom de domaine propre** quand le projet est présenté aux
+9. **Prendre un nom de domaine propre** quand le projet est présenté aux
    communes (procédure en section 15).
 
 ---

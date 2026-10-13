@@ -263,37 +263,35 @@ class TestEngagement:
         _assert_json_serializable(config)
 
 
-class TestHtml:
-    def test_html_embarque_le_json_et_la_hauteur(self):
-        config = {"chart": {"type": "bar"}, "series": []}
-        html = hc._html(config, height=300)
-        assert "Highcharts.chart(" in html
-        assert "height:300px" in html
-        assert '"type": "bar"' in html
+class TestComposantGraphique:
+    def test_donnees_du_composant(self):
+        config = {"chart": {"type": "bar"}, "series": [], "lexique": "score-de-fiabilite"}
+        payload = hc.chart_payload(config, height=300)
+        assert payload["constructor"] == "chart" and payload["height"] == 300 and payload["clickable"] is False
+        assert payload["config"]["chart"] == {"type": "bar"} and "lexique" not in payload["config"]
+        assert "?lexique=score-de-fiabilite" in payload["footer"] and "__BASE__" in payload["footer"]
+        assert payload["theme"] is hc.LIGHT_THEME
+        _assert_json_serializable(payload)
 
-    def test_id_stable_par_configuration(self):
-        html_a = hc._html({"x": 1}, height=100)
-        html_a2 = hc._html({"x": 1}, height=100)
-        html_b = hc._html({"x": 2}, height=100)
-        assert html_a == html_a2
-        assert html_a != html_b
+    def test_graphique_boursier_et_sans_lexique(self):
+        payload = hc.chart_payload({"chart": {"type": "line"}}, height=200, use_stock=True)
+        assert payload["constructor"] == "stockChart" and payload["footer"] == ""
 
-    def test_html_accessibilite_langue_module_et_description(self):
+    def test_accessibilite_et_description(self):
         config = {"chart": {"type": "bar"}, "series": [{"name": "Ligne A"}, {"name": "Ligne B"}]}
-        html = hc._html(config, height=300)
-        assert 'lang="fr"' in html
-        assert "modules/accessibility.js" in html
-        assert '"enabled": true' in html
-        assert "Graphique en classement : Ligne A, Ligne B" in html
+        acc = hc.chart_payload(config, height=300)["config"]["accessibility"]
+        assert acc["enabled"] is True and acc["description"] == "Graphique en classement : Ligne A, Ligne B"
+        assert hc.chart_payload({"chart": {"type": "line"}, "series": [{}]}, 100)["config"]["accessibility"][
+            "description"] == "Graphique en série temporelle"
 
-    def test_html_accessibilite_stock_sans_module_separe(self):
-        html = hc._html({"chart": {"type": "line"}}, height=300, use_stock=True)
-        assert "modules/accessibility.js" not in html
-        assert "graphSeries" in html or '"enabled": true' in html
+    def test_plus_d_iframe(self):
+        import inspect
 
-    def test_html_description_sans_series_nommees(self):
-        html = hc._html({"chart": {"type": "line"}, "series": [{}]}, height=100)
-        assert "Graphique en série temporelle" in html
+        import graphique
+
+        assert "components.v1" not in inspect.getsource(hc) and "components.v1" not in inspect.getsource(graphique)
+        assert "highstock.js" in graphique._JS and "modules/accessibility.js" in graphique._JS
+
 
 class TestLisibilite:
     def test_aucun_format_de_nombre_invalide(self):
@@ -395,8 +393,8 @@ class TestInfobulles:
             assert config["lexique"] in slugs
             assert config["series"][0]["tooltip"]["pointFormat"].endswith(f"{hc.TREND_METRICS[metric][1]}</b><br/>")
 
-    def test_lien_lexique_dans_le_html(self):
-        html = hc._html({"chart": {"type": "line"}, "series": [], "lexique": "retard-moyen"}, 300)
-        assert "Définitions dans le lexique" in html
-        assert '.replace("__TERME__", "retard-moyen")' in html
-        assert '"lexique"' not in html.split("Highcharts.chart(")[1]
+    def test_lien_lexique_dans_l_infobulle(self):
+        payload = hc.chart_payload({"chart": {"type": "line"}, "series": [], "lexique": "retard-moyen"}, 300)
+        assert "Définitions dans le lexique" in payload["footer"]
+        assert "?lexique=retard-moyen" in payload["footer"]
+        assert "lexique" not in payload["config"]

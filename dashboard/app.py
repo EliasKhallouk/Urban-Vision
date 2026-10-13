@@ -18,8 +18,11 @@ import html
 import json
 import math
 import re
+import logging
 import sqlite3
 import sys
+import threading
+import time
 import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -4363,6 +4366,69 @@ def header_kpis(score: float, on_time: float, delay_s: float, skip_rate: float, 
     ]
 
 
+WARMUP_INTERVAL_SECONDS = CACHE_TTL_SECONDS - 10
+WARMUP_IDLE_SECONDS = 30 * 60
+_ACTIVITY = {"last": 0.0}
+
+
+def should_warm(now: float, last_visit: float, idle_limit: float = WARMUP_IDLE_SECONDS) -> bool:
+    """Préchauffer seulement si quelqu'un a consulté le tableau de bord récemment (pas de calcul à vide la nuit)."""
+    return now - last_visit < idle_limit
+
+
+def warm_up(conn) -> list[str]:
+    """Calcule les chargements lourds de l'accueil et de la carte pour la période par défaut, afin que le visiteur
+    suivant les trouve en cache ; renvoie les chargements faits."""
+    cutoff = get_cutoff_ts(conn)
+    if cutoff is None:
+        return []
+    first, last = load_service_days(conn, cutoff)
+    period = resolve_period(default_period_choice(first, last), first, last)
+    since, end, prev_since, prev_end = _ts(period.start), _ts(period.end), _ts(period.prev_start), _ts(period.prev_end)
+    done = []
+    for name, call in (
+        ("passages", lambda: load_network_data(conn, cutoff, since, end)),
+        ("arrêts", lambda: load_territorial(conn, cutoff, since, end)),
+        ("regroupements", lambda: grouped_territorial(conn, cutoff, since, end)),
+        ("jour par jour", lambda: load_daily_metrics(conn, cutoff, since, end)),
+        ("score et marge", lambda: load_score_change(conn, cutoff, since, end, prev_since, prev_end)),
+        ("lignes", lambda: load_route_indicators(conn, cutoff, since, end)),
+        ("lignes, période précédente",
+         lambda: load_route_indicators(conn, cutoff, prev_since, prev_end) if prev_since is not None else None),
+    ):
+        call()
+        done.append(name)
+    return done
+
+
+@st.cache_resource
+def start_warmup() -> threading.Thread:
+    """Fil de préchauffage, un seul par serveur : tant que le tableau de bord a été consulté dans les 30 dernières
+    minutes, il recalcule les chargements de la période par défaut juste avant l'expiration du cache."""
+    def loop():
+        while True:
+            if should_warm(time.time(), _ACTIVITY["last"]):
+                conn = None
+                try:
+                    conn = get_connection()
+                    warm_up(conn)
+                except Exception:
+                    logging.getLogger(__name__).exception("préchauffage du cache")
+                finally:
+                    if conn is not None:
+                        conn.close()
+            time.sleep(WARMUP_INTERVAL_SECONDS)
+
+    thread = threading.Thread(target=loop, name="urban-vision-prechauffage", daemon=True)
+    try:
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+        add_script_run_ctx(thread)
+    except ImportError:
+        pass
+    thread.start()
+    return thread
+
+
 def main() -> None:
     st.set_page_config(page_title="Urban Vision | Fiabilité", page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "logo" / "urban-vision-logo-color.png"), layout="wide")
     inject_style()
@@ -4377,6 +4443,8 @@ def main() -> None:
                  "écrivez à l'adresse indiquée dans « À propos ».")
         st.caption(f"Base attendue : {DB_PATH}")
         return
+    _ACTIVITY["last"] = time.time()
+    start_warmup()
     conn = get_connection()
     try:
         cutoff = get_cutoff_ts(conn)

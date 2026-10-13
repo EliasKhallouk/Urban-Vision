@@ -175,43 +175,26 @@ HIGHCHARTS_CDN = "https://cdn.jsdelivr.net/npm/highcharts@13.1.1"
 CHART_FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource/source-sans-3@5.2.5"
 
 
-def _html(chart_config: dict, height: int, use_stock: bool = False) -> str:
+def chart_payload(chart_config: dict, height: int, use_stock: bool = False) -> dict:
+    """Données du composant graphique (`graphique.py`, st.components.v2) : configuration avec accessibilité et
+    description, constructeur (graphique ou graphique boursier), thème, pied « Définitions dans le lexique »
+    pointant sur le terme de la configuration (`lexique`) et hauteur."""
     config = dict(chart_config)
     term = config.pop("lexique", "")
     acc = dict(config.get("accessibility") or {})
     acc["enabled"] = True
     acc.setdefault("description", _accessibility_description(config))
     config["accessibility"] = acc
-    chart_id = "hc_" + str(abs(hash(json.dumps(config, sort_keys=True, default=str, ensure_ascii=False))))[:10]
-    constructor = "stockChart" if use_stock else "chart"
-    scripts = "".join(f'<link rel="stylesheet" href="{CHART_FONT_CSS}/{w}.css">' for w in (400, 600, 700))
-    scripts += f'\n<script src="{HIGHCHARTS_CDN}/highstock.js"></script>'
-    if not use_stock:
-        scripts += f'\n<script src="{HIGHCHARTS_CDN}/highcharts-more.js"></script>'
-        scripts += f'\n<script src="{HIGHCHARTS_CDN}/modules/accessibility.js"></script>'
-    return f"""<!DOCTYPE html>
-<html lang="fr"><head><meta charset="utf-8">
-<style>body{{margin:0;font-family:'Source Sans 3',sans-serif}}</style>
-{scripts}
-</head><body>
-<div id="{chart_id}" style="width:100%;height:{height}px;"></div>
-<script>
-const theme = {json.dumps(LIGHT_THEME, ensure_ascii=False)};
-const base = (() => {{ try {{ const l = window.parent.location; return l.origin + l.pathname; }} catch (e) {{ return ""; }} }})();
-if (base) {{
-  theme.tooltip.useHTML = true;
-  theme.tooltip.stickOnContact = true;
-  theme.tooltip.footerFormat = {json.dumps(LEXIQUE_FOOTER, ensure_ascii=False)}
-    .replace("__BASE__", base).replace("__TERME__", {json.dumps(term)});
-}}
-Highcharts.setOptions(theme);
-Highcharts.{constructor}('{chart_id}', {json.dumps(config, ensure_ascii=False)});
-</script>
-</body></html>"""
+    return {"config": config, "constructor": "stockChart" if use_stock else "chart", "theme": LIGHT_THEME,
+            "footer": LEXIQUE_FOOTER.replace("__TERME__", term) if term else "", "height": height,
+            "clickable": False}
 
 
 def render(config: dict, height: int = 300, use_stock: bool = False) -> None:
-    st.components.v1.html(_html(config, height, use_stock), height=height + 60)
+    """Affiche un graphique non cliquable par le composant commun de `graphique.py` (sans iframe)."""
+    from graphique import afficher
+
+    afficher(chart_payload(config, height, use_stock), height=height)
 
 
 def ranking_chart(df: pd.DataFrame) -> dict:

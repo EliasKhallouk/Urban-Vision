@@ -724,6 +724,30 @@ class TestMouvementEtClavier:
         assert '[data-testid="stHeaderActionElements"] {{ display: none; }}'.replace("{{", "{").replace("}}", "}") in style
 
 
+class TestPrechauffage:
+    def test_seulement_apres_une_visite_recente(self):
+        assert app_mod.should_warm(1_000.0, 900.0)
+        assert not app_mod.should_warm(10_000.0, 900.0)
+        assert app_mod.WARMUP_INTERVAL_SECONDS < app_mod.CACHE_TTL_SECONDS
+
+    def test_chargements_de_la_periode_par_defaut(self, monkeypatch):
+        from datetime import date
+
+        calls = []
+        monkeypatch.setattr(app_mod, "get_cutoff_ts", lambda conn: 1_790_000_000)
+        monkeypatch.setattr(app_mod, "load_service_days", lambda conn, cutoff: (date(2026, 8, 1), date(2026, 10, 12)))
+        for name in ("load_network_data", "load_territorial", "grouped_territorial", "load_daily_metrics",
+                     "load_score_change", "load_route_indicators"):
+            monkeypatch.setattr(app_mod, name, lambda *a, _n=name, **k: calls.append((_n, a[2:4])))
+        done = app_mod.warm_up(object())
+        assert done[0] == "passages" and len(done) == 7
+        sept = (app_mod._ts(date(2026, 9, 1)), app_mod._ts(date(2026, 10, 1)))
+        assert calls[0] == ("load_network_data", sept)
+        assert ("load_route_indicators", (app_mod._ts(date(2026, 8, 1)), app_mod._ts(date(2026, 9, 1)))) in calls
+        monkeypatch.setattr(app_mod, "get_cutoff_ts", lambda conn: None)
+        assert app_mod.warm_up(object()) == []
+
+
 class TestEchelleTypographique:
     def test_toutes_les_tailles_du_tableau_de_bord_viennent_de_l_echelle(self):
         import re
