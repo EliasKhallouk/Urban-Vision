@@ -19,7 +19,7 @@ class TestFormatSeconds:
         assert app_mod.format_seconds(0) == "0 s"
         assert app_mod.format_seconds(59) == "59 s"
         assert app_mod.format_seconds(90) == "1 min 30 s"
-        assert app_mod.format_seconds(None) == "—"
+        assert app_mod.format_seconds(None) == "n.d."
         assert app_mod.format_seconds(-90) == "−1 min 30 s"
         assert app_mod.format_seconds(90, signed=True) == "+1 min 30 s"
 
@@ -343,7 +343,7 @@ class TestGrilleJourHeure:
         html = app_mod.week_hour_grid_html(self._table(), {"weekday": 4, "hour": 9})
         assert html.count("<tr>") == 9
         assert 'style="background:#A55F73;color:#FFFFFF;outline:2px solid #2B2523' in html
-        assert "Vendredi 9 h–10 h : 60 % de passages à plus de 5 min · 30 passages · dégradé 3 fois sur 3" in html
+        assert "Vendredi de 9 h à 10 h : 60 % de passages à plus de 5 min · 30 passages · dégradé 3 fois sur 3" in html
         assert '<th>Ven.</th>' in html and "<th>Tous</th>" in html
         assert ">30</td>" in html
 
@@ -695,12 +695,12 @@ class TestNombresALaFrancaise:
         assert app_mod.format_number(75.06, 1) == "75,1"
         assert app_mod.format_number(-9.94, 1, signed=True) == "−9,9"
         assert app_mod.format_number(3.5, 1, signed=True) == "+3,5"
-        assert app_mod.format_number(None) == "—"
+        assert app_mod.format_number(None) == "n.d."
 
     def test_formateur_de_tableau(self):
         fmt = app_mod.number_formatter(2, " %")
         assert fmt(1.234) == "1,23 %"
-        assert fmt(float("nan")) == "—"
+        assert fmt(float("nan")) == "n.d."
 
 
 class TestMouvementEtClavier:

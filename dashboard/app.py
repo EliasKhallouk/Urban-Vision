@@ -119,14 +119,14 @@ from palette import (  # noqa: E402
 
 CAUTION_TEXT = (
     "Cette ligne fait l'objet d'une perturbation signalée par TBM sur tout ou "
-    "partie de la période — sans lien de causalité établi arrêt par arrêt avec "
+    "partie de la période, sans lien de causalité établi arrêt par arrêt avec "
     "les statistiques présentées."
 )
 
 def fmt_int(value) -> str:
     """Entier avec séparateur de milliers à la française (espace)."""
     if value is None or pd.isna(value):
-        return "—"
+        return dg.MISSING
     return f"{float(value):,.0f}".replace(",", " ")
 
 
@@ -626,6 +626,24 @@ def inject_style() -> None:
         [data-testid="stSelectbox"] [role="group"] button[aria-haspopup="listbox"] svg {{ width: 1.45rem; height: 1.45rem; }}
         [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: sticky; top: 3.75rem; z-index: 60; background: #FFFFFF; box-shadow: 0 -3.75rem 0 #FFFFFF; }}
         @media (max-width: 640px) {{ [data-testid="stLayoutWrapper"]:has(> .st-key-ctx_bar) {{ position: static; box-shadow: none; }} }}
+        @media (max-width: 640px) {{
+            .st-key-ctx_bar {{ padding: .3rem 0 .4rem; }}
+            .st-key-ctx_bar [data-testid="stHorizontalBlock"] {{ flex-flow: row wrap !important; gap: .45rem !important; }}
+            .st-key-ctx_bar [data-testid="stColumn"]:nth-child(1) {{ flex: 0 0 2.9rem !important; width: 2.9rem !important; min-width: 2.9rem !important; }}
+            .st-key-ctx_bar [data-testid="stColumn"]:nth-child(2) {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
+            .st-key-ctx_bar [data-testid="stColumn"]:nth-child(3) {{ flex: 1 1 100% !important; width: 100% !important; margin-left: 0; padding-left: 0; border-left: none; }}
+            .st-key-ctx_bar [data-testid="stWidgetLabel"] {{ display: none; }}
+            .st-key-ctx_back button {{ padding: 0; }}
+            .st-key-ctx_back button p {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }}
+            .st-key-ctx_back button::before {{ content: "←"; color: inherit; font-size: var(--fs-section); line-height: 1; }}
+            :root {{ --fs-hero: 3.4rem; }}
+            [class*="st-key-atraiter_"]:not([class*="_btn_"]), [class*="st-key-plusrates_"]:not([class*="_btn_"]) {{ border-bottom: none; padding: .2rem 0; }}
+            .sr-right {{ border-bottom: 1px solid var(--line); padding-bottom: .55rem; }}
+            [class*="st-key-atraiter_"] [data-testid="stHorizontalBlock"], [class*="st-key-plusrates_"] [data-testid="stHorizontalBlock"] {{ flex-flow: row wrap !important; gap: .2rem .6rem !important; }}
+            [class*="st-key-atraiter_"] [data-testid="stColumn"]:nth-child(1), [class*="st-key-plusrates_"] [data-testid="stColumn"]:nth-child(1) {{ flex: 0 0 2.6rem !important; width: 2.6rem !important; min-width: 2.6rem !important; }}
+            [class*="st-key-atraiter_"] [data-testid="stColumn"]:nth-child(2), [class*="st-key-plusrates_"] [data-testid="stColumn"]:nth-child(2) {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
+            [class*="st-key-atraiter_"] [data-testid="stColumn"]:nth-child(3), [class*="st-key-plusrates_"] [data-testid="stColumn"]:nth-child(3) {{ flex: 1 1 100% !important; width: 100% !important; padding-left: 3.2rem; }}
+        }}
         .contention-note {{ margin: -.35rem 0 .5rem; }}
         .st-key-ctx_bar {{ background: #FFFFFF; padding: .55rem 0 .7rem; margin-bottom: .4rem; border-bottom: 2px solid var(--ink); }}
         .st-key-ctx_bar [data-testid="stColumn"] {{ position: relative; }}
@@ -1982,7 +2000,7 @@ def _territorial_map(stops: pd.DataFrame, groups: pd.DataFrame, commune: str | N
     """Carte des arrêts (composant `carte.carte_arrets`, deck.gl).
 
     Couleur = palier du score de fiabilité de l'arrêt (fiable ≥ 80/100,
-    à surveiller 50–80, problématique < 50) ; forme = mode de la ligne principale
+    à surveiller de 50 à 80, problématique < 50) ; forme = mode de la ligne principale
     (● tram, ■ bus, ▲ ferry) ; taille = nombre de passages analysés, qui suit
     le zoom. Les quais d'un même arrêt sont regroupés en vue éloignée et
     séparés en vue rapprochée ; l'arrêt sélectionné est entouré d'un halo.
@@ -2044,8 +2062,8 @@ LEXIQUE = [
     ("Retard déjà présent / retard pris", "En comparant le retard d'un même véhicule d'un arrêt au suivant, on "
                                           "sait si le retard existait déjà en arrivant ou s'il est apparu entre "
                                           "les deux arrêts (sur ce « tronçon »)."),
-    ("Créneau", "Une tranche horaire : matin (6 h–10 h), journée (10 h–16 h), pointe du soir (16 h–20 h), "
-                "soirée et nuit (20 h–6 h) en semaine, et le week-end."),
+    ("Créneau", "Une tranche horaire : matin (de 6 h à 10 h), journée (de 10 h à 16 h), pointe du soir (de 16 h "
+                "à 20 h), soirée et nuit (de 20 h à 6 h) en semaine, et le week-end."),
     ("Jour dégradé", "Un jour où au moins 15 % des passages ont plus de 5 minutes de retard."),
     ("Retard médian", "Le retard « du milieu » : la moitié des passages ont moins de retard, l'autre moitié "
                       "plus. Moins sensible qu'une moyenne à quelques très gros retards."),
@@ -2413,7 +2431,7 @@ def _render_alerts(alerts: pd.DataFrame) -> None:
     for r in alerts.head(8).itertuples():
         flag = " · <b>recoupe un jour dégradé</b>" if r.jour_degrade else ""
         st.markdown(
-            f"**Ligne {html.escape(str(r.ligne))}** — {html.escape(r.header_text or '')}  \n"
+            f"**Ligne {html.escape(str(r.ligne))}** : {html.escape(r.header_text or '')}  \n"
             f"<span style='color:{INK_MUTED}'>{r.debut_effectif} → {r.fin_effective}{flag}</span>",
             unsafe_allow_html=True,
         )
@@ -2461,7 +2479,7 @@ def _slot_selectors(table: pd.DataFrame, peak: dict, key: str) -> tuple[int, int
                            key=f"{key}_day")
     with right:
         hour = st.selectbox("Heure", hours, index=hours.index(hour0), key=f"{key}_hour",
-                            format_func=lambda h: f"{h} h – {'0' if h == 23 else h + 1} h")
+                            format_func=lambda h: f"de {h} h à {'0' if h == 23 else h + 1} h")
     return int(day), int(hour)
 
 
@@ -2544,9 +2562,9 @@ def status_kpi(score: float, sublabel: str) -> tuple:
 
 def _evolution_kpi(change: dict | None, prev_label: str | None) -> tuple:
     if prev_label is None:
-        return ("Évolution", "—", "pas de période de comparaison", "neutral")
+        return ("Évolution", dg.MISSING, "pas de période de comparaison", "neutral")
     if change is None:
-        return ("Évolution", "—", f"pas de données sur {prev_label}", "neutral")
+        return ("Évolution", dg.MISSING, f"pas de données sur {prev_label}", "neutral")
     return ("Évolution", evolution_words(change["delta"]), f"vs {prev_label} ({change['previous']:.0f} / 100)",
             "neutral")
 
@@ -3289,11 +3307,13 @@ def render_page_when(c: PageContext) -> None:
 
 def render_page_network(c: PageContext) -> None:
     st.markdown("### Les modes de transport, pour situer un problème")
-    st.markdown("#### Carte de risque des lignes")
+    st.markdown("#### Les lignes selon leurs retards")
+    st.caption("Chaque bulle est une ligne. Plus elle est à droite, plus ses bus ont souvent un peu de retard ; plus "
+               "elle est haute, plus ils ont souvent de gros retards (plus de 5 min).")
     hc_render(scatter_chart(c.visible_ranking), height=430)
-    st.caption("Chaque bulle est une ligne. Couleur : son score de fiabilité ; forme : son mode (● tramway, ■ bus, "
-               "▲ ferry) ; taille : son nombre de passages. Traits pointillés : seuils de "
-               f"{RISK_MEDIAN_S:.0f} s de retard médian et {RISK_PCT_GT300:.0f} % de passages à plus de 5 min.")
+    st.caption("Couleur : score de fiabilité ; forme : mode (● tramway, ■ bus, ▲ ferry) ; taille : nombre de passages. "
+               f"Pointillés : {RISK_MEDIAN_S:.0f} s de retard habituel (médian) et {RISK_PCT_GT300:.0f} % de passages à "
+               "plus de 5 min.")
     mode_stats = load_mode_stats(c.conn, c.cutoff, c.since_ts, c.end_ts, commune=c.commune)
     if mode_stats.empty:
         st.warning("Aucune donnée exploitable par mode.")
@@ -3349,10 +3369,9 @@ def render_page_network(c: PageContext) -> None:
 
 def render_page_perturbations(c: PageContext) -> None:
     st.markdown("### Perturbations sur la période")
-    st.markdown('<div class="section-note">Perturbations diffusées par TBM dans le flux GTFS-RT Service '
-                'Alerts. La cause indiquée par TBM (quasi toujours « inconnue ») n’est pas fiable et n’est pas '
-                'affichée ; le titre, la description, les lignes concernées et la période restent en revanche '
-                'exploitables.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-note">Perturbations annoncées par TBM (travaux, déviations, incidents). '
+                'La cause donnée par TBM est presque toujours « inconnue » : elle n’est pas affichée.</div>',
+                unsafe_allow_html=True)
     now_ts = int(datetime.now().timestamp())
     alerts_now = load_active_alerts(c.conn, now_ts)
     if c.commune is not None and not alerts_now.empty:
@@ -3362,9 +3381,10 @@ def render_page_perturbations(c: PageContext) -> None:
     lignes_actives = int(alerts_now["route_id"].nunique()) if not alerts_now.empty else 0
     jours_lignes = int(history["jours_couverts"].sum()) if not history.empty else 0
     render_kpis([
-        ("Lignes actuellement perturbées", str(lignes_actives), None, "negatif" if lignes_actives > 0 else "positif"),
-        ("Jours-lignes cumulés perturbés", f"{jours_lignes:,}".replace(",", " "), None, "neutral"),
-        ("Perturbations sur la période", str(len(history)), None, "neutral"),
+        ("Lignes perturbées en ce moment", str(lignes_actives), None, "neutral"),
+        ("Jours de perturbation", f"{jours_lignes:,}".replace(",", " "), "toutes lignes : une ligne perturbée 3 jours "
+         "compte pour 3", "neutral"),
+        ("Perturbations annoncées", str(len(history)), "sur la période", "neutral"),
     ])
     if c.commune is not None:
         st.caption("Périmètre restreint : lignes desservant des arrêts de la commune sélectionnée.")
@@ -3372,9 +3392,10 @@ def render_page_perturbations(c: PageContext) -> None:
     if history.empty:
         st.info("Aucune perturbation active sur tout ou partie de la période sélectionnée.")
     else:
-        st.caption("Période effective tronquée à l'intersection avec la période sélectionnée ; lignes classées "
-                   "par nombre total de jours perturbés décroissant.")
-        search = st.text_input("Filtrer (ligne, titre, description)", key="pert_search")
+        st.caption("Seuls les jours compris dans la période choisie sont comptés ; les lignes les plus souvent "
+                   "perturbées d'abord.")
+        search = st.text_input("Chercher une ligne ou un mot", key="pert_search",
+                               placeholder="Exemple : 23, travaux, déviation")
         q = (search or "").strip().lower()
         by_line: dict[str, list] = {}
         for r in history.itertuples():
@@ -3389,7 +3410,7 @@ def render_page_perturbations(c: PageContext) -> None:
             for ligne, items in order:
                 n = len(items)
                 jours = int(sum(x.jours_couverts for x in items))
-                acc = (f"**Ligne {ligne}** — {n} alerte{'s' if n > 1 else ''} · "
+                acc = (f"**Ligne {ligne}** : {n} alerte{'s' if n > 1 else ''} · "
                        f"{jours} jour{'s' if jours > 1 else ''} cumulé{'s' if jours > 1 else ''}")
                 inner = items if n <= 6 else sorted(items, key=lambda x: x.jours_couverts, reverse=True)[:6]
                 with st.expander(acc):
@@ -3397,7 +3418,7 @@ def render_page_perturbations(c: PageContext) -> None:
                         st.markdown(
                             f"**{html.escape(x.header_text or '')}**  \n"
                             f"<span style='color:{INK_MUTED}'>{x.debut_effectif} → "
-                            f"{x.fin_effective} · {x.jours_couverts} j</span>",
+                            f"{x.fin_effective} · {x.jours_couverts} jour{'s' if x.jours_couverts > 1 else ''}</span>",
                             unsafe_allow_html=True,
                         )
                         st.write(x.description_text or "(description non fournie)")
@@ -3486,7 +3507,7 @@ def _render_method(c: PageContext) -> None:
 
 def _render_open_data(c: PageContext) -> None:
     st.markdown("### Données ouvertes (CSV)")
-    st.markdown('<div class="section-note">Les agrégats (pas les observations brutes) sont exportés en CSV — '
+    st.markdown('<div class="section-note">Les agrégats (pas les observations brutes) sont exportés en CSV : '
                 'format stable, sans donnée nominative. Le collecteur régénère ces fichiers sur la période '
                 '(`src/scripts/export_open_data.py`) ; les boutons ci-dessous produisent le même export pour la '
                 'période sélectionnée.</div>', unsafe_allow_html=True)
@@ -3826,7 +3847,7 @@ def render_page_reports(c: PageContext) -> None:
     with left:
         st.markdown("#### Réseau complet")
         if entry["reseau"] is not None:
-            _download_pdf(f"Télécharger le rapport réseau — {month_name(month)}", entry["reseau"], "dl_reseau")
+            _download_pdf(f"Télécharger le rapport du réseau ({month_name(month)})", entry["reseau"], "dl_reseau")
         else:
             st.info("Pas de rapport réseau pour ce mois.")
     with right:
@@ -4352,13 +4373,16 @@ def main() -> None:
         remember_guide_seen()
         show_guide()
     if not DB_PATH.exists():
-        st.error(f"Base SQLite introuvable : {DB_PATH}")
+        st.error("Les données ne sont pas disponibles pour le moment. Réessayez dans quelques minutes ; si cela dure, "
+                 "écrivez à l'adresse indiquée dans « À propos ».")
+        st.caption(f"Base attendue : {DB_PATH}")
         return
     conn = get_connection()
     try:
         cutoff = get_cutoff_ts(conn)
         if cutoff is None:
-            st.warning("Aucune observation disponible pour le moment.")
+            st.warning("Aucune donnée collectée pour le moment : la collecte vient de démarrer. Revenez dans "
+                       "quelques minutes.")
             return
         communes = load_communes(conn)
         st.session_state.setdefault("commune_idx", 0)

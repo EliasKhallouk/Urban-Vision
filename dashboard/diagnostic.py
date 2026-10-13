@@ -54,9 +54,12 @@ def zone_label(zone: str) -> str:
     return SCHEDULE_GAP_LABEL if zone == SCHEDULE_GAP else RISK_ZONE_LABELS[zone]
 
 
+MISSING = "n.d."
+
+
 def format_seconds(value: float | int | None, signed: bool = False) -> str:
     if value is None or pd.isna(value):
-        return "—"
+        return MISSING
     value = int(round(float(value)))
     sign = "+" if signed and value > 0 else "−" if value < 0 else ""
     absolute = abs(value)
@@ -65,16 +68,16 @@ def format_seconds(value: float | int | None, signed: bool = False) -> str:
 
 
 def format_number(value, decimals: int = 1, signed: bool = False) -> str:
-    """Nombre à la française : virgule décimale, signe moins typographique, « — » si absent."""
+    """Nombre à la française : virgule décimale, signe moins typographique, « n.d. » si absent."""
     if value is None or pd.isna(value):
-        return "—"
+        return MISSING
     text = f"{float(value):{'+' if signed else ''}.{decimals}f}".replace(".", ",")
     return text.replace("-", "−")
 
 
 def number_formatter(decimals: int = 1, suffix: str = "", signed: bool = False):
     """Formateur de colonne pour `Styler.format` (même règle que `format_number`)."""
-    return lambda value: "—" if value is None or pd.isna(value) else \
+    return lambda value: MISSING if value is None or pd.isna(value) else \
         format_number(value, decimals, signed) + suffix
 
 
@@ -120,8 +123,8 @@ def median_from_hists(hists) -> float | None:
 def period_labels(date_service: pd.Series, heure: pd.Series) -> list[str]:
     """Créneau (jour de semaine × tranche horaire) de chaque agrégat horaire.
 
-    Lundi–vendredi : Matin (06–10), Journée (10–16), Pointe du soir (16–20),
-    Soirée & nuit (20–06). Samedi et dimanche : un seul créneau Week-end.
+    Lundi à vendredi : Matin (6 h à 10 h), Journée (10 h à 16 h), Pointe du soir (16 h à 20 h),
+    Soirée & nuit (20 h à 6 h). Samedi et dimanche : un seul créneau Week-end.
     """
     dow = pd.to_datetime(date_service).dt.dayofweek
     labels = []
@@ -643,7 +646,7 @@ def hour_range(hour: int) -> str:
 
 def slot_label(weekday: int, hour: int) -> str:
     end = "0 h" if hour == 23 else f"{hour + 1} h"
-    return f"{WEEKDAYS[weekday]} {hour} h–{end}"
+    return f"{WEEKDAYS[weekday]} de {hour} h à {end}"
 
 
 def week_hour_table(hourly: pd.DataFrame) -> pd.DataFrame:

@@ -428,8 +428,8 @@ class TestRepercussion:
         assert dg.slot_hotspot(dg.slot_profile(_slot_route_hourly(), self._profile(), 0, 12)) is None
 
     def test_libelles(self):
-        assert dg.slot_label(4, 13) == "Vendredi 13 h–14 h"
-        assert dg.slot_label(6, 23) == "Dimanche 23 h–0 h"
+        assert dg.slot_label(4, 13) == "Vendredi de 13 h à 14 h"
+        assert dg.slot_label(6, 23) == "Dimanche de 23 h à 0 h"
         assert dg.hour_range(23) == "entre 23 h et minuit"
 
 

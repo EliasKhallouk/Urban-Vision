@@ -530,10 +530,21 @@ Interlignage 1,2 (titres), 1,55 (texte), 1,45 (légendes). Texte secondaire
 plein (`--ink-2` = `INK_MUTED`, contraste 6,2:1 sur blanc), sans transparence ;
 aucune étiquette en capitales espacées. Graphiques : police Source Sans 3
 chargée dans chaque graphique depuis jsDelivr (`CHART_FONT_CSS`, même famille
-que l'application), libellés d'axes et légendes en 13 px, infobulles en 14 px,
-étiquettes de données en 12 px, libellés d'axe non pivotés (les longs passent à
-la ligne ; heures une sur deux). Carte des arrêts : infobulle en 13 px, titre en
-15 px.
+que l'application), tailles prises sur la même échelle (`FONT_MICRO` 12 px,
+`FONT_LABEL` 13 px, `FONT_SMALL` 14 px, `FONT_BLOCK` 17 px de `highcharts.py`) :
+libellés d'axes et légendes en 13 px, infobulles en 14 px, étiquettes de données
+en 12 px, libellés d'axe non pivotés (les longs passent à la ligne ; heures une
+sur deux). Les deux cartes (CSS de `carte.py` et `carte_troncons.py`) sont en
+`rem` sur les mêmes paliers (0,75 ; 0,8125 ; 0,875 ; 1 ; 1,0625 ; 1,3 ;
+1,75 rem). Sur téléphone (moins de 640 px), `--fs-hero` passe à 3,4 rem.
+
+Textes de l'interface : aucun tiret cadratin ni demi-cadratin (« de 6 h à
+10 h », « lun. à ven. », deux-points ou virgule) ; une valeur absente s'écrit
+« n.d. » (`diagnostic.MISSING`). États vides et erreurs disent quoi faire :
+« Les données ne sont pas disponibles pour le moment. Réessayez dans quelques
+minutes… », « Aucune donnée collectée pour le moment : la collecte vient de
+démarrer… », « Aucun passage exploitable pour cette période ici. Choisissez une
+autre période, ou « Tout le réseau » dans le fil d'Ariane. »
 
 Mots affichés au lecteur (`TIER_LABELS`, `tier_label(value, kind)`) : palier
 positif = « fiable », moyen = « à surveiller », négatif = « problématique ».
@@ -1919,17 +1930,22 @@ lecteur qui n'est pas analyste :
      (`engagement_progression_chart`, détail repliable). Loaders
      `load_daily_metrics` (`group_metrics` : une ligne « Ensemble » et une par
      mode) et `load_engagement_progression`.
-5. **Modes de transport** (détail de l'accueil) — même contenu dans les deux vues : carte de risque
-   des lignes (`scatter_chart`, seuils de `risk_zone`, libellé de chaque zone
+5. **Modes de transport** (détail de l'accueil) — même contenu dans les deux vues : « Les lignes
+   selon leurs retards », avec une phrase de lecture avant le graphique (« Plus
+   elle est à droite, plus ses bus ont souvent un peu de retard ; plus elle est
+   haute, plus ils ont souvent de gros retards ») (`scatter_chart`, seuils de `risk_zone`, libellé de chaque zone
    dans son coin : « Retards rares mais longs », « Zone critique », « Retards
    fréquents mais courts », « Risque faible »), verdict (mode le moins
    ponctuel), cartes par mode (glyphe ● ■ ▲, bordure au palier), comparaison
    d'indicateurs ; répartition des écarts, tableau détaillé des lignes et
    tableau par mode (repliables).
-6. **Perturbations** (détail de l'accueil) — alertes actives à l'instant courant + historique
-   (dédupliqué : une même annonce peut être publiée sous plusieurs
-   `alert_id`) ; indication explicite que l'alerte n'implique **pas** de
-   causalité démontrée avec les statistiques.
+6. **Perturbations** (détail de l'accueil) — trois chiffres neutres (« Lignes
+   perturbées en ce moment », « Jours de perturbation » : une ligne perturbée 3
+   jours compte pour 3, « Perturbations annoncées » sur la période), puis
+   l'historique (dédupliqué : une même annonce peut être publiée sous plusieurs
+   `alert_id`), avec une recherche « Chercher une ligne ou un mot » ;
+   indication explicite que l'alerte n'implique **pas** de causalité démontrée
+   avec les statistiques.
 7. **Méthode et lexique** (pied de menu) — quatre vues : *Lexique* (`LEXIQUE`, chaque terme a un
    identifiant `lexique_slug` ; un lien `?lexique=<terme>`, venu d'une aide « ? »
    ou d'une infobulle de graphique, ouvre cette vue sur le terme surligné
@@ -1990,6 +2006,10 @@ le fil d'Ariane :
   fiche sur « Lignes » ; un arrêt ouvre sur « Carte » la fiche de son quai le
   plus fréquenté, qui propose les autres quais, et retire la ligne du fil
   d'Ariane. La liste se vide après chaque choix.
+- **Sur téléphone** (moins de 640 px) : la barre tient sur deux lignes au lieu
+  de cinq champs empilés (environ 90 px au lieu de 450) : « ← » seul et
+  recherche sur la première, période sur la seconde, libellés masqués (le texte
+  « Revenir » reste lu par les lecteurs d'écran) ; elle n'est pas collante.
 - **Fil d'Ariane** (`breadcrumb`, conteneur `crumbs`) : « Vous regardez : Tout
   le réseau › Mérignac › Ligne 23 › Quinconces, vers Cantinolle » ; chaque
   étape sauf la dernière est un lien (`_crumb_network` remet tout le réseau,
@@ -3268,7 +3288,9 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
   arrêts de taille constante, évolutions neutres) et phase 2 (trois entrées,
   recherche unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à
   traiter, 5 pires tronçons, heures à peu de passages en gris) et phase 3
-  (transitions, clavier) terminées le 13/10/2026.
+  (transitions, clavier) et phase 4 (échelle typographique des graphiques et
+  des cartes, textes sans tirets, états vides, barre repliée sur téléphone)
+  terminées le 13/10/2026.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost

@@ -54,28 +54,28 @@ _CSS = f"""
 .uv-tip {{ position: absolute; z-index: 3; display: none; pointer-events: none; max-width: 340px;
           background: #FFFFFF; color: {INK}; border: 1px solid {LINE};
           border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 18px rgba(43, 37, 35, .16);
-          font-size: 13px; line-height: 1.45; }}
-.uv-title {{ font-weight: 700; font-size: 15px; margin-bottom: 2px; }}
-.uv-sub {{ color: {INK_MUTED}; font-size: 12px; margin-bottom: 4px; }}
+          font-size: .8125rem; line-height: 1.45; }}
+.uv-title {{ font-weight: 700; font-size: 1rem; margin-bottom: 2px; }}
+.uv-sub {{ color: {INK_MUTED}; font-size: .75rem; margin-bottom: 4px; }}
 .uv-row {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
 .uv-chip {{ flex: none; width: 10px; height: 10px; border-radius: 2px; }}
 .uv-num {{ margin-left: auto; padding-left: 10px; white-space: nowrap; color: {INK}; }}
-.uv-more {{ color: {INK_MUTED}; font-size: 12px; }}
+.uv-more {{ color: {INK_MUTED}; font-size: .75rem; }}
 .uv-foot {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid {LINE};
-           color: {INK_MUTED}; font-size: 12px; }}
+           color: {INK_MUTED}; font-size: .75rem; }}
 .uv-cta {{ margin-top: 6px; font-weight: 600; }}
 .uv-badge {{ position: absolute; z-index: 2; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px;
             max-width: calc(100% - 20px); background: #FFFFFF; color: {INK};
             border: 1.5px solid {ACTION}; border-radius: 999px; padding: 5px 6px 5px 12px;
-            font-size: 13px; box-shadow: 0 2px 8px rgba(43, 37, 35, .16); }}
+            font-size: .8125rem; box-shadow: 0 2px 8px rgba(43, 37, 35, .16); }}
 .uv-badge span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .uv-dot {{ flex: none; width: 10px; height: 10px; border-radius: 50%; background: {ACTION};
           box-shadow: 0 0 0 3px rgba(53, 30, 143, .2); }}
 .uv-badge button {{ flex: none; border: none; border-radius: 999px; background: {ACTION}; color: #FFFFFF;
-                   padding: 3px 10px; font-size: 12px; cursor: pointer; }}
+                   padding: 3px 10px; font-size: .75rem; cursor: pointer; }}
 .uv-hint {{ position: absolute; z-index: 2; left: 10px; bottom: 8px; background: rgba(255, 255, 255, .88);
-           color: {INK}; border-radius: 6px; padding: 2px 8px; font-size: 12px; }}
-.uv-error {{ padding: 24px; color: {INK}; font-size: 14px; }}
+           color: {INK}; border-radius: 6px; padding: 2px 8px; font-size: .75rem; }}
+.uv-error {{ padding: 24px; color: {INK}; font-size: .875rem; }}
 """
 
 COMPONENT_NAME = "urban_vision_carte_arrets"

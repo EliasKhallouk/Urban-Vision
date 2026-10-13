@@ -272,7 +272,7 @@ function renderBadge(state, flyTo) {
   }
   const paths = state.data.paths || [];
   badge.innerHTML = `<span class="uv-dot"></span><span><b>Arrêt sélectionné</b> · ${esc(sel.n)}`
-    + `${sel.d ? " — " + esc(sel.d) : ""}</span><button type="button" data-a="centrer">Centrer</button>`
+    + `${sel.d ? ", " + esc(sel.d) : ""}</span><button type="button" data-a="centrer">Centrer</button>`
     + (paths.length ? '<button type="button" data-a="lignes">Voir les lignes entières</button>' : "");
   badge.querySelector('[data-a="centrer"]').onclick = () => flyTo(sel, Math.max(state.map.getZoom(), state.data.focus_zoom));
   const whole = badge.querySelector('[data-a="lignes"]');

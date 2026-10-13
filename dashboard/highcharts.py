@@ -49,6 +49,7 @@ from palette import (  # noqa: E402
     risk_zone,
 )
 
+FONT_MICRO, FONT_LABEL, FONT_SMALL, FONT_BLOCK = "12px", "13px", "14px", "17px"
 INK_35 = "rgba(43, 37, 35, 0.35)"
 LINE_SOFT = "rgba(229, 220, 208, 0.75)"
 
@@ -75,7 +76,7 @@ def _glyph_labels(route_type) -> dict:
     return {
         "enabled": True,
         "format": mode_glyph(route_type),
-        "style": {"color": INK, "fontSize": "12px", "textOutline": "none", "fontWeight": "400"},
+        "style": {"color": INK, "fontSize": FONT_MICRO, "textOutline": "none", "fontWeight": "400"},
     }
 
 
@@ -97,33 +98,33 @@ LIGHT_THEME = {
     "colors": [INK, INK_35, GARONNE, PIERRE, VIN],
     "chart": {
         "backgroundColor": "#FFFFFF",
-        "style": {"color": INK_MUTED, "fontFamily": "'Source Sans', 'Source Sans 3', sans-serif", "fontSize": "13px"},
+        "style": {"color": INK_MUTED, "fontFamily": "'Source Sans', 'Source Sans 3', sans-serif", "fontSize": FONT_LABEL},
         "borderRadius": 8,
         "spacing": [12, 12, 12, 12],
     },
-    "title": {"style": {"color": INK, "fontSize": "17px", "fontWeight": "700"}},
+    "title": {"style": {"color": INK, "fontSize": FONT_BLOCK, "fontWeight": "700"}},
     "xAxis": {
-        "labels": {"autoRotation": False, "style": {"color": INK_MUTED, "fontSize": "13px"}},
+        "labels": {"autoRotation": False, "style": {"color": INK_MUTED, "fontSize": FONT_LABEL}},
         "lineColor": LINE,
         "tickColor": LINE,
         "gridLineColor": LINE_SOFT,
-        "title": {"style": {"color": INK_MUTED, "fontSize": "13px", "fontWeight": "600"}},
+        "title": {"style": {"color": INK_MUTED, "fontSize": FONT_LABEL, "fontWeight": "600"}},
     },
     "yAxis": {
-        "labels": {"style": {"color": INK_MUTED, "fontSize": "13px"}},
+        "labels": {"style": {"color": INK_MUTED, "fontSize": FONT_LABEL}},
         "lineColor": LINE,
         "tickColor": LINE,
         "gridLineColor": LINE_SOFT,
-        "title": {"style": {"color": INK_MUTED, "fontSize": "13px", "fontWeight": "600"}},
+        "title": {"style": {"color": INK_MUTED, "fontSize": FONT_LABEL, "fontWeight": "600"}},
     },
     "legend": {
-        "itemStyle": {"color": INK, "fontSize": "13px", "fontWeight": "600"},
+        "itemStyle": {"color": INK, "fontSize": FONT_LABEL, "fontWeight": "600"},
         "itemHoverStyle": {"color": INK},
     },
     "tooltip": {
         "backgroundColor": "#FFFFFF",
         "borderColor": LINE,
-        "style": {"color": INK, "fontSize": "14px"},
+        "style": {"color": INK, "fontSize": FONT_SMALL},
         "shadow": True,
         "xDateFormat": "%A %e %B %Y",
     },
@@ -264,7 +265,7 @@ def zone_labels_series(df: pd.DataFrame) -> dict:
             "enableMouseTracking": False, "marker": {"enabled": False},
             "dataLabels": {"enabled": True, "crop": False, "overflow": "allow",
                            "backgroundColor": "rgba(255, 255, 255, 0.88)", "borderRadius": 4, "padding": 4,
-                           "style": {"color": INK, "fontSize": "13px", "fontWeight": "700",
+                           "style": {"color": INK, "fontSize": FONT_LABEL, "fontWeight": "700",
                                      "textOutline": "none"}}, "zIndex": 5}
 
 
@@ -320,7 +321,7 @@ def scatter_chart(df: pd.DataFrame) -> dict:
                    "bubbleLegend": {"enabled": True, "color": INK_35, "borderColor": INK,
                                     "connectorColor": INK, "ranges": [{}, {}, {}],
                                     "labels": {"format": "{value:,.0f} passages",
-                                               "style": {"color": INK_MUTED, "fontSize": "12px"}}}},
+                                               "style": {"color": INK_MUTED, "fontSize": FONT_MICRO}}}},
     }
 
 
@@ -348,8 +349,8 @@ def mode_comparison_chart(mode_stats: pd.DataFrame) -> dict:
 
 
 PERIOD_DETAILS = {
-    "Matin": "lun.–ven.<br>6\u00a0h–10\u00a0h", "Journée": "lun.–ven.<br>10\u00a0h–16\u00a0h",
-    "Pointe du soir": "lun.–ven.<br>16\u00a0h–20\u00a0h", "Soirée & nuit": "lun.–ven.<br>20\u00a0h–6\u00a0h",
+    "Matin": "lun. à ven.<br>6\u00a0h à 10\u00a0h", "Journée": "lun. à ven.<br>10\u00a0h à 16\u00a0h",
+    "Pointe du soir": "lun. à ven.<br>16\u00a0h à 20\u00a0h", "Soirée & nuit": "lun. à ven.<br>20\u00a0h à 6\u00a0h",
     "Week-end": "samedi<br>et dimanche",
 }
 TREND_METRICS = {
@@ -505,9 +506,9 @@ def score_sparkline(daily: pd.DataFrame) -> dict:
         "xAxis": {"type": "datetime", "labels": {"format": "{value:%e %b}"}, "tickLength": 0},
         "yAxis": {"title": {"text": None}, "min": max(0, int(low // 10 * 10) - 5), "max": 100, "tickInterval": 25,
                   "plotLines": [{**guide, "value": 80, "label": {"text": "80 fiable", "align": "right", "x": -4,
-                                                                  "style": {"color": INK_MUTED, "fontSize": "12px"}}},
+                                                                  "style": {"color": INK_MUTED, "fontSize": FONT_MICRO}}},
                                 {**guide, "value": 50, "label": {"text": "50 problématique", "align": "right", "x": -4,
-                                                                  "style": {"color": INK_MUTED, "fontSize": "12px"}}}]},
+                                                                  "style": {"color": INK_MUTED, "fontSize": FONT_MICRO}}}]},
         "legend": {"enabled": False},
         "series": [{"name": "Score de fiabilité", "data": data, "color": INK, "lineWidth": 2,
                     "marker": {"enabled": True, "radius": 4, "lineColor": "#FFFFFF", "lineWidth": 1},
@@ -604,7 +605,7 @@ def collection_minutely_chart(df: pd.DataFrame) -> dict:
             ],
             "selected": 2,
             "inputEnabled": False,
-            "buttonTheme": {"fill": "#FFFFFF", "stroke": LINE, "style": {"color": INK_MUTED, "fontSize": "12px"}},
+            "buttonTheme": {"fill": "#FFFFFF", "stroke": LINE, "style": {"color": INK_MUTED, "fontSize": FONT_MICRO}},
         },
         "navigator": {
             "enabled": True,
@@ -659,7 +660,7 @@ def commune_bands(stop_ids: list, commune_stop_ids: set | None, commune_label: s
                     "borderWidth": 1, "zIndex": 0}
             if not bands and commune_label:
                 band["label"] = {"text": commune_label, "align": "left", "x": 4, "y": 12,
-                                 "style": {"color": INK_MUTED, "fontSize": "12px", "fontWeight": "600"}}
+                                 "style": {"color": INK_MUTED, "fontSize": FONT_MICRO, "fontWeight": "600"}}
             bands.append(band)
             start = None
     return bands
@@ -670,12 +671,12 @@ def _stop_line(stop_ids: list, stop_id: str | None) -> list:
         return []
     return [{"value": stop_ids.index(stop_id), "color": INK, "dashStyle": "Dash", "width": 2,
              "zIndex": 4, "label": {"text": "Cet arrêt", "rotation": 0, "y": 12, "x": 4,
-                                    "style": {"color": INK, "fontWeight": "600", "fontSize": "12px"}}}]
+                                    "style": {"color": INK, "fontWeight": "600", "fontSize": FONT_MICRO}}}]
 
 
 def _profile_axis(p: pd.DataFrame, highlight_stop_id, commune_stop_ids, commune_label) -> dict:
     ids = p["stop_id"].tolist()
-    return {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": "12px"}},
+    return {"categories": p["stop_name"].tolist(), "labels": {"rotation": -50, "style": {"fontSize": FONT_MICRO}},
             "plotBands": commune_bands(ids, commune_stop_ids, commune_label),
             "plotLines": _stop_line(ids, highlight_stop_id)}
 
@@ -692,7 +693,7 @@ def line_profile_chart(profile: pd.DataFrame, highlight_stop_id: str | None = No
     p = profile.sort_values("order").reset_index(drop=True)
     hot = hotspot_stop_ids or set()
     gains = [{"y": round(float(g), 1), "color": VIN if sid in hot else INK_35,
-              "prev": prev if isinstance(prev, str) else "—"}
+              "prev": prev if isinstance(prev, str) else "n.d."}
              for sid, g, prev in zip(p["stop_id"], p["gain_s"], p["prev_stop_name"])]
     delays = [round(float(v), 1) if pd.notna(v) else None for v in p["delay_s"]]
     return {

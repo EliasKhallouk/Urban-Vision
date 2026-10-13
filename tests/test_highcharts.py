@@ -97,8 +97,8 @@ class TestScatterChart:
 
 class TestCreneauxEtGroupes:
     def test_libelle_de_creneau_avec_jours_et_heures(self):
-        assert hc.period_category("Matin") == ('Matin<br><span style="font-size:12px">lun.–ven.<br>'
-                                               '6\u00a0h–10\u00a0h</span>')
+        assert hc.period_category("Matin") == ('Matin<br><span style="font-size:12px">lun. à ven.<br>'
+                                               '6\u00a0h à 10\u00a0h</span>')
         assert hc.period_category("Week-end").endswith("samedi<br>et dimanche</span>")
         assert hc.period_category("Autre") == "Autre"
 
@@ -342,8 +342,8 @@ class TestProfils:
     def test_profil_d_un_creneau(self):
         sp = self._profile().assign(slot_delay=[30.0, None, 400.0, 380.0, 100.0],
                                     usual_delay=[20.0, 25.0, 60.0, 70.0, 80.0])
-        config = hc.slot_profile_chart(sp, "Vendredi 13 h–14 h", highlight_stop_id="c")
-        assert config["series"][0]["name"] == "Vendredi 13 h–14 h"
+        config = hc.slot_profile_chart(sp, "Vendredi de 13 h à 14 h", highlight_stop_id="c")
+        assert config["series"][0]["name"] == "Vendredi de 13 h à 14 h"
         assert config["series"][0]["data"] == [30, None, 400, 380, 100]
         assert config["series"][1]["data"][2] == 60
         assert config["xAxis"]["plotLines"][0]["value"] == 2
