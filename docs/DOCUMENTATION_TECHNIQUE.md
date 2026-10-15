@@ -3308,21 +3308,18 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 - Veille des visiteurs : `src/scripts/veille_visiteurs.py` (stdlib), testée par
   `tests/test_veille_visiteurs.py` ; sorties dans `reports/analytics/`
   (gitignoré).
-- Git : branche `main`, remote GitHub ; la refonte (`refonte-ux-dashboard`)
-  y est intégrée depuis le 02/10/2026. Production sur le commit `0e7d37d`
-  (refonte et phase 3, `dd873e7`, déployée le 02/10/2026 à 9 h 23 par
-  `deploy/deployer.sh --sans-pull` ; formulation des tronçons, `0e7d37d`, vers
-  9 h 40 avec `--sans-redemarrage` et un redémarrage du seul dashboard ;
-  méthode 2.0, `915fde6`, le 02/10/2026 à 0 h 09 ; protection des données,
-  `3afe0d3`, le 01/10/2026 à 22 h 20). Branche locale `refonte-ui` (refonte de
-  l'interface pour les non-initiés, depuis le 12/10/2026) : non poussée, non
-  déployée. Terminée le 13/10/2026 en cinq étapes : charte écran « Pierre et
-  vin » et dégradé à repères fixes ; navigation (trois entrées, recherche
-  unique, fil d'Ariane, phrase verdict, « À retenir », arrêts à traiter, 5 pires
-  tronçons, heures à peu de passages en gris) ; transitions et clavier ;
-  typographie, textes, états vides et téléphone ; graphiques sans iframe et
-  préchauffage du cache. Ajout du 13/10/2026 : « Ce qui va bien » sur
-  l'accueil et classement des lignes les plus fiables (§11.3).
+- Git : branche `main`, remote GitHub. Refonte de l'interface pour les
+  non-initiés (`refonte-ui`, du 12 au 13/10/2026, intégrée à `main` en avance
+  rapide) : charte écran « Pierre et vin » et dégradé à repères fixes ;
+  navigation (trois entrées, recherche unique, fil d'Ariane, phrase verdict,
+  « À retenir », arrêts à traiter, 5 pires tronçons, heures à peu de passages
+  en gris) ; transitions et clavier ; typographie, textes, états vides et
+  téléphone ; graphiques sans iframe et préchauffage du cache ; « Ce qui va
+  bien » sur l'accueil et classement des lignes les plus fiables (§11.3).
+  Production sur le commit `54eac14`, déployé le 15/10/2026 à 14 h 34 par
+  `deploy/deployer.sh` (contrôles passés : 3 services actifs, relevé de 16 s,
+  HTTPS 200, veille de la collecte sans alerte). Précédent commit en
+  production : `978c2a7`.
 - Veille de la collecte : `src/scripts/veille_collecte.py` (stdlib), testée par
   `tests/test_veille_collecte.py` ; état dans `data/veille_collecte.json`.
 - Environnement de production : unités systemd exactes (section 14), vhost
@@ -3336,7 +3333,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.2 Environnement de production
 
-État relevé sur la VM de production le 16/09/2026, mis à jour le 02/10/2026 et le 11/10/2026 :
+État relevé sur la VM de production le 16/09/2026, mis à jour le 02/10/2026, le 11/10/2026 et le 15/10/2026 (déploiement de `54eac14`) :
 
 | # | Point | État en production |
 |---|---|---|
@@ -3358,7 +3355,7 @@ codé dans `comparison()` (`generate_monthly_report.py:434`).
 
 ### 26.3 Incohérences constatées (code vs docs vs logs)
 
-Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 à I37 le 13/10/2026 sur la branche `refonte-ui`) :
+Incohérences corrigées (I1–I4 le 14/09/2026, I5–I6 le 30/09/2026, I7 à I14 le 01/10/2026, I15 à I24 le 02/10/2026, I25 le 04/10/2026, I26 et I27 le 10/10/2026, I28 et I29 le 11/10/2026, I30 à I38 le 13/10/2026 sur la branche `refonte-ui`, en production depuis le 15/10/2026) :
 
 | # | Incohérence | Correctif appliqué |
 |---|---|---|
